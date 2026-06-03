@@ -16,6 +16,7 @@ The config is the source of truth: re-run after every edit to refresh.
 Stdlib only — no dependencies.
 """
 from __future__ import annotations
+
 import argparse
 import datetime as _dt
 import glob
@@ -23,10 +24,14 @@ import html
 import os
 import re
 import sys
+from dataclasses import dataclass, field
+
+# A physical keyboard layout: rows of (keyd-key-name, width-in-units).
+Layout = list[list[tuple[str, float]]]
 
 # ------------------------------------------------------------- physical layouts
 # Keyed by keyd key-names. (name, width_units).
-HHKB = [
+HHKB: Layout = [
     [("esc",1),("1",1),("2",1),("3",1),("4",1),("5",1),("6",1),("7",1),("8",1),
      ("9",1),("0",1),("minus",1),("equal",1),("backslash",1),("grave",1)],
     [("tab",1.5),("q",1),("w",1),("e",1),("r",1),("t",1),("y",1),("u",1),("i",1),
@@ -37,7 +42,7 @@ HHKB = [
      ("comma",1),("dot",1),("slash",1),("rightshift",1.75),("fn",1)],
     [("leftalt",1.5),("leftmeta",1),("space",7),("rightmeta",1),("rightalt",1.5)],
 ]
-ANSI60 = [
+ANSI60: Layout = [
     [("grave",1),("1",1),("2",1),("3",1),("4",1),("5",1),("6",1),("7",1),("8",1),
      ("9",1),("0",1),("minus",1),("equal",1),("backspace",2)],
     [("tab",1.5),("q",1),("w",1),("e",1),("r",1),("t",1),("y",1),("u",1),("i",1),
@@ -51,7 +56,7 @@ ANSI60 = [
 ]
 
 
-def layout_for(path: str):
+def layout_for(path: str) -> tuple[Layout, str]:
     name = os.path.basename(path).lower()
     return (HHKB, "HHKB 60%") if "hhkb" in name else (ANSI60, "ANSI 60%")
 
@@ -110,13 +115,17 @@ def prettify(value: str) -> str:
 
 
 # --------------------------------------------------------------------- parsing
+# A tap/hold binding: (key, target_layer_or_mod, "layer"|"mod", tapkey-or-None).
+Hold = tuple[str, str, str, str | None]
+
+
+@dataclass
 class Config:
-    def __init__(self):
-        self.ids: list[str] = []
-        self.layers: dict[str, dict[str, str]] = {}      # custom layers (incl. game)
-        self.holds: list[tuple[str, str, str, str]] = []  # key, target, kind, tapkey
-        self.chords: list[tuple[str, str]] = []           # chord_str, target_layer
-        self.remaps: dict[str, str] = {}                  # plain [main] key -> value
+    ids: list[str] = field(default_factory=list)
+    layers: dict[str, dict[str, str]] = field(default_factory=dict)  # incl. game
+    holds: list[Hold] = field(default_factory=list)
+    chords: list[tuple[str, str]] = field(default_factory=list)      # chord, target
+    remaps: dict[str, str] = field(default_factory=dict)             # plain key->val
 
 
 def parse(path: str) -> Config:
@@ -224,7 +233,7 @@ def keycap(inner: str, width: float, extra_cls: str = "", color: str = "") -> st
     return f'<div class="key {extra_cls}" style="{style}">{inner}</div>'
 
 
-def render_base(cfg: Config, phys) -> str:
+def render_base(cfg: Config, phys: Layout) -> str:
     holds = {k: (t, kind, tap) for k, t, kind, tap in cfg.holds}
     chord_keys: dict[str, str] = {}
     for chord, target in cfg.chords:
@@ -264,14 +273,16 @@ def render_base(cfg: Config, phys) -> str:
             '</h3><div class="kb">' + "".join(rows) + "</div></div>")
 
 
-def render_layer(cfg: Config, name: str, ov: dict[str, str], phys) -> str:
+def render_layer(cfg: Config, name: str, ov: dict[str, str], phys: Layout) -> str:
     accent = accent_for(name)
     act_key = next((k for k, t, _, _ in cfg.holds if t == name), None)
     chord = next((c for c, t in cfg.chords if t == name), None)
     if name == "game":
-        how = ("toggle: <b style=\"color:%s\">%s</b>" % (
-            accent, esc(" + ".join(base_legend(p) for p in chord.split("+"))))
-            if chord else "toggle layer")
+        if chord:
+            keys = esc(" + ".join(base_legend(p) for p in chord.split("+")))
+            how = f'toggle: <b style="color:{accent}">{keys}</b>'
+        else:
+            how = "toggle layer"
         hint = "passthrough — these revert to plain keys (gaming)"
     else:
         how = (f'hold <b style="color:{accent}">{esc(base_legend(act_key))}</b>'
@@ -306,7 +317,7 @@ def slug(path: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", os.path.basename(path).lower())
 
 
-def render_config(cfg: Config, src: str, phys, prof: str) -> str:
+def render_config(cfg: Config, src: str, phys: Layout, prof: str) -> str:
     boards = [render_base(cfg, phys)]
     order = [n for n in cfg.layers if n != "game"] + (
         ["game"] if "game" in cfg.layers else [])
@@ -347,7 +358,8 @@ def render_page(items) -> str:
 
 # ----------------------------------------------------------------------- main
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Render keyd config(s) as an HTML cheatsheet.")
+    ap = argparse.ArgumentParser(
+        description="Render keyd config(s) as an HTML cheatsheet.")
     ap.add_argument("conf", nargs="*",
                     help="keyd config path(s) (default: glob /etc/keyd/*.conf)")
     ap.add_argument("-o", "--out",

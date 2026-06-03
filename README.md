@@ -1,5 +1,9 @@
 # keyd-cheatsheet
 
+[![CI](https://github.com/coffeeowl-labs/keyd-cheatsheet/actions/workflows/ci.yml/badge.svg)](https://github.com/coffeeowl-labs/keyd-cheatsheet/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Render your [keyd](https://github.com/rvaiya/keyd) configs as a visual,
 per-layer keyboard cheatsheet — one self-contained HTML page, no dependencies.
 
@@ -22,6 +26,8 @@ files and draws them.
 - **Zero dependencies.** Pure Python stdlib. One file.
 
 ## Install
+
+Requires **Python 3.10+** and no runtime dependencies — it's one stdlib script.
 
 ```sh
 git clone https://github.com/coffeeowl-labs/keyd-cheatsheet
@@ -63,12 +69,26 @@ The board is chosen per config by filename: `*hhkb*` → an HHKB 60% layout,
 everything else → ANSI 60% (with a CapsLock key). Both are 60% views — they show
 the remapped keys clearly rather than reproducing every physical key.
 
+## Limitations
+
+- **Two physical layouts** so far (HHKB and ANSI-60), both 60% views. Keys not
+  present on a 60% board (function row, arrow cluster) aren't drawn — but since
+  keyd remaps rarely target those, the remapped keys still show.
+- **Recognized keyd actions** are `lettermod()`, `overload[it]?()`, `layer()`,
+  `toggle()`, and plain key remaps. More exotic macros render best-effort as a
+  plain remap rather than a dedicated visualization.
+- It draws what's **in the config files** — it doesn't introspect the running
+  keyd daemon.
+
 ## Tests
 
-Stdlib only, no install:
+The tool is dependency-free; the tests use [pytest](https://docs.pytest.org/)
+(a dev-only dependency) and [ruff](https://docs.astral.sh/ruff/) for linting:
 
 ```sh
-python -m unittest discover -s tests
+pip install pytest        # or: uv run --with pytest pytest
+pytest
+ruff check .              # optional lint
 ```
 
 ## Roadmap
