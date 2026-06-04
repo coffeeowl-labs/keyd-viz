@@ -520,3 +520,37 @@ P4 is the ambitious frontier.
     slots in behind the helper unchanged. See open questions §8 (helper IPC, framing, authz via
     SO_PEERCRED/logind, systemd unit, packaging).
   - Next (for the human): pick the helper design, OR pivot to Phase 2 (physical-layout engine).
+
+- *(Phase 2 — started: geometry engine + QMK importer)* Decouple geometry from identity.
+  - **Positioned-geometry model** (`core::geometry`): `Slot { x, y, w, h, r, rx, ry, key: Option<String> }`
+    + `Geometry { slots }`. Caps are now **absolutely positioned** in key units (51px pitch =
+      46px cap + 5px gap) inside a plain Rectangle, so any geometry — staggered, ISO-enter,
+      ortho, split, rotated clusters — renders from `(x, y, w, h, r)` alone. `Board.rows` is gone;
+      `KeyCap` carries its own position; `BoardView` sizes to `Geometry::extent()`. Built-in HHKB/
+      ANSI60 layouts kept as a compact `from_rows` authoring table (widths encode stagger). Visual
+      parity verified on hardware against the prior row-based renderer.
+  - **QMK auto-importer** (`core::qmk`) — the crux of Phase 2. QMK `info.json`/`keyboard.json`
+    gives **geometry only** (no key identity); identity lives in the board's default keymap, whose
+    layer-0 array is **index-aligned** with the `LAYOUT` macro = with the `info.json` layout array.
+    So `import()` zips by index: `layout[i]` (geometry) with `layers[0][i]` (a `KC_*` keycode),
+    translating each keycode → keyd key name. Unmappable codes (`MO()/LT()/MT()`, `KC_NO`/
+    `XXXXXXX`, `KC_TRNS`/`_______`, custom `QK_*`) → `key: None` → dim blank slot, with an
+    `unmapped` count surfaced as a "N slot(s) unmapped" hint. Variant selection: keymap's `layout`
+    field, else the sole layout, else an error listing the choices (CLI `--qmk-layout` to pick).
+    No keymap → conservative fallback to `info.json` human `label`s. `keycode_to_keyd` does
+    letters/digits/F-keys algorithmically + a ~70-entry `NAMED` table (every RHS validated against
+    `keyd list-keys`); `QK_GESC`/`KC_GESC` resolve to their tap identity (`esc`). serde/serde_json
+    are the crate's only deps (both pure Rust — still builds offline, no system libs).
+  - **App wiring**: `keydviz <conf?> --qmk-info <info.json> [--qmk-keymap <keymap.json>]
+    [--qmk-layout <NAME>]` imports the geometry and renders it as a single board (overlaying the
+    `.conf` semantics, or an empty config to show raw keycaps). 14 core tests green.
+  - **Verified end-to-end with real QMK data**: fetched DZ60's upstream `keyboard.json` (67-key
+    `LAYOUT`) + converted its default `keymap.c` to a Configurator-style `keymap.json` the way
+    `qmk c2json` does (paren-balanced `LAYOUT(...)` extraction, depth-aware comma split so
+    `MO(1)` survives). Renders a correct staggered 60% ANSI board with real legends; the four
+    `XXXXXXX` matrix gaps + `MO(1)` show as dim blanks. keymap-drawer is the architectural
+    blueprint (geometry ⊥ identity, joined by index); KLE carries geometry but no identity, so a
+    KLE path will still need this label step.
+  - Next (Phase 2): board-picker UX (fetch from the QMK metadata API or a bundled snapshot),
+    curated layout library (fix HHKB bottom-row leading offset; add ISO/TKL/65%/ortho/split),
+    KLE import + a manual-label editor for the unmapped slots.

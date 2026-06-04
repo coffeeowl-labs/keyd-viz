@@ -9,5 +9,8 @@ repository.workspace = true
 [lib]
 name = "keydviz_core"
 
-# Intentionally zero dependencies: this crate is pure logic and must build offline.
+# Pure logic + the QMK info.json/keymap loader (ROADMAP §5). serde(_json) is the only
+# dependency — both pure Rust, so the crate still builds offline with no system libs.
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

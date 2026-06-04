@@ -11,10 +11,12 @@ pub mod layout;
 pub mod model;
 pub mod parser;
 pub mod prettify;
+pub mod qmk;
 pub mod style;
 
 pub use board::{Badge, Board, KeyCap, KeyState, Sheet};
 pub use geometry::{Geometry, Slot};
+pub use qmk::{import as import_qmk, QmkImport};
 pub use ids::{Ids, MatchKind, TypeFilter};
 pub use layout::{layout_for, Layout, Row, ANSI60, HHKB};
 pub use model::{Config, Hold, HoldKind, Layer};

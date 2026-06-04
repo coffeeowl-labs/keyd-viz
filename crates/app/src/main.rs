@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use devices::InputDevice;
 use keydviz_core::board::{KeyCap, KeyState};
-use keydviz_core::{layout_for, parse_file, Config, Ids, Sheet};
+use keydviz_core::{import_qmk, layout_for, parse_file, parse_text, Config, Ids, Sheet};
 use slint::{Brush, Color, ModelRc, VecModel};
 
 slint::include_modules!();
@@ -185,6 +185,50 @@ impl Detection {
     }
 }
 
+/// The value following `--flag` on the command line, if present.
+fn flag_value(name: &str) -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+}
+
+/// `--qmk-info <info.json>` path: render a keyd config on a board imported from QMK.
+///
+/// The geometry + key identities come from QMK (`info.json` zipped index-wise with the
+/// default keymap's keycodes); the keyd bindings come from the first positional
+/// `*.conf` (or an empty config — a plain labeled board — if none is given). Optional
+/// `--qmk-keymap <keymap.json>` supplies identities; `--qmk-layout <NAME>` picks the
+/// variant when a board defines several.
+fn qmk_detection(info_path: &str) -> Result<Detection, String> {
+    let info = std::fs::read_to_string(info_path).map_err(|e| format!("{info_path}: {e}"))?;
+    let keymap = match flag_value("--qmk-keymap") {
+        Some(p) => Some(std::fs::read_to_string(&p).map_err(|e| format!("{p}: {e}"))?),
+        None => None,
+    };
+    let prefer = flag_value("--qmk-layout");
+    let imp = import_qmk(&info, keymap.as_deref(), prefer.as_deref())?;
+
+    // Overlay config: the first positional *.conf, else an empty config (plain board).
+    let conf = std::env::args().skip(1).find(|a| a.ends_with(".conf"));
+    let (source, cfg) = match &conf {
+        Some(p) => (p.clone(), parse_file(Path::new(p)).map_err(|e| format!("{p}: {e}"))?),
+        None => ("(no config)".to_string(), parse_text("")),
+    };
+
+    let profile = format!("QMK · {}", imp.layout_name);
+    let sheet = Sheet::build(&cfg, &source, &imp.geometry, &profile);
+    let unmapped = if imp.unmapped > 0 {
+        format!(" \u{2014} {} slot(s) unmapped", imp.unmapped)
+    } else {
+        String::new()
+    };
+    let subtitle = format!(
+        "QMK import: {} ({} keys){unmapped}",
+        imp.layout_name,
+        imp.geometry.slots.len()
+    );
+    Ok(Detection { sheets: vec![to_sheet_data(&sheet, "")], device_map: Vec::new(), subtitle })
+}
+
 /// Decide which sheets to render, the device→sheet map, and a subtitle.
 ///
 /// - Explicit path args  → render exactly those configs (no device map).
@@ -285,7 +329,16 @@ fn register_fonts() {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
-    let det = gather_sheets();
+    let det = match flag_value("--qmk-info") {
+        Some(info) => match qmk_detection(&info) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        },
+        None => gather_sheets(),
+    };
 
     // `--list`: print the detection result to stdout and exit (no GUI). Useful for
     // debugging device detection and for scripting.
