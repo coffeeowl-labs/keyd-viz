@@ -2,7 +2,7 @@
 //! so the Rust parser is provably at parity with the Python one.
 
 use keydviz_core::model::{Hold, HoldKind};
-use keydviz_core::{base_legend, layout_for, parse_text, prettify, ANSI60, HHKB};
+use keydviz_core::{base_legend, layout_for, parse_text, prettify};
 
 fn hold(key: &str, target: &str, kind: HoldKind, tap: Option<&str>) -> Hold {
     Hold {
@@ -112,11 +112,12 @@ fn base_legend_basics() {
 // ---------------------------------------------------------------------- layout
 #[test]
 fn layout_selection() {
-    let (phys, prof) = layout_for("/etc/keyd/hhkb.conf");
-    assert!(std::ptr::eq(phys, HHKB));
+    // HHKB profile, and its top-left key is Esc (vs ANSI-60's grave).
+    let (geom, prof) = layout_for("/etc/keyd/hhkb.conf");
     assert_eq!(prof, "HHKB 60%");
+    assert_eq!(geom.slots[0].key.as_deref(), Some("esc"));
 
-    let (phys, prof) = layout_for("/etc/keyd/laptop.conf");
-    assert!(std::ptr::eq(phys, ANSI60));
+    let (geom, prof) = layout_for("/etc/keyd/laptop.conf");
     assert_eq!(prof, "ANSI 60%");
+    assert_eq!(geom.slots[0].key.as_deref(), Some("grave"));
 }

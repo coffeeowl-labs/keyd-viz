@@ -1,12 +1,17 @@
-//! Physical keyboard layouts: rows of `(keyd-key-name, width-in-units)`.
+//! The curated library of physical layouts, authored compactly as rows of
+//! `(keyd-key-name, width-in-units)` and expanded to positioned [`Geometry`].
 //!
 //! keyd configs carry no physical geometry, so these positions are supplied here
-//! (see ROADMAP §4.5 — later phases load QMK `info.json` / KLE for arbitrary
-//! boards). For now we ship the two the original tool shipped: HHKB and ANSI-60.
+//! (see ROADMAP §4.5 — the QMK importer loads `info.json` for arbitrary boards). The
+//! row form is just an authoring convenience for standard staggered boards; the widths
+//! alone encode the stagger (a 1.5u Tab pushes `q` right), and [`Geometry::from_rows`]
+//! turns them into absolute coordinates the renderer consumes.
+
+use crate::geometry::Geometry;
 
 /// One physical row: a key-name and its width in standard key units.
 pub type Row = &'static [(&'static str, f32)];
-/// A physical layout: an ordered list of rows.
+/// A compact, row-authored layout: an ordered list of rows.
 pub type Layout = &'static [Row];
 
 /// HHKB 60% layout (keyed by keyd key-names).
@@ -66,16 +71,15 @@ pub static ANSI60: Layout = &[
 ];
 
 /// Pick a physical layout from a config file's name: HHKB for `*hhkb*`, else ANSI-60.
-/// Returns the layout and a human-readable profile name.
-pub fn layout_for(path: &str) -> (Layout, &'static str) {
-    let name = path
-        .rsplit('/')
-        .next()
-        .unwrap_or(path)
-        .to_ascii_lowercase();
+/// Returns the positioned geometry and a human-readable profile name.
+///
+/// This name-based guess is the interim until the user can pick/persist a layout per
+/// keyboard (the irreducible manual step — keyd exposes no board identity).
+pub fn layout_for(path: &str) -> (Geometry, &'static str) {
+    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
     if name.contains("hhkb") {
-        (HHKB, "HHKB 60%")
+        (Geometry::from_rows(HHKB), "HHKB 60%")
     } else {
-        (ANSI60, "ANSI 60%")
+        (Geometry::from_rows(ANSI60), "ANSI 60%")
     }
 }

@@ -5,7 +5,14 @@
 import { ScrollView } from "std-widgets.slint";
 
 export struct KeyCapData {
-    width: float,            // width in key units
+    // geometry in key units (absolute, from the top-left of the board)
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    rotation: float,         // degrees clockwise about (rx, ry)
+    rx: float,
+    ry: float,
     key: string,             // keyd key name (for live keypress matching)
     label: string,
     emphasized: bool,        // large bold glyph (remap/override/momentary mod)
@@ -22,10 +29,6 @@ export struct KeyCapData {
     has_badge_right: bool,
 }
 
-export struct RowData {
-    keys: [KeyCapData],
-}
-
 export struct BoardData {
     is_base: bool,
     title: string,
@@ -33,7 +36,9 @@ export struct BoardData {
     has_accent: bool,
     how: string,
     hint: string,
-    rows: [RowData],
+    keys: [KeyCapData],      // absolutely-positioned caps (not grouped into rows)
+    extent_w: float,         // board width in key units
+    extent_h: float,         // board height in key units
 }
 
 export struct SheetData {
@@ -53,12 +58,16 @@ export struct DeviceMatch {
 }
 
 // ---- one key cap --------------------------------------------------------------
+// Absolutely positioned on a 51px grid (46px cap + 5px gap), so any geometry —
+// staggered, ortho, split, tall ISO-enter — renders from its (x, y, w, h) in key units.
 component KeyCapView inherits Rectangle {
     in property <KeyCapData> data;
 
-    // unit = 46px, gap = 5px  ->  width = u*units + gap*(units-1)
+    // grid pitch = unit (46px) + gap (5px); a w-wide cap spans w cells minus one gap.
+    x: data.x * 51px;
+    y: data.y * 51px;
     width: data.width * 46px + (data.width - 1) * 5px;
-    height: 46px;
+    height: data.height * 46px + (data.height - 1) * 5px;
     border-radius: 7px;
     // pressed (live keypress) glows brightest; else dim/hold/normal tints.
     background: data.pressed ? #26405f : (data.state == 1 ? #161b22 : #1b2129);
@@ -195,7 +204,8 @@ component BoardView inherits VerticalLayout {
         }
     }
 
-    // keyboard panel, hugging its content
+    // keyboard panel, sized to the board extent and hugging its content. Caps are
+    // absolutely positioned inside, so arbitrary geometry renders correctly.
     HorizontalLayout {
         alignment: start;
         Rectangle {
@@ -203,15 +213,16 @@ component BoardView inherits VerticalLayout {
             border-color: highlight ? live_accent : #1e2630;
             border-width: highlight ? 2px : 1px;
             border-radius: 12px;
-            VerticalLayout {
-                padding: 10px;
-                spacing: 5px;
-                for row in data.rows: HorizontalLayout {
-                    spacing: 5px;
-                    alignment: center;
-                    for key in row.keys: KeyCapView {
-                        data: key;
-                    }
+            // pitch 51px; content = extent*51 - 5 (no trailing gap), + 10px padding each side
+            width: data.extent_w * 51px + 15px;
+            height: data.extent_h * 51px + 15px;
+            Rectangle {
+                x: 10px;
+                y: 10px;
+                width: data.extent_w * 51px - 5px;
+                height: data.extent_h * 51px - 5px;
+                for key in data.keys: KeyCapView {
+                    data: key;
                 }
             }
         }

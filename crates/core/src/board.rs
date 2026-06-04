@@ -6,7 +6,7 @@
 //! Python tool, but emits structured data instead of HTML so the visual
 //! semantics stay unit-testable and the GUI stays a thin presentation layer.
 
-use crate::layout::Layout;
+use crate::geometry::{Geometry, Slot};
 use crate::model::{Config, HoldKind, Layer};
 use crate::prettify::{base_legend, prettify};
 use crate::style::{accent_for, mod_name, REMAP_ACCENT};
@@ -30,11 +30,21 @@ pub enum KeyState {
     Hold,
 }
 
-/// One rendered key cap.
-#[derive(Debug, Clone, PartialEq)] // not Eq: `width` is f32
+/// One rendered key cap, positioned in key units (see [`crate::geometry::Slot`]).
+#[derive(Debug, Clone, PartialEq)] // not Eq: f32 geometry fields
 pub struct KeyCap {
+    /// Left edge in key units from the board's top-left.
+    pub x: f32,
+    /// Top edge in key units from the board's top-left.
+    pub y: f32,
     /// Width in standard key units.
     pub width: f32,
+    /// Height in key units.
+    pub height: f32,
+    /// Rotation in degrees clockwise about (`rx`, `ry`).
+    pub r: f32,
+    pub rx: f32,
+    pub ry: f32,
     /// The keyd key name for this physical position (e.g. `a`, `space`, `leftshift`).
     /// Lets a live keypress from `keyd monitor` (same name namespace) light up the cap.
     pub key: String,
@@ -54,7 +64,7 @@ pub struct KeyCap {
 }
 
 /// One board: the base layer or a single layer's overrides.
-#[derive(Debug, Clone, PartialEq)] // not Eq: caps carry f32 widths
+#[derive(Debug, Clone, PartialEq)] // not Eq: caps carry f32 geometry
 pub struct Board {
     pub is_base: bool,
     /// `Base layer` or the layer name, uppercased.
@@ -65,7 +75,10 @@ pub struct Board {
     pub how: String,
     /// One-line descriptive hint.
     pub hint: String,
-    pub rows: Vec<Vec<KeyCap>>,
+    /// Positioned key caps (absolute geometry; not grouped into rows).
+    pub keys: Vec<KeyCap>,
+    /// Board extent `(width, height)` in key units, for sizing the panel.
+    pub extent: (f32, f32),
 }
 
 /// A full cheatsheet for one config: its source, profile, ids, and boards.
@@ -78,18 +91,18 @@ pub struct Sheet {
 }
 
 impl Sheet {
-    /// Build the full cheatsheet for one parsed config on a physical layout.
-    pub fn build(cfg: &Config, source: &str, layout: Layout, profile: &str) -> Sheet {
-        let mut boards = vec![build_base(cfg, layout)];
+    /// Build the full cheatsheet for one parsed config on a physical [`Geometry`].
+    pub fn build(cfg: &Config, source: &str, geom: &Geometry, profile: &str) -> Sheet {
+        let mut boards = vec![build_base(cfg, geom)];
         // Non-game layers in declaration order, then game last (matches the
         // original render order).
         for layer in &cfg.layers {
             if layer.name != "game" {
-                boards.push(build_layer(cfg, layer, layout));
+                boards.push(build_layer(cfg, layer, geom));
             }
         }
         if let Some(game) = cfg.layer("game") {
-            boards.push(build_layer(cfg, game, layout));
+            boards.push(build_layer(cfg, game, geom));
         }
         Sheet {
             source: source.to_string(),
@@ -97,6 +110,28 @@ impl Sheet {
             ids: cfg.ids.clone(),
             boards,
         }
+    }
+}
+
+/// A blank positioned cap at `slot` (geometry filled in, semantics empty). `key` is
+/// the keyd key name for the slot (empty for a decorative/unmapped slot).
+fn cap_at(slot: &Slot, key: &str) -> KeyCap {
+    KeyCap {
+        x: slot.x,
+        y: slot.y,
+        width: slot.w,
+        height: slot.h,
+        r: slot.r,
+        rx: slot.rx,
+        ry: slot.ry,
+        key: key.to_string(),
+        label: String::new(),
+        emphasized: false,
+        ghost: String::new(),
+        accent: String::new(),
+        state: KeyState::Normal,
+        badge_left: None,
+        badge_right: None,
     }
 }
 
@@ -115,69 +150,62 @@ fn chord_target_for(cfg: &Config, key: &str) -> Option<String> {
         .map(|(_, target)| target.clone())
 }
 
-fn build_base(cfg: &Config, layout: Layout) -> Board {
-    let mut rows = Vec::new();
-    for prow in layout {
-        let mut cells = Vec::new();
-        for &(name, width) in *prow {
-            let mut cap = KeyCap {
-                width,
-                key: name.to_string(),
-                label: String::new(),
-                emphasized: false,
-                ghost: String::new(),
-                accent: String::new(),
-                state: KeyState::Normal,
-                badge_left: None,
-                badge_right: None,
-            };
+fn build_base(cfg: &Config, geom: &Geometry) -> Board {
+    let mut keys = Vec::new();
+    for slot in &geom.slots {
+        // Decorative / unmapped slot: a dim blank cap holding its place.
+        let Some(name) = slot.key.as_deref() else {
+            let mut blank = cap_at(slot, "");
+            blank.state = KeyState::Dim;
+            keys.push(blank);
+            continue;
+        };
+        let mut cap = cap_at(slot, name);
 
-            if let Some(h) = last_hold_for(cfg, name) {
-                let col = if h.kind == HoldKind::Mod {
-                    accent_for("control")
-                } else {
-                    accent_for(&h.target)
-                };
-                let label_text = if h.kind == HoldKind::Mod {
-                    mod_name(&h.target).to_string()
-                } else {
-                    h.target.clone()
-                };
-                cap.accent = col.to_string();
-                match &h.tap {
-                    // Pure momentary modifier/layer: the key simply *is* that function.
-                    None => {
-                        cap.emphasized = true;
-                        cap.label = label_text;
-                        cap.ghost = base_legend(name);
-                    }
-                    Some(tap) => {
-                        cap.label = prettify(tap);
-                        cap.badge_left = Some(Badge {
-                            text: format!("\u{2193}{label_text}"), // ↓<target>
-                            color: col.to_string(),
-                        });
-                    }
-                }
-            } else if let Some(val) = cfg.remap(name) {
-                cap.accent = REMAP_ACCENT.to_string();
-                cap.emphasized = true;
-                cap.label = prettify(val);
-                cap.ghost = base_legend(name);
+        if let Some(h) = last_hold_for(cfg, name) {
+            let col = if h.kind == HoldKind::Mod {
+                accent_for("control")
             } else {
-                cap.label = base_legend(name);
+                accent_for(&h.target)
+            };
+            let label_text = if h.kind == HoldKind::Mod {
+                mod_name(&h.target).to_string()
+            } else {
+                h.target.clone()
+            };
+            cap.accent = col.to_string();
+            match &h.tap {
+                // Pure momentary modifier/layer: the key simply *is* that function.
+                None => {
+                    cap.emphasized = true;
+                    cap.label = label_text;
+                    cap.ghost = base_legend(name);
+                }
+                Some(tap) => {
+                    cap.label = prettify(tap);
+                    cap.badge_left = Some(Badge {
+                        text: format!("\u{2193}{label_text}"), // ↓<target>
+                        color: col.to_string(),
+                    });
+                }
             }
-
-            if let Some(target) = chord_target_for(cfg, name) {
-                cap.badge_right = Some(Badge {
-                    text: "\u{21e7}\u{21e7}".to_string(), // ⇧⇧
-                    color: accent_for(&target).to_string(),
-                });
-            }
-
-            cells.push(cap);
+        } else if let Some(val) = cfg.remap(name) {
+            cap.accent = REMAP_ACCENT.to_string();
+            cap.emphasized = true;
+            cap.label = prettify(val);
+            cap.ghost = base_legend(name);
+        } else {
+            cap.label = base_legend(name);
         }
-        rows.push(cells);
+
+        if let Some(target) = chord_target_for(cfg, name) {
+            cap.badge_right = Some(Badge {
+                text: "\u{21e7}\u{21e7}".to_string(), // ⇧⇧
+                color: accent_for(&target).to_string(),
+            });
+        }
+
+        keys.push(cap);
     }
 
     Board {
@@ -186,11 +214,12 @@ fn build_base(cfg: &Config, layout: Layout) -> Board {
         accent: String::new(),
         how: String::new(),
         hint: "tap = legend \u{b7} \u{2193}badge = hold \u{b7} orange = remap".to_string(),
-        rows,
+        keys,
+        extent: geom.extent(),
     }
 }
 
-fn build_layer(cfg: &Config, layer: &Layer, layout: Layout) -> Board {
+fn build_layer(cfg: &Config, layer: &Layer, geom: &Geometry) -> Board {
     let name = &layer.name;
     let accent = accent_for(name).to_string();
     let is_game = name == "game";
@@ -220,50 +249,30 @@ fn build_layer(cfg: &Config, layer: &Layer, layout: Layout) -> Board {
         (how, "highlighted keys change while held".to_string())
     };
 
-    let mut rows = Vec::new();
-    for prow in layout {
-        let mut cells = Vec::new();
-        for &(nm, width) in *prow {
-            let cap = if let Some(val) = layer.get(nm) {
-                KeyCap {
-                    width,
-                    key: nm.to_string(),
-                    label: if is_game { base_legend(nm) } else { prettify(val) },
-                    emphasized: true,
-                    ghost: if is_game { String::new() } else { base_legend(nm) },
-                    accent: accent.clone(),
-                    state: KeyState::Normal,
-                    badge_left: None,
-                    badge_right: None,
-                }
-            } else if act_key.as_deref() == Some(nm) {
-                KeyCap {
-                    width,
-                    key: nm.to_string(),
-                    label: base_legend(nm),
-                    emphasized: false,
-                    ghost: String::new(),
-                    accent: accent.clone(),
-                    state: KeyState::Hold,
-                    badge_left: Some(Badge { text: "HOLD".to_string(), color: accent.clone() }),
-                    badge_right: None,
-                }
-            } else {
-                KeyCap {
-                    width,
-                    key: nm.to_string(),
-                    label: base_legend(nm),
-                    emphasized: false,
-                    ghost: String::new(),
-                    accent: String::new(),
-                    state: KeyState::Dim,
-                    badge_left: None,
-                    badge_right: None,
-                }
-            };
-            cells.push(cap);
+    let mut keys = Vec::new();
+    for slot in &geom.slots {
+        let Some(nm) = slot.key.as_deref() else {
+            let mut blank = cap_at(slot, "");
+            blank.state = KeyState::Dim;
+            keys.push(blank);
+            continue;
+        };
+        let mut cap = cap_at(slot, nm);
+        if let Some(val) = layer.get(nm) {
+            cap.label = if is_game { base_legend(nm) } else { prettify(val) };
+            cap.emphasized = true;
+            cap.ghost = if is_game { String::new() } else { base_legend(nm) };
+            cap.accent = accent.clone();
+        } else if act_key.as_deref() == Some(nm) {
+            cap.label = base_legend(nm);
+            cap.accent = accent.clone();
+            cap.state = KeyState::Hold;
+            cap.badge_left = Some(Badge { text: "HOLD".to_string(), color: accent.clone() });
+        } else {
+            cap.label = base_legend(nm);
+            cap.state = KeyState::Dim;
         }
-        rows.push(cells);
+        keys.push(cap);
     }
 
     Board {
@@ -272,6 +281,7 @@ fn build_layer(cfg: &Config, layer: &Layer, layout: Layout) -> Board {
         accent,
         how,
         hint,
-        rows,
+        keys,
+        extent: geom.extent(),
     }
 }

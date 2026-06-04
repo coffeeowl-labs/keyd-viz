@@ -46,7 +46,13 @@ fn to_keycap(k: &KeyCap) -> KeyCapData {
     let (br_text, br_color) = badge(&k.badge_right);
 
     KeyCapData {
+        x: k.x,
+        y: k.y,
         width: k.width,
+        height: k.height,
+        rotation: k.r,
+        rx: k.rx,
+        ry: k.ry,
         key: k.key.clone().into(),
         label: k.label.clone().into(),
         emphasized: k.emphasized,
@@ -72,21 +78,16 @@ fn to_sheet_data(sheet: &Sheet, device: &str) -> SheetData {
     let boards = sheet
         .boards
         .iter()
-        .map(|b| {
-            let rows = b
-                .rows
-                .iter()
-                .map(|row| RowData { keys: model(row.iter().map(to_keycap).collect()) })
-                .collect();
-            BoardData {
-                is_base: b.is_base,
-                title: b.title.clone().into(),
-                accent: brush(if b.accent.is_empty() { "#000000" } else { &b.accent }),
-                has_accent: !b.accent.is_empty(),
-                how: b.how.clone().into(),
-                hint: b.hint.clone().into(),
-                rows: model(rows),
-            }
+        .map(|b| BoardData {
+            is_base: b.is_base,
+            title: b.title.clone().into(),
+            accent: brush(if b.accent.is_empty() { "#000000" } else { &b.accent }),
+            has_accent: !b.accent.is_empty(),
+            how: b.how.clone().into(),
+            hint: b.hint.clone().into(),
+            keys: model(b.keys.iter().map(to_keycap).collect()),
+            extent_w: b.extent.0,
+            extent_h: b.extent.1,
         })
         .collect();
 
@@ -110,8 +111,8 @@ fn to_sheet_data(sheet: &Sheet, device: &str) -> SheetData {
 /// device label.
 fn sheet_from(path: &Path, cfg: &Config, device: &str) -> SheetData {
     let path_str = path.to_string_lossy();
-    let (layout, profile) = layout_for(&path_str);
-    let sheet = Sheet::build(cfg, &path_str, layout, profile);
+    let (geom, profile) = layout_for(&path_str);
+    let sheet = Sheet::build(cfg, &path_str, &geom, profile);
     to_sheet_data(&sheet, device)
 }
 
@@ -367,22 +368,15 @@ fn render_board(win: &MainWindow) {
     // stamp the live keypress glow onto the caps whose keyd key name is held down
     let pressed: Vec<slint::SharedString> = win.get_pressed_keys().iter().collect();
     if !pressed.is_empty() {
-        let rows: Vec<RowData> = board
-            .rows
+        let keys: Vec<KeyCapData> = board
+            .keys
             .iter()
-            .map(|row| {
-                let keys: Vec<KeyCapData> = row
-                    .keys
-                    .iter()
-                    .map(|mut k| {
-                        k.pressed = pressed.iter().any(|p| p == &k.key);
-                        k
-                    })
-                    .collect();
-                RowData { keys: model(keys) }
+            .map(|mut k| {
+                k.pressed = pressed.iter().any(|p| p == &k.key);
+                k
             })
             .collect();
-        board.rows = model(rows);
+        board.keys = model(keys);
     }
     win.set_active_board(board);
 }

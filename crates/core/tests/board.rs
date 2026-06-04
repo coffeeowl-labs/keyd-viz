@@ -8,12 +8,10 @@ use keydviz_core::{layout_for, parse_text, Sheet};
 /// Find a cap by physical key index helper: returns the cap whose label/ghost we
 /// can assert on. We locate caps positionally via the known ANSI-60 / HHKB rows.
 fn find_cap<'a>(board: &'a keydviz_core::Board, predicate: impl Fn(&KeyCapView) -> bool) -> Option<KeyCapView<'a>> {
-    for row in &board.rows {
-        for cap in row {
-            let view = KeyCapView { cap };
-            if predicate(&view) {
-                return Some(view);
-            }
+    for cap in &board.keys {
+        let view = KeyCapView { cap };
+        if predicate(&view) {
+            return Some(view);
         }
     }
     None
@@ -29,8 +27,8 @@ fn laptop_base_momentary_and_remap() {
     //              leftcontrol = capslock [plain remap].
     let text = "[ids]\n0b05:19b6\n[main]\ncapslock = layer(control)\nleftcontrol = capslock\n";
     let cfg = parse_text(text);
-    let (layout, profile) = layout_for("/etc/keyd/laptop.conf");
-    let sheet = Sheet::build(&cfg, "laptop.conf", layout, profile);
+    let (geom, profile) = layout_for("/etc/keyd/laptop.conf");
+    let sheet = Sheet::build(&cfg, "laptop.conf", &geom, profile);
 
     assert_eq!(sheet.profile, "ANSI 60%");
     let base = &sheet.boards[0];
@@ -55,8 +53,8 @@ fn laptop_base_momentary_and_remap() {
 #[test]
 fn hhkb_sheet_structure_and_badges() {
     let cfg = parse_text(include_str!("../../../examples/hhkb.conf"));
-    let (layout, profile) = layout_for("hhkb.conf");
-    let sheet = Sheet::build(&cfg, "hhkb.conf", layout, profile);
+    let (geom, profile) = layout_for("hhkb.conf");
+    let sheet = Sheet::build(&cfg, "hhkb.conf", &geom, profile);
 
     // base + nav, num, sym, shift, game = 6 boards, game last.
     let titles: Vec<&str> = sheet.boards.iter().map(|b| b.title.as_str()).collect();
