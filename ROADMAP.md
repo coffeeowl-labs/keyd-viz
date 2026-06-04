@@ -579,5 +579,7 @@ P4 is the ambitious frontier.
   - Verified: HHKB renders with the corrected inset bottom row + the picker + the keyd overlay
     (screenshot); TKL/Full nav-cluster and numpad name↔position alignment cross-checked against
     the QMK reference; clippy clean; 20 core tests + app suite green.
-  - Next (Phase 2): KLE import + a manual-label editor for unmapped/blank slots (the one piece
-    that unlocks bespoke/handwired boards) — lower priority, needs a click-to-edit UI affordance.
+  - **SHELVED for good (2026-06-04):** KLE import + a manual-label editor for bespoke/handwired
+    boards. Per the user, this only comes back if users actually request it — the curated library
+    covers the common case and `--qmk-info` covers the long tail, so the bespoke path isn't worth
+    the click-to-edit UI cost on spec. (Was the last open Phase 2 item.)
