@@ -19,6 +19,31 @@ highlighting** — for any user's keyd config and any physical keyboard. It is t
 visual tool of its kind for keyd, and the first Linux-native live overlay for a *software*
 key remapper. It replaces the current static HTML cheatsheet entirely.
 
+### The live UX model (refined north star — the end state to build toward)
+
+The endgame is **a single, live, morphing keyboard** (think ZSA Keymapp / OverKeys), **not**
+a stacked cheatsheet of every layer. Concretely:
+
+1. **One keymap on screen at a time** — even with multiple keyboards plugged in, exactly one
+   board is shown.
+2. **The shown board follows the keyboard you last pressed a key on.** Type on a different
+   keyboard and the view swaps to *that* keyboard's map. (Requires the active-device signal
+   from `keyd monitor`'s device column — Phase 4 / privileged helper.)
+3. **Layer changes *replace* the shown board**, they do not light up an additional one. The
+   single board morphs to always show the currently-active layer (base when nothing is held).
+
+**Implication for the current build:** the stacked all-layers view shipped in Phases 0–3 is a
+*reference/cheatsheet mode* and a stepping stone — useful for printing/learning, but it is
+**not** the north-star live view. The live view is a single board driven by *active keyboard ×
+active layer*. The two can coexist as modes (live vs. cheatsheet), or the cheatsheet becomes a
+secondary view; decide when we build the live single-board mode.
+
+**Phase mapping of this model:**
+- "Single board that *replaces* on layer change" → a UI mode buildable **now** on top of
+  Phase 3's live layer stream (no new privilege). Candidate next increment ("Phase 3.5").
+- "Follows the last-pressed keyboard" + "one map even with several keyboards" → needs the
+  active-device signal from `keyd monitor` → **Phase 4** (privileged helper).
+
 ### Hard requirements (non-negotiable)
 - **No browser dependency.** Must not require a browser to be installed or running. No
   bundled Chromium. Low idle RAM (it may run resident in the tray all day).
