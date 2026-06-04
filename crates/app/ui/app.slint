@@ -125,6 +125,16 @@ component KeyCapView inherits Rectangle {
 // ---- one board (base layer or a single layer) ---------------------------------
 component BoardView inherits VerticalLayout {
     in property <BoardData> data;
+    // live layer state, threaded down from the window
+    in property <string> active_layer;
+    in property <bool> live;
+
+    // is this the layer currently active on the keyboard? (base = nothing held)
+    property <bool> is_active: data.is_base ? (active_layer == "") : (data.title == active_layer);
+    property <bool> highlight: live && is_active;
+    // accent used for the live highlight (green for the base/resting layer)
+    property <brush> live_accent: data.is_base ? #3ddc84 : data.accent;
+
     spacing: 9px;
 
     // header row: title/tag + how + hint
@@ -166,6 +176,13 @@ component BoardView inherits VerticalLayout {
             font-size: 12px;
             vertical-alignment: center;
         }
+        if highlight: Text {
+            text: "\u{25cf} ACTIVE";
+            color: live_accent;
+            font-size: 12px;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
     }
 
     // keyboard panel, hugging its content
@@ -173,8 +190,8 @@ component BoardView inherits VerticalLayout {
         alignment: start;
         Rectangle {
             background: #0c0f14;
-            border-color: #1e2630;
-            border-width: 1px;
+            border-color: highlight ? live_accent : #1e2630;
+            border-width: highlight ? 2px : 1px;
             border-radius: 12px;
             VerticalLayout {
                 padding: 10px;
@@ -201,6 +218,9 @@ export component MainWindow inherits Window {
 
     in property <string> subtitle;
     in property <[SheetData]> sheets;
+    // live layer state (set from Rust via the keyd listen thread)
+    in property <bool> live_connected;
+    in property <string> active_layer;
 
     ScrollView {
         VerticalLayout {
@@ -218,6 +238,29 @@ export component MainWindow inherits Window {
                 text: root.subtitle;
                 color: #7d8694;
                 font-size: 12px;
+            }
+
+            // live-status pill
+            HorizontalLayout {
+                alignment: start;
+                Rectangle {
+                    width: pill.preferred-width + 18px;
+                    height: pill.preferred-height + 8px;
+                    border-radius: 8px;
+                    background: root.live_connected ? #122017 : #161b22;
+                    border-width: 1px;
+                    border-color: root.live_connected ? #3ddc84 : #2a3340;
+                    pill := Text {
+                        x: 9px;
+                        y: 4px;
+                        text: root.live_connected
+                            ? "\u{25cf} LIVE  \u{b7}  active: \{root.active_layer == "" ? "base" : root.active_layer}"
+                            : "\u{25cb} live view off  \u{b7}  add yourself to the 'keyd' group";
+                        color: root.live_connected ? #3ddc84 : #7d8694;
+                        font-size: 12px;
+                        font-weight: 700;
+                    }
+                }
             }
 
             // legend
@@ -254,6 +297,8 @@ export component MainWindow inherits Window {
                 }
                 for board in sheet.boards: BoardView {
                     data: board;
+                    active_layer: root.active_layer;
+                    live: root.live_connected;
                 }
             }
         }

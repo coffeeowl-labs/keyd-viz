@@ -5,6 +5,7 @@
 //! the config(s) governing them; with explicit path args it shows exactly those.
 
 mod devices;
+mod layer;
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -274,5 +275,60 @@ fn main() -> Result<(), slint::PlatformError> {
     register_fonts(); // after MainWindow::new() so the platform is initialized
     win.set_subtitle(subtitle.into());
     win.set_sheets(model(sheets));
+
+    if std::env::args().any(|a| a == "--demo") {
+        spawn_demo(&win);
+    } else {
+        spawn_live(&win);
+    }
+
     win.run()
+}
+
+/// Subscribe to live layer state from `keyd listen` on a background thread, pushing
+/// updates onto the UI thread. Degrades gracefully to "live view off" when the keyd
+/// socket isn't accessible (e.g. not in the `keyd` group).
+fn spawn_live(win: &MainWindow) {
+    let weak = win.as_weak();
+    std::thread::spawn(move || {
+        layer::run_listen(move |state| {
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(win) = weak.upgrade() {
+                    win.set_live_connected(state.connected);
+                    win.set_active_layer(state.active_layer.into());
+                }
+            });
+        });
+    });
+}
+
+/// `--demo`: cycle the highlighted layer through base + each layer on a timer, so
+/// the live highlight can be seen without a running keyd / keyd-group access.
+fn spawn_demo(win: &MainWindow) {
+    use slint::Model;
+    let mut cycle: Vec<slint::SharedString> = vec!["".into()];
+    for sheet in win.get_sheets().iter() {
+        for board in sheet.boards.iter() {
+            if !board.is_base && !cycle.contains(&board.title) {
+                cycle.push(board.title.clone());
+            }
+        }
+    }
+    let weak = win.as_weak();
+    std::thread::spawn(move || {
+        let mut i = 0;
+        loop {
+            let layer = cycle[i % cycle.len()].clone();
+            i += 1;
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(win) = weak.upgrade() {
+                    win.set_live_connected(true);
+                    win.set_active_layer(layer);
+                }
+            });
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+        }
+    });
 }

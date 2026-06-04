@@ -397,4 +397,20 @@ P4 is the ambitious frontier.
   - Added a `--list` CLI mode (prints detection result, no GUI) for debugging/scripting.
   - Verified on real hardware (HHKB `04fe:0021` → hhkb.conf; laptop `0b05:19b6` →
     laptop.conf). 24 tests total green.
-  - Next: Phase 2 (physical-layout engine) or Phase 3 (live layer view via the helper).
+- *(Phase 3 — complete, pending real-hardware confirmation)* Live layer view.
+  - `app::layer` — parses the `keyd listen` stream (`+name`/`-name`/`/layout`), tracks the
+    active-layer stack, and runs it on a background thread that pushes `LiveState` to the UI
+    via `invoke_from_event_loop`. Auto-retries; degrades to "live view off" when the socket
+    isn't accessible. 3 tests (parser + state machine).
+  - UI: a live-status pill ("● LIVE · active: NAV" / "○ live view off") and a reactive
+    highlight (accent border + "● ACTIVE" tag) on whichever board is currently active.
+  - `--demo` mode cycles the active layer for testing the highlight without keyd access.
+    **Verified visually via --demo** (pill + NAV board highlight render correctly).
+  - **Architecture note:** Phase 3 uses `keyd listen` directly (socket exposes only layer
+    *names*, low-risk), gated on `keyd`-group membership — keyd's own documented pattern. The
+    privileged helper is deferred to Phase 4, where `/dev/input` keypress capture actually
+    warrants it. (On this dev machine the user is in `input` but not `keyd`, so the real live
+    view needs `sudo usermod -aG keyd <user>` + re-login to confirm.)
+  - 27 tests total green.
+  - Next: confirm live view on hardware (keyd group), then Phase 4 (live keypress + helper)
+    or Phase 2 (physical-layout engine).
