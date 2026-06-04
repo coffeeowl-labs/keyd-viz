@@ -461,5 +461,23 @@ P4 is the ambitious frontier.
     `keyd`; to confirm the live view *now*, `sudo usermod -aG keyd <user>` + re-login — but the
     end product will not require this.)
   - 27 tests total green.
-  - Next: confirm live view on hardware (keyd group), then Phase 4 (live keypress + helper)
-    or Phase 2 (physical-layout engine).
+- *(Phase 3.5 — complete)* Single-board live mode (north-star UX, §1 "live UX model").
+  - In live mode the app shows **exactly one board at a time** — the active keyboard's
+    active layer — and the board **morphs in place** as the layer changes (no stacking).
+    A bare held mod (e.g. `control`) that keyd reports as a layer but has no dedicated
+    board cleanly falls back to the **base** board.
+  - `app::layer` `LiveState` now carries the full active-layer **stack** (`active:
+    Vec<String>`, most-recent last) instead of a single string; `main::resolve_title`
+    walks it (most-recent first) to the topmost layer that actually has a board, and
+    `show_layer` points the UI's single `active_board` at it. Both run on the UI thread.
+  - UI: a **Live / Cheatsheet** segmented toggle (`ToggleTab`). Live = single morphing
+    board; Cheatsheet = the full stacked reference (default on open, so the window is
+    never an empty single board before keyd connects). In live mode only the live sheet
+    (`live_sheet`, index 0 for now) renders; others collapse — Phase 4 will pick the
+    sheet by which keyboard the last keypress came from.
+  - `--demo` now drives the single-board view (sets `live_mode`), cycling base → each
+    layer. **Verified visually via --demo** (one board morphing SHIFT→GAME→… with the
+    toggle, plus the cheatsheet stacked view in default mode).
+  - Next: confirm live view on hardware (keyd group, dev-interim), then Phase 4 (live
+    keypress + privileged helper — also routes the layer stream and picks the active
+    keyboard by last keypress) or Phase 2 (physical-layout engine).

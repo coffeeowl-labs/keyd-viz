@@ -58,10 +58,10 @@ impl ActiveLayers {
         }
     }
 
-    /// The layer to highlight (most recently activated), uppercased to match board
-    /// titles. Empty string means the base layer (nothing held).
-    pub fn current_upper(&self) -> String {
-        self.stack.last().map(|s| s.to_uppercase()).unwrap_or_default()
+    /// The active layers in activation order (most recent last). Lets the caller
+    /// resolve the topmost layer that actually has a board to show.
+    pub fn active(&self) -> Vec<String> {
+        self.stack.clone()
     }
 }
 
@@ -70,8 +70,8 @@ impl ActiveLayers {
 pub struct LiveState {
     /// Whether we're currently connected to the `keyd listen` stream.
     pub connected: bool,
-    /// The layer to highlight (uppercased; empty = base).
-    pub active_layer: String,
+    /// Active layers in activation order (most recent last); empty = base.
+    pub active: Vec<String>,
 }
 
 /// Run `keyd listen` and invoke `on_update` with each new [`LiveState`]. Blocks
@@ -88,14 +88,11 @@ pub fn run_listen(mut on_update: impl FnMut(LiveState)) {
             Ok(mut child) => {
                 if let Some(out) = child.stdout.take() {
                     let mut active = ActiveLayers::default();
-                    on_update(LiveState { connected: true, active_layer: String::new() });
+                    on_update(LiveState { connected: true, active: Vec::new() });
                     for line in BufReader::new(out).lines().map_while(Result::ok) {
                         if let Some(ev) = parse_listen_line(&line) {
                             active.apply(&ev);
-                            on_update(LiveState {
-                                connected: true,
-                                active_layer: active.current_upper(),
-                            });
+                            on_update(LiveState { connected: true, active: active.active() });
                         }
                     }
                 }
@@ -104,7 +101,7 @@ pub fn run_listen(mut on_update: impl FnMut(LiveState)) {
             Err(_) => { /* keyd not found / not spawnable */ }
         }
         // Stream ended or failed to start: mark offline, then retry.
-        on_update(LiveState { connected: false, active_layer: String::new() });
+        on_update(LiveState { connected: false, active: Vec::new() });
         std::thread::sleep(Duration::from_secs(3));
     }
 }
@@ -127,15 +124,15 @@ mod tests {
     #[test]
     fn tracks_active_layer_stack() {
         let mut a = ActiveLayers::default();
-        assert_eq!(a.current_upper(), "");
+        assert!(a.active().is_empty());
         a.apply(&LayerEvent::On("nav".into()));
-        assert_eq!(a.current_upper(), "NAV");
+        assert_eq!(a.active(), vec!["nav"]);
         a.apply(&LayerEvent::On("sym".into()));
-        assert_eq!(a.current_upper(), "SYM"); // most recent wins
+        assert_eq!(a.active(), vec!["nav", "sym"]); // most recent last
         a.apply(&LayerEvent::Off("sym".into()));
-        assert_eq!(a.current_upper(), "NAV");
+        assert_eq!(a.active(), vec!["nav"]);
         a.apply(&LayerEvent::Off("nav".into()));
-        assert_eq!(a.current_upper(), ""); // back to base
+        assert!(a.active().is_empty()); // back to base
     }
 
     #[test]
@@ -143,9 +140,9 @@ mod tests {
         let mut a = ActiveLayers::default();
         a.apply(&LayerEvent::On("nav".into()));
         a.apply(&LayerEvent::On("nav".into())); // duplicate
-        a.apply(&LayerEvent::Layout("main".into())); // no effect on highlight
-        assert_eq!(a.current_upper(), "NAV");
+        a.apply(&LayerEvent::Layout("main".into())); // no effect on the stack
+        assert_eq!(a.active(), vec!["nav"]);
         a.apply(&LayerEvent::Off("nav".into()));
-        assert_eq!(a.current_upper(), "");
+        assert!(a.active().is_empty());
     }
 }

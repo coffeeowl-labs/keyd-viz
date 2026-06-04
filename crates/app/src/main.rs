@@ -285,6 +285,46 @@ fn main() -> Result<(), slint::PlatformError> {
     win.run()
 }
 
+/// Resolve the active-layer stack to a single board title to show, against the live
+/// sheet's boards. Walks from the most recently activated layer down, returning the
+/// first whose name has a (non-base) board. Returns "" (the base layer) when nothing
+/// held maps to a board — e.g. holding a bare `control` mod, which keyd reports as a
+/// layer but which has no dedicated board. Must run on the UI thread.
+fn resolve_title(win: &MainWindow, active: &[String]) -> slint::SharedString {
+    use slint::Model;
+    let idx = win.get_live_sheet() as usize;
+    let Some(sheet) = win.get_sheets().row_data(idx) else { return Default::default() };
+    let boards = sheet.boards;
+    for name in active.iter().rev() {
+        let upper = name.to_uppercase();
+        if let Some(b) = boards.iter().find(|b| !b.is_base && b.title == upper) {
+            return b.title;
+        }
+    }
+    Default::default()
+}
+
+/// Point the single-board live view at the board for `title` ("" = base layer),
+/// updating the connection pill, the active-layer label, and the morphing board.
+/// Must run on the UI thread. Falls back to the base board (then the first board)
+/// when the title has no match.
+fn show_layer(win: &MainWindow, connected: bool, title: slint::SharedString) {
+    use slint::Model;
+    win.set_live_connected(connected);
+    win.set_active_layer(title.clone());
+    let idx = win.get_live_sheet() as usize;
+    let Some(sheet) = win.get_sheets().row_data(idx) else { return };
+    let boards = sheet.boards;
+    let chosen = boards
+        .iter()
+        .find(|b| if title.is_empty() { b.is_base } else { b.title == title })
+        .or_else(|| boards.iter().find(|b| b.is_base))
+        .or_else(|| boards.row_data(0));
+    if let Some(b) = chosen {
+        win.set_active_board(b);
+    }
+}
+
 /// Subscribe to live layer state from `keyd listen` on a background thread, pushing
 /// updates onto the UI thread. Degrades gracefully to "live view off" when the keyd
 /// socket isn't accessible (e.g. not in the `keyd` group).
@@ -295,8 +335,8 @@ fn spawn_live(win: &MainWindow) {
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(win) = weak.upgrade() {
-                    win.set_live_connected(state.connected);
-                    win.set_active_layer(state.active_layer.into());
+                    let title = resolve_title(&win, &state.active);
+                    show_layer(&win, state.connected, title);
                 }
             });
         });
@@ -304,11 +344,14 @@ fn spawn_live(win: &MainWindow) {
 }
 
 /// `--demo`: cycle the highlighted layer through base + each layer on a timer, so
-/// the live highlight can be seen without a running keyd / keyd-group access.
+/// the live single-board view can be seen without a running keyd / keyd-group access.
 fn spawn_demo(win: &MainWindow) {
     use slint::Model;
+    // Demo the live single-board view: morph one board through the layers.
+    win.set_live_mode(true);
+    let live_idx = win.get_live_sheet() as usize;
     let mut cycle: Vec<slint::SharedString> = vec!["".into()];
-    for sheet in win.get_sheets().iter() {
+    if let Some(sheet) = win.get_sheets().row_data(live_idx) {
         for board in sheet.boards.iter() {
             if !board.is_base && !cycle.contains(&board.title) {
                 cycle.push(board.title.clone());
@@ -324,8 +367,7 @@ fn spawn_demo(win: &MainWindow) {
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(win) = weak.upgrade() {
-                    win.set_live_connected(true);
-                    win.set_active_layer(layer);
+                    show_layer(&win, true, layer);
                 }
             });
             std::thread::sleep(std::time::Duration::from_millis(1500));
