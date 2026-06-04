@@ -146,9 +146,94 @@ pub fn run_monitor(mut on_connect: impl FnMut(bool), mut on_event: impl FnMut(Mo
     }
 }
 
+/// The keypress-driven UI transition, factored out of the Slint layer so the
+/// follow-keyboard + pressed-set logic is testable without a window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyOutcome {
+    /// The event is from a device with no governing sheet (a mouse, an unmatched
+    /// board) — ignore it entirely.
+    Ignore,
+    /// Apply this state to the view.
+    Apply {
+        /// `Some(i)` if the shown sheet should switch to index `i` (the last-pressed
+        /// keyboard changed); `None` to keep the current sheet.
+        switch_to: Option<i32>,
+        /// The full pressed-key set after this event (deduped, order-preserving).
+        pressed: Vec<String>,
+    },
+}
+
+/// Decide how one key event changes the view, given the `vendor:product → sheet`
+/// map, the currently shown sheet index, and the currently pressed keys.
+///
+/// Pure: switching keyboards clears the glow (we don't know the new board's held
+/// keys); down/repeat add a key (idempotent); up removes it.
+pub fn next_press_state(
+    ev: &KeyEvent,
+    map: &[(String, i32)],
+    active_idx: i32,
+    current_pressed: &[String],
+) -> KeyOutcome {
+    let Some(&(_, idx)) = map.iter().find(|(d, _)| d == &ev.devid) else {
+        return KeyOutcome::Ignore;
+    };
+    let switching = idx != active_idx;
+    let mut pressed: Vec<String> =
+        if switching { Vec::new() } else { current_pressed.to_vec() };
+    match ev.action {
+        KeyAction::Down | KeyAction::Repeat => {
+            if !pressed.iter().any(|k| k == &ev.key) {
+                pressed.push(ev.key.clone());
+            }
+        }
+        KeyAction::Up => pressed.retain(|k| k != &ev.key),
+    }
+    KeyOutcome::Apply { switch_to: switching.then_some(idx), pressed }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ev(devid: &str, key: &str, action: KeyAction) -> KeyEvent {
+        KeyEvent { devid: devid.into(), device: "kb".into(), key: key.into(), action }
+    }
+
+    #[test]
+    fn ignores_unmapped_device() {
+        let map = vec![("04fe:0021".to_string(), 0)];
+        // A mouse / unmatched device isn't in the map → ignored.
+        assert_eq!(
+            next_press_state(&ev("046d:c52b", "a", KeyAction::Down), &map, 0, &[]),
+            KeyOutcome::Ignore
+        );
+    }
+
+    #[test]
+    fn down_up_maintains_pressed_set() {
+        let map = vec![("1:1".to_string(), 0)];
+        // down adds
+        let a = next_press_state(&ev("1:1", "a", KeyAction::Down), &map, 0, &[]);
+        assert_eq!(a, KeyOutcome::Apply { switch_to: None, pressed: vec!["a".into()] });
+        // a second key while holding the first
+        let b = next_press_state(&ev("1:1", "b", KeyAction::Down), &map, 0, &["a".into()]);
+        assert_eq!(b, KeyOutcome::Apply { switch_to: None, pressed: vec!["a".into(), "b".into()] });
+        // repeat is idempotent
+        let r = next_press_state(&ev("1:1", "a", KeyAction::Repeat), &map, 0, &["a".into(), "b".into()]);
+        assert_eq!(r, KeyOutcome::Apply { switch_to: None, pressed: vec!["a".into(), "b".into()] });
+        // up removes
+        let u = next_press_state(&ev("1:1", "a", KeyAction::Up), &map, 0, &["a".into(), "b".into()]);
+        assert_eq!(u, KeyOutcome::Apply { switch_to: None, pressed: vec!["b".into()] });
+    }
+
+    #[test]
+    fn switching_keyboard_resets_glow() {
+        let map = vec![("aa:aa".to_string(), 0), ("bb:bb".to_string(), 1)];
+        // currently showing sheet 0 with 'a' held; a press on the sheet-1 keyboard
+        // switches the view and starts that board's glow fresh.
+        let out = next_press_state(&ev("bb:bb", "j", KeyAction::Down), &map, 0, &["a".into()]);
+        assert_eq!(out, KeyOutcome::Apply { switch_to: Some(1), pressed: vec!["j".into()] });
+    }
 
     #[test]
     fn parses_key_events() {

@@ -443,39 +443,31 @@ fn spawn_monitor(win: &MainWindow) {
 
 /// Apply one `keyd monitor` key event on the UI thread: follow the last-pressed
 /// keyboard (switch the shown sheet), maintain the pressed-key set, and re-render.
+/// The decision logic lives in [`monitor::next_press_state`] (pure, tested); this
+/// just reads the current state from the window and writes the result back.
 fn handle_key_event(win: &MainWindow, ev: monitor::MonitorEvent) {
-    use monitor::{KeyAction, MonitorEvent};
     use slint::Model;
 
-    let MonitorEvent::Key(k) = ev else { return }; // ignore device add/remove for now
+    let monitor::MonitorEvent::Key(k) = ev else { return }; // ignore device add/remove
 
-    // Which sheet does this device drive? Ignore keys from non-config devices (mice…).
-    let Some(idx) = win.get_device_map().iter().find(|m| m.devid == k.devid).map(|m| m.sheet)
-    else {
-        return;
-    };
+    let map: Vec<(String, i32)> =
+        win.get_device_map().iter().map(|m| (m.devid.to_string(), m.sheet)).collect();
+    let pressed_now: Vec<String> = win.get_pressed_keys().iter().map(|s| s.to_string()).collect();
 
-    // Follow the last-pressed keyboard: swap the shown sheet, resetting the glow.
-    if idx != win.get_active_index() {
-        if let Some(sheet) = win.get_sheets().row_data(idx as usize) {
-            win.set_active_index(idx);
-            win.set_active_sheet(sheet);
-            win.set_pressed_keys(model(Vec::new()));
-        }
-    }
-
-    let mut pressed: Vec<slint::SharedString> = win.get_pressed_keys().iter().collect();
-    let key: slint::SharedString = k.key.into();
-    match k.action {
-        KeyAction::Down | KeyAction::Repeat => {
-            if !pressed.contains(&key) {
-                pressed.push(key);
+    match monitor::next_press_state(&k, &map, win.get_active_index(), &pressed_now) {
+        monitor::KeyOutcome::Ignore => {}
+        monitor::KeyOutcome::Apply { switch_to, pressed } => {
+            if let Some(idx) = switch_to {
+                if let Some(sheet) = win.get_sheets().row_data(idx as usize) {
+                    win.set_active_index(idx);
+                    win.set_active_sheet(sheet);
+                }
             }
+            let pressed: Vec<slint::SharedString> = pressed.into_iter().map(Into::into).collect();
+            win.set_pressed_keys(model(pressed));
+            render_board(win);
         }
-        KeyAction::Up => pressed.retain(|p| *p != key),
     }
-    win.set_pressed_keys(model(pressed));
-    render_board(win);
 }
 
 /// `--demo`: animate the live view without a running keyd — sweep a pressed key across
