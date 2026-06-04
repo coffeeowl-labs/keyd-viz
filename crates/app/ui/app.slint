@@ -6,12 +6,14 @@ import { ScrollView } from "std-widgets.slint";
 
 export struct KeyCapData {
     width: float,            // width in key units
+    key: string,             // keyd key name (for live keypress matching)
     label: string,
     emphasized: bool,        // large bold glyph (remap/override/momentary mod)
     ghost: string,           // faint top-right normal legend
     has_accent: bool,
     accent: brush,
     state: int,              // 0 normal, 1 dim, 2 hold
+    pressed: bool,           // currently held down (live keypress glow)
     badge_left: string,
     badge_left_color: brush,
     has_badge_left: bool,
@@ -43,6 +45,13 @@ export struct SheetData {
     boards: [BoardData],
 }
 
+// Maps a connected keyboard (vendor:product) to the index of the sheet it governs,
+// so a live keypress can switch the view to whichever keyboard was last pressed.
+export struct DeviceMatch {
+    devid: string,
+    sheet: int,
+}
+
 // ---- one key cap --------------------------------------------------------------
 component KeyCapView inherits Rectangle {
     in property <KeyCapData> data;
@@ -51,9 +60,10 @@ component KeyCapView inherits Rectangle {
     width: data.width * 46px + (data.width - 1) * 5px;
     height: 46px;
     border-radius: 7px;
-    background: data.state == 1 ? #161b22 : #1b2129;
-    border-width: data.state == 2 ? 2px : 1px;
-    border-color: data.state == 2 ? data.accent : #2a3340;
+    // pressed (live keypress) glows brightest; else dim/hold/normal tints.
+    background: data.pressed ? #26405f : (data.state == 1 ? #161b22 : #1b2129);
+    border-width: (data.pressed || data.state == 2) ? 2px : 1px;
+    border-color: data.pressed ? #7cc4ff : (data.state == 2 ? data.accent : #2a3340);
     // raised "lip" approximating the CSS thick bottom border.
     drop-shadow-offset-y: 2px;
     drop-shadow-blur: 0px;
@@ -65,7 +75,7 @@ component KeyCapView inherits Rectangle {
         width: 100%;
         height: 100%;
         text: data.label;
-        color: data.state == 1 ? #4a525e : (data.has_accent ? data.accent : #cfd6df);
+        color: data.pressed ? #ffffff : (data.state == 1 ? #4a525e : (data.has_accent ? data.accent : #cfd6df));
         font-size: data.emphasized ? 16px : 15px;
         font-weight: data.emphasized ? 700 : 400;
         font-family: "JetBrains Mono";
@@ -218,13 +228,23 @@ export component MainWindow inherits Window {
 
     in property <string> subtitle;
     // live layer state (set from Rust via the keyd listen thread)
-    in property <bool> live_connected;
+    in property <bool> live_connected;   // keyd listen (layer) stream connected
+    in property <bool> keys_connected;   // keyd monitor (keypress) stream connected
     in property <string> active_layer;
     // The single active keyboard and the one board to show for it — a single morphing
     // board that the keyd listen stream swaps as the active layer changes (Rust resolves
     // the active layer to a real board, falling back to base).
     in property <SheetData> active_sheet;
     in property <BoardData> active_board;
+
+    // Live state Rust mutates on the UI thread; kept here so successive listen/monitor
+    // callbacks share it without crossing a thread boundary (Slint models aren't Send).
+    in-out property <[string]> active_stack;   // raw keyd layer stack (most recent last)
+    in-out property <[string]> pressed_keys;   // keyd key names currently held down
+    in-out property <int> active_index;        // index into `sheets` currently shown
+    // Storage for the follow-the-last-pressed-keyboard logic (not directly rendered).
+    in property <[SheetData]> sheets;
+    in property <[DeviceMatch]> device_map;
 
     ScrollView {
         VerticalLayout {
@@ -244,23 +264,27 @@ export component MainWindow inherits Window {
                 font-size: 12px;
             }
 
-            // live-status pill
+            // live-status pill. Three states: full live (layers), keys-only (monitor
+            // works but the keyd-group layer socket doesn't), and off.
             HorizontalLayout {
                 alignment: start;
                 Rectangle {
+                    property <bool> any_live: root.live_connected || root.keys_connected;
                     width: pill.preferred-width + 18px;
                     height: pill.preferred-height + 8px;
                     border-radius: 8px;
-                    background: root.live_connected ? #122017 : #161b22;
+                    background: any_live ? #122017 : #161b22;
                     border-width: 1px;
-                    border-color: root.live_connected ? #3ddc84 : #2a3340;
+                    border-color: any_live ? #3ddc84 : #2a3340;
                     pill := Text {
                         x: 9px;
                         y: 4px;
                         text: root.live_connected
                             ? "\u{25cf} LIVE  \u{b7}  active: \{root.active_layer == "" ? "base" : root.active_layer}"
-                            : "\u{25cb} live view off  \u{b7}  add yourself to the 'keyd' group";
-                        color: root.live_connected ? #3ddc84 : #7d8694;
+                            : (root.keys_connected
+                                ? "\u{25cf} LIVE keys  \u{b7}  layers need the 'keyd' group"
+                                : "\u{25cb} live view off  \u{b7}  add yourself to the 'keyd' group");
+                        color: any_live ? #3ddc84 : #7d8694;
                         font-size: 12px;
                         font-weight: 700;
                     }

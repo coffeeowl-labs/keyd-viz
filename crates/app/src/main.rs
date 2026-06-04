@@ -6,6 +6,7 @@
 
 mod devices;
 mod layer;
+mod monitor;
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -46,6 +47,7 @@ fn to_keycap(k: &KeyCap) -> KeyCapData {
 
     KeyCapData {
         width: k.width,
+        key: k.key.clone().into(),
         label: k.label.clone().into(),
         emphasized: k.emphasized,
         ghost: k.ghost.clone().into(),
@@ -56,6 +58,7 @@ fn to_keycap(k: &KeyCap) -> KeyCapData {
             KeyState::Dim => 1,
             KeyState::Hold => 2,
         },
+        pressed: false,
         badge_left: bl_text.into(),
         badge_left_color: brush(if bl_color.is_empty() { "#000000" } else { &bl_color }),
         has_badge_left: k.badge_left.is_some(),
@@ -166,14 +169,29 @@ fn device_label(devices: &[InputDevice], idxs: &[usize]) -> String {
     }
 }
 
-/// Decide which sheets to render, and a subtitle describing the selection.
+/// The result of deciding what to show: the rendered sheets, a `vendor:product →
+/// sheet-index` map for following the last-pressed keyboard, and a subtitle.
+struct Detection {
+    sheets: Vec<SheetData>,
+    /// `(vendor:product, index into sheets)` for each matched connected keyboard.
+    device_map: Vec<(String, i32)>,
+    subtitle: String,
+}
+
+impl Detection {
+    fn new(sheets: Vec<SheetData>, subtitle: String) -> Self {
+        Detection { sheets, device_map: Vec::new(), subtitle }
+    }
+}
+
+/// Decide which sheets to render, the device→sheet map, and a subtitle.
 ///
-/// - Explicit path args  → render exactly those configs.
+/// - Explicit path args  → render exactly those configs (no device map).
 /// - Otherwise           → glob `/etc/keyd/*.conf`, detect connected keyboards,
 ///   and render only the matching configs (labeled with the device). If nothing
 ///   matches, fall back to showing all configs. If `/etc/keyd` is empty, fall back
 ///   to the bundled examples.
-fn gather_sheets() -> (Vec<SheetData>, String) {
+fn gather_sheets() -> Detection {
     let args: Vec<PathBuf> = std::env::args()
         .skip(1)
         .filter(|a| !a.starts_with('-'))
@@ -183,7 +201,7 @@ fn gather_sheets() -> (Vec<SheetData>, String) {
         let sheets: Vec<SheetData> =
             parse_configs(&args).iter().map(|(p, c)| sheet_from(p, c, "")).collect();
         let n = sheets.len();
-        return (sheets, format!("{n} config(s) from arguments"));
+        return Detection::new(sheets, format!("{n} config(s) from arguments"));
     }
 
     let conf_paths = conf_files_in(Path::new("/etc/keyd"));
@@ -192,7 +210,10 @@ fn gather_sheets() -> (Vec<SheetData>, String) {
         let sheets: Vec<SheetData> =
             parse_configs(&conf_files_in(&examples)).iter().map(|(p, c)| sheet_from(p, c, "")).collect();
         let n = sheets.len();
-        return (sheets, format!("{n} example keyboard(s) \u{2014} no /etc/keyd configs found"));
+        return Detection::new(
+            sheets,
+            format!("{n} example keyboard(s) \u{2014} no /etc/keyd configs found"),
+        );
     }
 
     let configs = parse_configs(&conf_paths);
@@ -220,19 +241,28 @@ fn gather_sheets() -> (Vec<SheetData>, String) {
         // No connected keyboard matched — show everything rather than nothing.
         let sheets: Vec<SheetData> = configs.iter().map(|(p, c)| sheet_from(p, c, "")).collect();
         let n = sheets.len();
-        return (sheets, format!("{n} config(s) \u{2014} no connected keyboard detected"));
+        return Detection::new(sheets, format!("{n} config(s) \u{2014} no connected keyboard detected"));
     }
 
     let mut sheets = Vec::new();
+    let mut device_map: Vec<(String, i32)> = Vec::new();
     for (ci, (path, cfg)) in configs.iter().enumerate() {
         if per_config[ci].is_empty() {
             continue;
         }
+        let idx = sheets.len() as i32;
         let label = device_label(&devices, &per_config[ci]);
         sheets.push(sheet_from(path, cfg, &label));
+        // Map every device id that matched this config to its sheet index (deduped).
+        for &di in &per_config[ci] {
+            let devid = devices[di].devid();
+            if !device_map.iter().any(|(d, _)| *d == devid) {
+                device_map.push((devid, idx));
+            }
+        }
     }
     let n = sheets.len();
-    (sheets, format!("{n} connected keyboard(s) detected"))
+    Detection { sheets, device_map, subtitle: format!("{n} connected keyboard(s) detected") }
 }
 
 /// Register the bundled JetBrains Mono faces so typography is identical on every
@@ -254,13 +284,13 @@ fn register_fonts() {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
-    let (sheets, subtitle) = gather_sheets();
+    let det = gather_sheets();
 
     // `--list`: print the detection result to stdout and exit (no GUI). Useful for
     // debugging device detection and for scripting.
     if std::env::args().any(|a| a == "--list") {
-        println!("{subtitle}");
-        for s in &sheets {
+        println!("{}", det.subtitle);
+        for s in &det.sheets {
             let dev = if s.device.is_empty() {
                 String::new()
             } else {
@@ -273,41 +303,52 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let win = MainWindow::new()?;
     register_fonts(); // after MainWindow::new() so the platform is initialized
-    win.set_subtitle(subtitle.into());
+    win.set_subtitle(det.subtitle.into());
 
-    // The live view shows one keyboard at a time. For now that's the first detected
-    // sheet; Phase 4 will switch it to whichever keyboard the last keypress came from.
-    if let Some(active) = sheets.into_iter().next() {
+    // All detected sheets are kept as storage so a keypress can switch the view to
+    // whichever keyboard was last pressed; only one is shown at a time (`active_sheet`).
+    let first = det.sheets.first().cloned();
+    let device_map: Vec<DeviceMatch> = det
+        .device_map
+        .iter()
+        .map(|(d, i)| DeviceMatch { devid: d.clone().into(), sheet: *i })
+        .collect();
+    win.set_sheets(model(det.sheets));
+    win.set_device_map(model(device_map));
+    win.set_active_index(0);
+    if let Some(active) = first {
         win.set_active_sheet(active);
     }
     // Seed the base board so the window is never blank before keyd connects.
-    show_live(&win, false, &[]);
+    render_board(&win);
 
     if std::env::args().any(|a| a == "--demo") {
         spawn_demo(&win);
     } else {
-        spawn_live(&win);
+        spawn_live(&win); // layer stream  (keyd listen)
+        spawn_monitor(&win); // keypress stream (keyd monitor)
     }
 
     win.run()
 }
 
-/// Update the single morphing board from the active-layer stack. Resolves the stack
-/// (most-recent first) to the topmost layer that actually has a board on the active
-/// sheet, falling back to the base board when nothing held maps to one — e.g. holding
-/// a bare `control` mod, which keyd reports as a layer but which has no dedicated
-/// board. Sets the connection pill, the active-layer label, and the board.
+/// Rebuild the single displayed board from the live state held in window properties:
+/// `active_sheet` (which keyboard), `active_stack` (the keyd layer stack), and
+/// `pressed_keys` (held keys → glow). Resolves the stack (most-recent first) to the
+/// topmost layer that actually has a board, falling back to the base board when
+/// nothing held maps to one — e.g. a bare `control` mod, which keyd reports as a layer
+/// but which has no dedicated board. Then stamps the pressed glow onto matching caps.
 ///
-/// Must run on the UI thread: it reads `active_sheet`, whose `Rc`-backed model isn't
-/// `Send`, so board lookups can't happen on the listen thread.
-fn show_live(win: &MainWindow, connected: bool, active: &[String]) {
+/// Must run on the UI thread: it reads `Rc`-backed models that aren't `Send`, so the
+/// listen/monitor threads only ferry plain data here via `invoke_from_event_loop`.
+fn render_board(win: &MainWindow) {
     use slint::Model;
-    win.set_live_connected(connected);
     let boards = win.get_active_sheet().boards;
 
-    // resolve the stack to the title of a board that exists ("" = base)
+    // resolve the active layer stack to the title of a board that exists ("" = base)
+    let stack: Vec<slint::SharedString> = win.get_active_stack().iter().collect();
     let mut title = slint::SharedString::default();
-    for name in active.iter().rev() {
+    for name in stack.iter().rev() {
         let upper = name.to_uppercase();
         if let Some(b) = boards.iter().find(|b| !b.is_base && b.title == upper) {
             title = b.title;
@@ -321,9 +362,29 @@ fn show_live(win: &MainWindow, connected: bool, active: &[String]) {
         .find(|b| if title.is_empty() { b.is_base } else { b.title == title })
         .or_else(|| boards.iter().find(|b| b.is_base))
         .or_else(|| boards.row_data(0));
-    if let Some(b) = chosen {
-        win.set_active_board(b);
+    let Some(mut board) = chosen else { return };
+
+    // stamp the live keypress glow onto the caps whose keyd key name is held down
+    let pressed: Vec<slint::SharedString> = win.get_pressed_keys().iter().collect();
+    if !pressed.is_empty() {
+        let rows: Vec<RowData> = board
+            .rows
+            .iter()
+            .map(|row| {
+                let keys: Vec<KeyCapData> = row
+                    .keys
+                    .iter()
+                    .map(|mut k| {
+                        k.pressed = pressed.iter().any(|p| p == &k.key);
+                        k
+                    })
+                    .collect();
+                RowData { keys: model(keys) }
+            })
+            .collect();
+        board.rows = model(rows);
     }
+    win.set_active_board(board);
 }
 
 /// Subscribe to live layer state from `keyd listen` on a background thread, pushing
@@ -336,41 +397,121 @@ fn spawn_live(win: &MainWindow) {
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(win) = weak.upgrade() {
-                    show_live(&win, state.connected, &state.active);
+                    let stack: Vec<slint::SharedString> =
+                        state.active.iter().map(|s| s.clone().into()).collect();
+                    win.set_active_stack(model(stack));
+                    win.set_live_connected(state.connected);
+                    render_board(&win);
                 }
             });
         });
     });
 }
 
-/// `--demo`: cycle the highlighted layer through base + each layer on a timer, so
-/// the live single-board view can be seen without a running keyd / keyd-group access.
+/// Subscribe to live keypresses from `keyd monitor` on a background thread. Drives the
+/// pressed-key glow and follows the last-pressed keyboard. Works wherever `/dev/input`
+/// is readable (typically the `input` group); the shipped product routes this through
+/// the privileged helper so even that isn't required (ROADMAP §1).
+fn spawn_monitor(win: &MainWindow) {
+    let weak = win.as_weak();
+    let weak_conn = weak.clone();
+    std::thread::spawn(move || {
+        monitor::run_monitor(
+            move |connected| {
+                let weak = weak_conn.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(win) = weak.upgrade() {
+                        win.set_keys_connected(connected);
+                        if !connected {
+                            win.set_pressed_keys(model(Vec::new()));
+                            render_board(&win);
+                        }
+                    }
+                });
+            },
+            move |ev| {
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(win) = weak.upgrade() {
+                        handle_key_event(&win, ev);
+                    }
+                });
+            },
+        );
+    });
+}
+
+/// Apply one `keyd monitor` key event on the UI thread: follow the last-pressed
+/// keyboard (switch the shown sheet), maintain the pressed-key set, and re-render.
+fn handle_key_event(win: &MainWindow, ev: monitor::MonitorEvent) {
+    use monitor::{KeyAction, MonitorEvent};
+    use slint::Model;
+
+    let MonitorEvent::Key(k) = ev else { return }; // ignore device add/remove for now
+
+    // Which sheet does this device drive? Ignore keys from non-config devices (mice…).
+    let Some(idx) = win.get_device_map().iter().find(|m| m.devid == k.devid).map(|m| m.sheet)
+    else {
+        return;
+    };
+
+    // Follow the last-pressed keyboard: swap the shown sheet, resetting the glow.
+    if idx != win.get_active_index() {
+        if let Some(sheet) = win.get_sheets().row_data(idx as usize) {
+            win.set_active_index(idx);
+            win.set_active_sheet(sheet);
+            win.set_pressed_keys(model(Vec::new()));
+        }
+    }
+
+    let mut pressed: Vec<slint::SharedString> = win.get_pressed_keys().iter().collect();
+    let key: slint::SharedString = k.key.into();
+    match k.action {
+        KeyAction::Down | KeyAction::Repeat => {
+            if !pressed.contains(&key) {
+                pressed.push(key);
+            }
+        }
+        KeyAction::Up => pressed.retain(|p| *p != key),
+    }
+    win.set_pressed_keys(model(pressed));
+    render_board(win);
+}
+
+/// `--demo`: animate the live view without a running keyd — sweep a pressed key across
+/// the board (glow) while cycling the active layer, so both effects are visible.
 fn spawn_demo(win: &MainWindow) {
     use slint::Model;
-    // Build the layer cycle (base + each layer) from the active sheet's boards. Each
-    // entry is the synthetic active-layer stack to feed `show_live`.
-    let mut cycle: Vec<Vec<String>> = vec![Vec::new()]; // base = empty stack
+    // Layer cycle (base + each layer) as synthetic stacks.
+    let mut layers: Vec<Vec<slint::SharedString>> = vec![Vec::new()];
     for board in win.get_active_sheet().boards.iter() {
         if !board.is_base {
-            let stack = vec![board.title.to_string()];
-            if !cycle.contains(&stack) {
-                cycle.push(stack);
+            let stack = vec![board.title.clone()];
+            if !layers.contains(&stack) {
+                layers.push(stack);
             }
         }
     }
+    // Home-row-ish sweep of keyd key names for the glow.
+    let keys = ["a", "s", "d", "f", "g", "h", "j", "k", "l", "space"];
     let weak = win.as_weak();
     std::thread::spawn(move || {
-        let mut i = 0;
+        let mut i = 0usize;
         loop {
-            let active = cycle[i % cycle.len()].clone();
+            let stack = layers[(i / keys.len()) % layers.len()].clone();
+            let key: slint::SharedString = keys[i % keys.len()].into();
             i += 1;
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(win) = weak.upgrade() {
-                    show_live(&win, true, &active);
+                    win.set_live_connected(true);
+                    win.set_keys_connected(true);
+                    win.set_active_stack(model(stack));
+                    win.set_pressed_keys(model(vec![key]));
+                    render_board(&win);
                 }
             });
-            std::thread::sleep(std::time::Duration::from_millis(1500));
+            std::thread::sleep(std::time::Duration::from_millis(260));
         }
     });
 }

@@ -35,6 +35,9 @@ pub enum KeyState {
 pub struct KeyCap {
     /// Width in standard key units.
     pub width: f32,
+    /// The keyd key name for this physical position (e.g. `a`, `space`, `leftshift`).
+    /// Lets a live keypress from `keyd monitor` (same name namespace) light up the cap.
+    pub key: String,
     /// Primary label shown on the cap.
     pub label: String,
     /// `true` => render as a large emphasized glyph (remap/override/momentary mod).
@@ -119,6 +122,7 @@ fn build_base(cfg: &Config, layout: Layout) -> Board {
         for &(name, width) in *prow {
             let mut cap = KeyCap {
                 width,
+                key: name.to_string(),
                 label: String::new(),
                 emphasized: false,
                 ghost: String::new(),
@@ -223,6 +227,7 @@ fn build_layer(cfg: &Config, layer: &Layer, layout: Layout) -> Board {
             let cap = if let Some(val) = layer.get(nm) {
                 KeyCap {
                     width,
+                    key: nm.to_string(),
                     label: if is_game { base_legend(nm) } else { prettify(val) },
                     emphasized: true,
                     ghost: if is_game { String::new() } else { base_legend(nm) },
@@ -234,6 +239,7 @@ fn build_layer(cfg: &Config, layer: &Layer, layout: Layout) -> Board {
             } else if act_key.as_deref() == Some(nm) {
                 KeyCap {
                     width,
+                    key: nm.to_string(),
                     label: base_legend(nm),
                     emphasized: false,
                     ghost: String::new(),
@@ -245,6 +251,7 @@ fn build_layer(cfg: &Config, layer: &Layer, layout: Layout) -> Board {
             } else {
                 KeyCap {
                     width,
+                    key: nm.to_string(),
                     label: base_legend(nm),
                     emphasized: false,
                     ghost: String::new(),
