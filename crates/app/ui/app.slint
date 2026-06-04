@@ -47,7 +47,14 @@ export struct SheetData {
     profile: string,
     ids: string,
     device: string,         // connected device that matched this config (empty if none)
+    layout_id: string,      // curated-catalog layout id this sheet is drawn with
     boards: [BoardData],
+}
+
+// One pickable physical layout in the curated library (for the layout chip row).
+export struct LayoutChoice {
+    id: string,
+    name: string,
 }
 
 // Maps a connected keyboard (vendor:product) to the index of the sheet it governs,
@@ -256,6 +263,10 @@ export component MainWindow inherits Window {
     // Storage for the follow-the-last-pressed-keyboard logic (not directly rendered).
     in property <[SheetData]> sheets;
     in property <[DeviceMatch]> device_map;
+    // The curated layouts offered in the picker (empty hides it, e.g. QMK-imported).
+    in property <[LayoutChoice]> layouts;
+    // The user picked a physical layout for the active keyboard (id of the choice).
+    callback pick_layout(string);
 
     ScrollView {
         VerticalLayout {
@@ -336,6 +347,45 @@ export component MainWindow inherits Window {
                     font-size: 12px;
                     font-weight: 700;
                 }
+
+                // layout picker: a row of chips to morph the board onto a different
+                // physical layout. Hidden when there are no choices (QMK-imported board).
+                if root.layouts.length > 0: HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    padding-top: 2px;
+                    padding-bottom: 4px;
+                    Text {
+                        text: "layout";
+                        color: #7d8694;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                    for choice in root.layouts: Rectangle {
+                        property <bool> sel: choice.id == root.active_sheet.layout_id;
+                        width: chip.preferred-width + 18px;
+                        height: chip.preferred-height + 8px;
+                        border-radius: 7px;
+                        background: sel ? #1f6feb : (ta.has-hover ? #1b2129 : #161b22);
+                        border-width: 1px;
+                        border-color: sel ? #1f6feb : #2a3340;
+                        ta := TouchArea {
+                            clicked => {
+                                root.pick_layout(choice.id);
+                            }
+                        }
+                        chip := Text {
+                            x: 9px;
+                            y: 4px;
+                            text: choice.name;
+                            color: sel ? #ffffff : #cfd6df;
+                            font-size: 12px;
+                            font-weight: sel ? 700 : 400;
+                            font-family: "JetBrains Mono";
+                        }
+                    }
+                }
+
                 BoardView {
                     data: root.active_board;
                     active_layer: root.active_layer;

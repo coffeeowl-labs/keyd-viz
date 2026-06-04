@@ -5,6 +5,7 @@
 //! file read; all keyd-domain knowledge lives here so the GUI stays a thin layer.
 
 pub mod board;
+pub mod catalog;
 pub mod geometry;
 pub mod ids;
 pub mod layout;
@@ -15,10 +16,11 @@ pub mod qmk;
 pub mod style;
 
 pub use board::{Badge, Board, KeyCap, KeyState, Sheet};
+pub use catalog::BoardKind;
 pub use geometry::{Geometry, Slot};
 pub use qmk::{import as import_qmk, QmkImport};
 pub use ids::{Ids, MatchKind, TypeFilter};
-pub use layout::{layout_for, Layout, Row, ANSI60, HHKB};
+pub use layout::layout_for;
 pub use model::{Config, Hold, HoldKind, Layer};
 pub use parser::{parse_file, parse_text};
 pub use prettify::{base_legend, prettify};

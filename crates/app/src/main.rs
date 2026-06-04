@@ -7,14 +7,16 @@
 mod devices;
 mod layer;
 mod monitor;
+mod prefs;
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use devices::InputDevice;
 use keydviz_core::board::{KeyCap, KeyState};
-use keydviz_core::{import_qmk, layout_for, parse_file, parse_text, Config, Ids, Sheet};
-use slint::{Brush, Color, ModelRc, VecModel};
+use keydviz_core::{catalog, import_qmk, parse_file, parse_text, Config, Geometry, Ids, Sheet};
+use slint::{Brush, Color, Model, ModelRc, VecModel};
 
 slint::include_modules!();
 
@@ -74,7 +76,7 @@ fn to_keycap(k: &KeyCap) -> KeyCapData {
     }
 }
 
-fn to_sheet_data(sheet: &Sheet, device: &str) -> SheetData {
+fn to_sheet_data(sheet: &Sheet, device: &str, layout_id: &str) -> SheetData {
     let boards = sheet
         .boards
         .iter()
@@ -103,17 +105,54 @@ fn to_sheet_data(sheet: &Sheet, device: &str) -> SheetData {
         profile: sheet.profile.clone().into(),
         ids: ids.into(),
         device: device.into(),
+        layout_id: layout_id.into(),
         boards: model(boards),
     }
 }
 
-/// Build a SheetData from a parsed config and its path, with an optional connected-
-/// device label.
-fn sheet_from(path: &Path, cfg: &Config, device: &str) -> SheetData {
-    let path_str = path.to_string_lossy();
-    let (geom, profile) = layout_for(&path_str);
-    let sheet = Sheet::build(cfg, &path_str, &geom, profile);
-    to_sheet_data(&sheet, device)
+/// Everything needed to (re)build one sheet, retained so the layout picker can morph it
+/// to a different geometry without re-reading the config. `qmk` is set for boards
+/// imported from QMK (whose geometry is fixed and not catalog-pickable); otherwise the
+/// geometry comes from the curated catalog by `layout_id`.
+struct SheetSrc {
+    path: PathBuf,
+    cfg: Config,
+    device: String,
+    layout_id: String,
+    qmk: Option<(Geometry, String)>,
+}
+
+impl SheetSrc {
+    /// A catalog-backed source for a parsed config, defaulting the layout to the saved
+    /// choice (if any) or the name-based guess.
+    fn catalog(path: &Path, cfg: &Config, device: &str) -> Self {
+        let path_str = path.to_string_lossy().into_owned();
+        // `--layout <id>` forces a layout (handy for testing); else the saved choice,
+        // else the name-based guess.
+        let layout_id = flag_value("--layout")
+            .filter(|id| catalog::name(id).is_some())
+            .or_else(|| prefs::load(&path_str))
+            .unwrap_or_else(|| catalog::guess(&path_str).to_string());
+        SheetSrc { path: path.to_path_buf(), cfg: cfg.clone(), device: device.into(), layout_id, qmk: None }
+    }
+}
+
+/// Render a `SheetSrc` to display data with its current geometry (catalog or QMK).
+fn build_sheet_data(src: &SheetSrc) -> SheetData {
+    let path_str = src.path.to_string_lossy();
+    let (geom, profile, layout_id) = match &src.qmk {
+        Some((g, prof)) => (g.clone(), prof.clone(), String::new()),
+        None => {
+            let id = &src.layout_id;
+            let g = catalog::geometry(id).unwrap_or_else(|| {
+                catalog::geometry("ansi60").expect("ansi60 always exists")
+            });
+            let name = catalog::name(id).unwrap_or("ANSI 60%");
+            (g, name.to_string(), id.clone())
+        }
+    };
+    let sheet = Sheet::build(&src.cfg, &path_str, &geom, &profile);
+    to_sheet_data(&sheet, &src.device, &layout_id)
 }
 
 /// All `*.conf` files directly inside `dir` (sorted; empty if unreadable).
@@ -170,18 +209,19 @@ fn device_label(devices: &[InputDevice], idxs: &[usize]) -> String {
     }
 }
 
-/// The result of deciding what to show: the rendered sheets, a `vendor:product →
-/// sheet-index` map for following the last-pressed keyboard, and a subtitle.
+/// The result of deciding what to show: the sheet sources (rebuildable so the picker
+/// can change geometry), a `vendor:product → sheet-index` map for following the
+/// last-pressed keyboard, and a subtitle.
 struct Detection {
-    sheets: Vec<SheetData>,
-    /// `(vendor:product, index into sheets)` for each matched connected keyboard.
+    srcs: Vec<SheetSrc>,
+    /// `(vendor:product, index into srcs)` for each matched connected keyboard.
     device_map: Vec<(String, i32)>,
     subtitle: String,
 }
 
 impl Detection {
-    fn new(sheets: Vec<SheetData>, subtitle: String) -> Self {
-        Detection { sheets, device_map: Vec::new(), subtitle }
+    fn new(srcs: Vec<SheetSrc>, subtitle: String) -> Self {
+        Detection { srcs, device_map: Vec::new(), subtitle }
     }
 }
 
@@ -215,7 +255,6 @@ fn qmk_detection(info_path: &str) -> Result<Detection, String> {
     };
 
     let profile = format!("QMK · {}", imp.layout_name);
-    let sheet = Sheet::build(&cfg, &source, &imp.geometry, &profile);
     let unmapped = if imp.unmapped > 0 {
         format!(" \u{2014} {} slot(s) unmapped", imp.unmapped)
     } else {
@@ -226,7 +265,14 @@ fn qmk_detection(info_path: &str) -> Result<Detection, String> {
         imp.layout_name,
         imp.geometry.slots.len()
     );
-    Ok(Detection { sheets: vec![to_sheet_data(&sheet, "")], device_map: Vec::new(), subtitle })
+    let src = SheetSrc {
+        path: PathBuf::from(source),
+        cfg,
+        device: String::new(),
+        layout_id: String::new(),
+        qmk: Some((imp.geometry, profile)),
+    };
+    Ok(Detection { srcs: vec![src], device_map: Vec::new(), subtitle })
 }
 
 /// Decide which sheets to render, the device→sheet map, and a subtitle.
@@ -237,26 +283,38 @@ fn qmk_detection(info_path: &str) -> Result<Detection, String> {
 ///   matches, fall back to showing all configs. If `/etc/keyd` is empty, fall back
 ///   to the bundled examples.
 fn gather_sheets() -> Detection {
-    let args: Vec<PathBuf> = std::env::args()
-        .skip(1)
-        .filter(|a| !a.starts_with('-'))
-        .map(PathBuf::from)
-        .collect();
+    // Positional config paths: skip flags and the value that follows a value-flag
+    // (only `--layout` reaches this path; the `--qmk-*` flags route to qmk_detection).
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<PathBuf> = Vec::new();
+    let mut i = 0;
+    while i < raw.len() {
+        match raw[i].as_str() {
+            "--layout" => i += 2,
+            a if a.starts_with('-') => i += 1,
+            a => {
+                args.push(PathBuf::from(a));
+                i += 1;
+            }
+        }
+    }
     if !args.is_empty() {
-        let sheets: Vec<SheetData> =
-            parse_configs(&args).iter().map(|(p, c)| sheet_from(p, c, "")).collect();
-        let n = sheets.len();
-        return Detection::new(sheets, format!("{n} config(s) from arguments"));
+        let srcs: Vec<SheetSrc> =
+            parse_configs(&args).iter().map(|(p, c)| SheetSrc::catalog(p, c, "")).collect();
+        let n = srcs.len();
+        return Detection::new(srcs, format!("{n} config(s) from arguments"));
     }
 
     let conf_paths = conf_files_in(Path::new("/etc/keyd"));
     if conf_paths.is_empty() {
         let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-        let sheets: Vec<SheetData> =
-            parse_configs(&conf_files_in(&examples)).iter().map(|(p, c)| sheet_from(p, c, "")).collect();
-        let n = sheets.len();
+        let srcs: Vec<SheetSrc> = parse_configs(&conf_files_in(&examples))
+            .iter()
+            .map(|(p, c)| SheetSrc::catalog(p, c, ""))
+            .collect();
+        let n = srcs.len();
         return Detection::new(
-            sheets,
+            srcs,
             format!("{n} example keyboard(s) \u{2014} no /etc/keyd configs found"),
         );
     }
@@ -284,20 +342,21 @@ fn gather_sheets() -> Detection {
     let matched_any = per_config.iter().any(|v| !v.is_empty());
     if !matched_any {
         // No connected keyboard matched — show everything rather than nothing.
-        let sheets: Vec<SheetData> = configs.iter().map(|(p, c)| sheet_from(p, c, "")).collect();
-        let n = sheets.len();
-        return Detection::new(sheets, format!("{n} config(s) \u{2014} no connected keyboard detected"));
+        let srcs: Vec<SheetSrc> =
+            configs.iter().map(|(p, c)| SheetSrc::catalog(p, c, "")).collect();
+        let n = srcs.len();
+        return Detection::new(srcs, format!("{n} config(s) \u{2014} no connected keyboard detected"));
     }
 
-    let mut sheets = Vec::new();
+    let mut srcs = Vec::new();
     let mut device_map: Vec<(String, i32)> = Vec::new();
     for (ci, (path, cfg)) in configs.iter().enumerate() {
         if per_config[ci].is_empty() {
             continue;
         }
-        let idx = sheets.len() as i32;
+        let idx = srcs.len() as i32;
         let label = device_label(&devices, &per_config[ci]);
-        sheets.push(sheet_from(path, cfg, &label));
+        srcs.push(SheetSrc::catalog(path, cfg, &label));
         // Map every device id that matched this config to its sheet index (deduped).
         for &di in &per_config[ci] {
             let devid = devices[di].devid();
@@ -306,8 +365,8 @@ fn gather_sheets() -> Detection {
             }
         }
     }
-    let n = sheets.len();
-    Detection { sheets, device_map, subtitle: format!("{n} connected keyboard(s) detected") }
+    let n = srcs.len();
+    Detection { srcs, device_map, subtitle: format!("{n} connected keyboard(s) detected") }
 }
 
 /// Register the bundled JetBrains Mono faces so typography is identical on every
@@ -339,12 +398,13 @@ fn main() -> Result<(), slint::PlatformError> {
         },
         None => gather_sheets(),
     };
+    let sheets_data: Vec<SheetData> = det.srcs.iter().map(build_sheet_data).collect();
 
     // `--list`: print the detection result to stdout and exit (no GUI). Useful for
     // debugging device detection and for scripting.
     if std::env::args().any(|a| a == "--list") {
         println!("{}", det.subtitle);
-        for s in &det.sheets {
+        for s in &sheets_data {
             let dev = if s.device.is_empty() {
                 String::new()
             } else {
@@ -359,15 +419,28 @@ fn main() -> Result<(), slint::PlatformError> {
     register_fonts(); // after MainWindow::new() so the platform is initialized
     win.set_subtitle(det.subtitle.into());
 
+    // The layout picker. Hidden for QMK-imported boards (their geometry is fixed, not
+    // catalog-pickable); otherwise the full curated library.
+    let any_qmk = det.srcs.iter().any(|s| s.qmk.is_some());
+    let layouts: Vec<LayoutChoice> = if any_qmk {
+        Vec::new()
+    } else {
+        catalog::list()
+            .iter()
+            .map(|b| LayoutChoice { id: b.id.into(), name: b.name.into() })
+            .collect()
+    };
+    win.set_layouts(model(layouts));
+
     // All detected sheets are kept as storage so a keypress can switch the view to
     // whichever keyboard was last pressed; only one is shown at a time (`active_sheet`).
-    let first = det.sheets.first().cloned();
+    let first = sheets_data.first().cloned();
     let device_map: Vec<DeviceMatch> = det
         .device_map
         .iter()
         .map(|(d, i)| DeviceMatch { devid: d.clone().into(), sheet: *i })
         .collect();
-    win.set_sheets(model(det.sheets));
+    win.set_sheets(model(sheets_data));
     win.set_device_map(model(device_map));
     win.set_active_index(0);
     if let Some(active) = first {
@@ -375,6 +448,30 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     // Seed the base board so the window is never blank before keyd connects.
     render_board(&win);
+
+    // Layout picker: re-lay-out the active keyboard to the chosen geometry, update both
+    // the live `active_sheet` and its stored entry (so following-the-keyboard keeps the
+    // choice), persist it, and re-stamp the board. QMK sheets ignore this.
+    let srcs = Rc::new(RefCell::new(det.srcs));
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        win.on_pick_layout(move |id| {
+            let Some(win) = weak.upgrade() else { return };
+            let idx = win.get_active_index().max(0) as usize;
+            let mut srcs = srcs.borrow_mut();
+            let Some(src) = srcs.get_mut(idx) else { return };
+            if src.qmk.is_some() {
+                return;
+            }
+            src.layout_id = id.to_string();
+            let data = build_sheet_data(src);
+            win.get_sheets().set_row_data(idx, data.clone());
+            win.set_active_sheet(data);
+            prefs::save(&src.path.to_string_lossy(), &src.layout_id);
+            render_board(&win);
+        });
+    }
 
     if std::env::args().any(|a| a == "--demo") {
         spawn_demo(&win);

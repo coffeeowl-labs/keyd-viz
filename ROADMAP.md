@@ -551,6 +551,33 @@ P4 is the ambitious frontier.
     `XXXXXXX` matrix gaps + `MO(1)` show as dim blanks. keymap-drawer is the architectural
     blueprint (geometry ⊥ identity, joined by index); KLE carries geometry but no identity, so a
     KLE path will still need this label step.
-  - Next (Phase 2): board-picker UX (fetch from the QMK metadata API or a bundled snapshot),
-    curated layout library (fix HHKB bottom-row leading offset; add ISO/TKL/65%/ortho/split),
-    KLE import + a manual-label editor for the unmapped slots.
+  - Next (Phase 2): board-picker UX, curated layout library, KLE import + manual-label editor.
+
+- *(Phase 2 — curated layout library + in-app picker)* Pick a common layout, no JSON/network.
+  - **Decision (with the user): no runtime QMK API, no bundled board dump.** "Common layouts"
+    is a small, finite, stable set — so we bake them in. We deliberately *don't* build UX around
+    custom/handwired boards (the `--qmk-info` importer stays as the escape hatch for those, and a
+    future KLE+editor path covers the truly bespoke). This keeps us self-reliant: no dependency on
+    an external API/app that could break us later, and the layouts work fully offline.
+  - **`core::catalog`** — seven curated layouts as baked-in `(x, y, w, h, keyd-name)` tables:
+    ANSI 60%, ISO 60%, HHKB, 65%, TKL, Full-size (104), Ortho 4×12. Coordinates are transcribed
+    from QMK's *canonical* community-layout definitions (`layouts/default/<name>/info.json`),
+    zipped with the standard keyd-name sequence per layout — so geometry is exact by construction,
+    yet fully self-contained (no runtime JSON). `list()` / `geometry(id)` / `name(id)` /
+    `guess(path)`. **This fixes the HHKB bottom-row gap** (the reference insets the bottom row to
+    x=1.5 with blocker corners) and adds the tall ISO enter, TKL/Full nav clusters, and the
+    numpad (tall `+`/Enter). 6 tests (key counts match QMK, non-zero extent, no exactly-
+    overlapping slots, ISO enter is 2u-tall, filename guess). `layout.rs` is now a thin
+    `layout_for` shim over the catalog; the old `HHKB`/`ANSI60`/`Row`/`Layout` exports are gone.
+  - **In-app layout picker**: a chip row above the board (`for choice in layouts`) morphs the
+    active keyboard onto the chosen geometry live — re-runs `Sheet::build` against the new
+    `Geometry` and re-stamps the keyd overlay, no restart. The choice is **persisted per config**
+    (`app::prefs`, a dependency-free `id<TAB>path` TSV under `$XDG_CONFIG_HOME/keyd-viz/`), so it
+    sticks and survives following-the-last-pressed-keyboard. Hidden for QMK-imported boards (fixed
+    geometry). `SheetSrc` now retains each parsed `Config` so re-layout needs no re-read; CLI
+    `--layout <id>` forces a layout (and feeds screenshot testing).
+  - Verified: HHKB renders with the corrected inset bottom row + the picker + the keyd overlay
+    (screenshot); TKL/Full nav-cluster and numpad name↔position alignment cross-checked against
+    the QMK reference; clippy clean; 20 core tests + app suite green.
+  - Next (Phase 2): KLE import + a manual-label editor for unmapped/blank slots (the one piece
+    that unlocks bespoke/handwired boards) — lower priority, needs a click-to-edit UI affordance.

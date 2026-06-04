@@ -1,4 +1,4 @@
-//! The semantic render model: turn a [`Config`] + physical [`Layout`] into
+//! The semantic render model: turn a [`Config`] + physical [`Geometry`] into
 //! presentation-agnostic boards of key caps. This is the bridge between keyd
 //! logic and any renderer (the Slint UI, or the legacy HTML).
 //!

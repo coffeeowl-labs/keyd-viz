@@ -114,7 +114,7 @@ fn base_legend_basics() {
 fn layout_selection() {
     // HHKB profile, and its top-left key is Esc (vs ANSI-60's grave).
     let (geom, prof) = layout_for("/etc/keyd/hhkb.conf");
-    assert_eq!(prof, "HHKB 60%");
+    assert_eq!(prof, "HHKB");
     assert_eq!(geom.slots[0].key.as_deref(), Some("esc"));
 
     let (geom, prof) = layout_for("/etc/keyd/laptop.conf");
