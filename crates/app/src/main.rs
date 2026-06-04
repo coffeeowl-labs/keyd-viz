@@ -274,7 +274,14 @@ fn main() -> Result<(), slint::PlatformError> {
     let win = MainWindow::new()?;
     register_fonts(); // after MainWindow::new() so the platform is initialized
     win.set_subtitle(subtitle.into());
-    win.set_sheets(model(sheets));
+
+    // The live view shows one keyboard at a time. For now that's the first detected
+    // sheet; Phase 4 will switch it to whichever keyboard the last keypress came from.
+    if let Some(active) = sheets.into_iter().next() {
+        win.set_active_sheet(active);
+    }
+    // Seed the base board so the window is never blank before keyd connects.
+    show_live(&win, false, &[]);
 
     if std::env::args().any(|a| a == "--demo") {
         spawn_demo(&win);
@@ -285,36 +292,30 @@ fn main() -> Result<(), slint::PlatformError> {
     win.run()
 }
 
-/// Resolve the active-layer stack to a single board title to show, against the live
-/// sheet's boards. Walks from the most recently activated layer down, returning the
-/// first whose name has a (non-base) board. Returns "" (the base layer) when nothing
-/// held maps to a board — e.g. holding a bare `control` mod, which keyd reports as a
-/// layer but which has no dedicated board. Must run on the UI thread.
-fn resolve_title(win: &MainWindow, active: &[String]) -> slint::SharedString {
+/// Update the single morphing board from the active-layer stack. Resolves the stack
+/// (most-recent first) to the topmost layer that actually has a board on the active
+/// sheet, falling back to the base board when nothing held maps to one — e.g. holding
+/// a bare `control` mod, which keyd reports as a layer but which has no dedicated
+/// board. Sets the connection pill, the active-layer label, and the board.
+///
+/// Must run on the UI thread: it reads `active_sheet`, whose `Rc`-backed model isn't
+/// `Send`, so board lookups can't happen on the listen thread.
+fn show_live(win: &MainWindow, connected: bool, active: &[String]) {
     use slint::Model;
-    let idx = win.get_live_sheet() as usize;
-    let Some(sheet) = win.get_sheets().row_data(idx) else { return Default::default() };
-    let boards = sheet.boards;
+    win.set_live_connected(connected);
+    let boards = win.get_active_sheet().boards;
+
+    // resolve the stack to the title of a board that exists ("" = base)
+    let mut title = slint::SharedString::default();
     for name in active.iter().rev() {
         let upper = name.to_uppercase();
         if let Some(b) = boards.iter().find(|b| !b.is_base && b.title == upper) {
-            return b.title;
+            title = b.title;
+            break;
         }
     }
-    Default::default()
-}
-
-/// Point the single-board live view at the board for `title` ("" = base layer),
-/// updating the connection pill, the active-layer label, and the morphing board.
-/// Must run on the UI thread. Falls back to the base board (then the first board)
-/// when the title has no match.
-fn show_layer(win: &MainWindow, connected: bool, title: slint::SharedString) {
-    use slint::Model;
-    win.set_live_connected(connected);
     win.set_active_layer(title.clone());
-    let idx = win.get_live_sheet() as usize;
-    let Some(sheet) = win.get_sheets().row_data(idx) else { return };
-    let boards = sheet.boards;
+
     let chosen = boards
         .iter()
         .find(|b| if title.is_empty() { b.is_base } else { b.title == title })
@@ -335,8 +336,7 @@ fn spawn_live(win: &MainWindow) {
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(win) = weak.upgrade() {
-                    let title = resolve_title(&win, &state.active);
-                    show_layer(&win, state.connected, title);
+                    show_live(&win, state.connected, &state.active);
                 }
             });
         });
@@ -347,14 +347,14 @@ fn spawn_live(win: &MainWindow) {
 /// the live single-board view can be seen without a running keyd / keyd-group access.
 fn spawn_demo(win: &MainWindow) {
     use slint::Model;
-    // Demo the live single-board view: morph one board through the layers.
-    win.set_live_mode(true);
-    let live_idx = win.get_live_sheet() as usize;
-    let mut cycle: Vec<slint::SharedString> = vec!["".into()];
-    if let Some(sheet) = win.get_sheets().row_data(live_idx) {
-        for board in sheet.boards.iter() {
-            if !board.is_base && !cycle.contains(&board.title) {
-                cycle.push(board.title.clone());
+    // Build the layer cycle (base + each layer) from the active sheet's boards. Each
+    // entry is the synthetic active-layer stack to feed `show_live`.
+    let mut cycle: Vec<Vec<String>> = vec![Vec::new()]; // base = empty stack
+    for board in win.get_active_sheet().boards.iter() {
+        if !board.is_base {
+            let stack = vec![board.title.to_string()];
+            if !cycle.contains(&stack) {
+                cycle.push(stack);
             }
         }
     }
@@ -362,12 +362,12 @@ fn spawn_demo(win: &MainWindow) {
     std::thread::spawn(move || {
         let mut i = 0;
         loop {
-            let layer = cycle[i % cycle.len()].clone();
+            let active = cycle[i % cycle.len()].clone();
             i += 1;
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(win) = weak.upgrade() {
-                    show_layer(&win, true, layer);
+                    show_live(&win, true, &active);
                 }
             });
             std::thread::sleep(std::time::Duration::from_millis(1500));

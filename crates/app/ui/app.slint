@@ -43,34 +43,6 @@ export struct SheetData {
     boards: [BoardData],
 }
 
-// ---- a segmented-control tab (Live / Cheatsheet) ------------------------------
-component ToggleTab inherits Rectangle {
-    in property <string> text;
-    in property <bool> active;
-    callback clicked;
-
-    height: label.preferred-height + 8px;
-    width: label.preferred-width + 22px;
-    border-radius: 8px;
-    background: active ? #1f6feb : (touch.has-hover ? #1b2129 : #161b22);
-    border-width: 1px;
-    border-color: active ? #1f6feb : #2a3340;
-
-    label := Text {
-        x: 11px;
-        y: 4px;
-        text: parent.text;
-        color: active ? #ffffff : #9aa7b8;
-        font-size: 12px;
-        font-weight: 700;
-        font-family: "JetBrains Mono";
-    }
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { parent.clicked(); }
-    }
-}
-
 // ---- one key cap --------------------------------------------------------------
 component KeyCapView inherits Rectangle {
     in property <KeyCapData> data;
@@ -245,15 +217,13 @@ export component MainWindow inherits Window {
     default-font-family: "JetBrains Mono";
 
     in property <string> subtitle;
-    in property <[SheetData]> sheets;
     // live layer state (set from Rust via the keyd listen thread)
     in property <bool> live_connected;
     in property <string> active_layer;
-    // single-board live view: when on, show only `live_sheet` and only the board for
-    // the active layer (a single morphing board); when off, the full stacked cheatsheet.
-    in-out property <bool> live_mode: false;
-    in property <int> live_sheet: 0;
-    // the single board shown in live mode (computed in Rust from the active layer)
+    // The single active keyboard and the one board to show for it — a single morphing
+    // board that the keyd listen stream swaps as the active layer changes (Rust resolves
+    // the active layer to a real board, falling back to base).
+    in property <SheetData> active_sheet;
     in property <BoardData> active_board;
 
     ScrollView {
@@ -274,11 +244,9 @@ export component MainWindow inherits Window {
                 font-size: 12px;
             }
 
-            // live-status pill + view toggle
+            // live-status pill
             HorizontalLayout {
                 alignment: start;
-                spacing: 10px;
-
                 Rectangle {
                     width: pill.preferred-width + 18px;
                     height: pill.preferred-height + 8px;
@@ -297,18 +265,6 @@ export component MainWindow inherits Window {
                         font-weight: 700;
                     }
                 }
-
-                // Live (single morphing board) vs Cheatsheet (full stacked reference).
-                Rectangle {
-                    width: toggle.preferred-width;
-                    height: toggle.preferred-height;
-                    toggle := HorizontalLayout {
-                        ToggleTab { text: "Live"; active: root.live_mode;
-                            clicked => { root.live_mode = true; } }
-                        ToggleTab { text: "Cheatsheet"; active: !root.live_mode;
-                            clicked => { root.live_mode = false; } }
-                    }
-                }
             }
 
             // legend
@@ -322,47 +278,33 @@ export component MainWindow inherits Window {
                 Text { text: "\u{21e7}\u{21e7} = both-shift chord"; color: #9aa7b8; font-size: 12px; }
             }
 
-            for sheet[idx] in root.sheets: VerticalLayout {
+            // The active keyboard, and its one morphing board. Header from the active
+            // sheet; the board is swapped by the keyd listen stream as layers change.
+            VerticalLayout {
                 spacing: 6px;
-                // collapse non-live sheets in live mode (single keyboard at a time)
-                padding-top: (!root.live_mode || idx == root.live_sheet) ? 10px : 0px;
+                padding-top: 10px;
 
-                if (!root.live_mode || idx == root.live_sheet): VerticalLayout {
-                    spacing: 6px;
-
-                    Text {
-                        text: sheet.name;
-                        color: #e6e6e6;
-                        font-size: 17px;
-                        font-weight: 700;
-                    }
-                    Text {
-                        text: "\{sheet.profile} \u{b7} ids: \{sheet.ids} \u{b7} \{sheet.path}";
-                        color: #7d8694;
-                        font-size: 12px;
-                    }
-                    if sheet.device != "": Text {
-                        text: "\u{25cf} connected: \{sheet.device}";
-                        color: #3ddc84;
-                        font-size: 12px;
-                        font-weight: 700;
-                    }
-                    // Cheatsheet: every board stacked.
-                    if !root.live_mode: VerticalLayout {
-                        spacing: 6px;
-                        for board in sheet.boards: BoardView {
-                            data: board;
-                            active_layer: root.active_layer;
-                            live: root.live_connected;
-                        }
-                    }
-                    // Live: a single morphing board — the active layer's board (base
-                    // when nothing held maps to a board), resolved in Rust.
-                    if root.live_mode: BoardView {
-                        data: root.active_board;
-                        active_layer: root.active_layer;
-                        live: root.live_connected;
-                    }
+                Text {
+                    text: root.active_sheet.name;
+                    color: #e6e6e6;
+                    font-size: 17px;
+                    font-weight: 700;
+                }
+                Text {
+                    text: "\{root.active_sheet.profile} \u{b7} ids: \{root.active_sheet.ids} \u{b7} \{root.active_sheet.path}";
+                    color: #7d8694;
+                    font-size: 12px;
+                }
+                if root.active_sheet.device != "": Text {
+                    text: "\u{25cf} connected: \{root.active_sheet.device}";
+                    color: #3ddc84;
+                    font-size: 12px;
+                    font-weight: 700;
+                }
+                BoardView {
+                    data: root.active_board;
+                    active_layer: root.active_layer;
+                    live: root.live_connected;
                 }
             }
         }

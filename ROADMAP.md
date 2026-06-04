@@ -470,14 +470,17 @@ P4 is the ambitious frontier.
     Vec<String>`, most-recent last) instead of a single string; `main::resolve_title`
     walks it (most-recent first) to the topmost layer that actually has a board, and
     `show_layer` points the UI's single `active_board` at it. Both run on the UI thread.
-  - UI: a **Live / Cheatsheet** segmented toggle (`ToggleTab`). Live = single morphing
-    board; Cheatsheet = the full stacked reference (default on open, so the window is
-    never an empty single board before keyd connects). In live mode only the live sheet
-    (`live_sheet`, index 0 for now) renders; others collapse — Phase 4 will pick the
-    sheet by which keyboard the last keypress came from.
-  - `--demo` now drives the single-board view (sets `live_mode`), cycling base → each
-    layer. **Verified visually via --demo** (one board morphing SHIFT→GAME→… with the
-    toggle, plus the cheatsheet stacked view in default mode).
+  - UI: the live single board **is the only view** — no view picker. The legacy stacked
+    "cheatsheet" (a browser-era artifact) and its Live/Cheatsheet toggle were removed per
+    user direction: a live viewer shouldn't ship a mode selector. The window renders the
+    **active sheet's** header + one `active_board`; at startup the base board is seeded so
+    it's never blank before keyd connects (pill reads "live view off" until then).
+  - The active keyboard is exposed as a single `active_sheet` property (the first detected
+    sheet for now); Phase 4 will repoint it to whichever keyboard the last keypress came
+    from. Board lookups (`main::show_live`) run on the UI thread, since Slint's `Rc`-backed
+    models aren't `Send` and can't cross to the listen thread.
+  - `--demo` drives the same single board, cycling base → each layer. **Verified visually
+    via --demo** last iteration (one board morphing SHIFT→GAME→…).
   - Next: confirm live view on hardware (keyd group, dev-interim), then Phase 4 (live
     keypress + privileged helper — also routes the layer stream and picks the active
     keyboard by last keypress) or Phase 2 (physical-layout engine).
