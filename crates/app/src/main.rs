@@ -130,6 +130,24 @@ fn conf_files_in(dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Register the bundled JetBrains Mono faces so typography is identical on every
+/// machine, regardless of installed fonts. Must be called after the Slint platform
+/// is initialized (i.e. after the first window is constructed).
+fn register_fonts() {
+    use std::sync::Arc;
+    let mut collection = slint::fontique_08::shared_collection();
+    for data in [
+        include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf").as_slice(),
+        include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf").as_slice(),
+    ] {
+        let blob = slint::fontique_08::fontique::Blob::new(Arc::new(data.to_vec()));
+        collection.register_fonts(blob, None);
+    }
+    if collection.family_id("JetBrains Mono").is_none() {
+        eprintln!("warning: bundled font 'JetBrains Mono' did not register; using fallback");
+    }
+}
+
 fn main() -> Result<(), slint::PlatformError> {
     let paths = collect_conf_paths();
 
@@ -148,6 +166,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let n = sheets.len();
     let win = MainWindow::new()?;
+    register_fonts(); // after MainWindow::new() so the platform is initialized
     win.set_subtitle(format!("{n} keyboard(s) \u{2014} the config is the source of truth").into());
     win.set_sheets(model(sheets));
     win.run()

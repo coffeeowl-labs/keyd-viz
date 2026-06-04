@@ -13,7 +13,9 @@ path = "src/main.rs"
 
 [dependencies]
 keydviz-core = { path = "../core" }
-slint = "1"
+# unstable-fontique-08: lets us register the bundled JetBrains Mono faces at
+# runtime so typography is identical regardless of installed system fonts.
+slint = { version = "1", features = ["unstable-fontique-08"] }
 
 [build-dependencies]
 slint-build = "1"

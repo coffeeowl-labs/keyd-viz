@@ -377,8 +377,11 @@ P4 is the ambitious frontier.
   - `app`: Slint UI (`crates/app/ui/app.slint`) reproducing the original dark cheatsheet
     look natively — rounded caps, color-coded hold badges, ghost legends, dim/HOLD states,
     per-layer accents. Renders `/etc/keyd/*.conf` (falls back to bundled examples).
-  - **Visual-parity gate MET** (verified via screenshot on KDE/Wayland). Font: Slint takes a
-    single `font-family`, so the original CSS fallback chain doesn't apply; currently set to
-    "Fira Code" (installed; was the original 2nd choice). Open follow-up: bundle/register a
-    font for cross-machine reproducibility (see §8).
-  - Remaining for Phase 0/1: decide font-bundling; then Phase 1 active-keyboard detection.
+  - **Visual-parity gate MET** (verified via screenshot on KDE/Wayland).
+  - **Font: bundled JetBrains Mono** (OFL, vendored in `crates/app/assets/fonts/`),
+    registered at runtime via Slint's fontique (`unstable-fontique-08` feature) so typography
+    is identical on every machine regardless of installed fonts. Verified resolvable at
+    startup. (Slint takes a single `font-family`, so the CSS fallback chain doesn't apply —
+    bundling is the robust answer.)
+  - **Phase 0 complete.** Next: Phase 1 — active-keyboard detection (enumerate `/sys` input
+    devices, match `[ids]`, show only the active keyboard's config).
