@@ -481,6 +481,28 @@ P4 is the ambitious frontier.
     models aren't `Send` and can't cross to the listen thread.
   - `--demo` drives the same single board, cycling base → each layer. **Verified visually
     via --demo** last iteration (one board morphing SHIFT→GAME→…).
-  - Next: confirm live view on hardware (keyd group, dev-interim), then Phase 4 (live
-    keypress + privileged helper — also routes the layer stream and picks the active
-    keyboard by last keypress) or Phase 2 (physical-layout engine).
+- *(Phase 4 — in progress: keypress half done; privileged helper shelved)* Live keypresses.
+  - **`keyd monitor` format re-verified against keyd v2.6.0** (matches §4.2): key events are
+    `"<name>\t<vendor:product:hash>\t<key> <down|up|repeat>"` (binary fmt `%s\t%s\t%s %s`);
+    startup/hotplug emit `device added:/removed: <id> <name…> (/dev/input/eventN)`. Captured a
+    real event via `ydotool` to confirm. **Confirmed `keyd monitor` runs for a normal user in
+    the `input` group** (ryan) — so the keypress half needs *no* extra permission on this box,
+    unlike `keyd listen` (which needs the `keyd` group).
+  - `app::monitor` — parses both record kinds into `MonitorEvent` (strips the per-device hash to
+    `vendor:product`); `run_monitor` mirrors `run_listen` (retry + connect callback). 4 tests.
+  - `core::KeyCap` gains `key` (the keyd key name per physical position) so a monitor keypress
+    maps straight onto a cap — no evdev keycode table needed (layouts are already keyed by keyd
+    names).
+  - App: `spawn_monitor` maintains a pressed-key set → **live glow** (brighter fill, cyan ring,
+    white label) and **follows the last-pressed keyboard** via a `vendor:product → sheet` map
+    built during detection. `render_board()` now centralizes board selection + glow stamping;
+    both the listen and monitor streams feed it through window-property state (kept on the UI
+    thread, since Slint models aren't `Send`). Status pill gained a **"LIVE keys"** state for
+    when monitor works but the `keyd`-group layer socket doesn't. `--demo` sweeps a glowing key
+    while cycling layers. 31 tests green.
+  - **SHELVED for discussion (needs user direction):** the privileged-helper / socket-security
+    design — the mechanism that delivers the §1 *zero-manual-permission* requirement for *all*
+    users (not just those already in `input`/`keyd`). Everything above is source-agnostic and
+    slots in behind the helper unchanged. See open questions §8 (helper IPC, framing, authz via
+    SO_PEERCRED/logind, systemd unit, packaging).
+  - Next (for the human): pick the helper design, OR pivot to Phase 2 (physical-layout engine).

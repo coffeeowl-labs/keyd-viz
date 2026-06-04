@@ -6,6 +6,7 @@ on:
   pull_request:
 
 jobs:
+  # ---- legacy Python tool ------------------------------------------------------
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -25,3 +26,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/ruff-action@v3
+
+  # ---- Rust GUI (the active rewrite) ------------------------------------------
+  # `core` is pure logic with zero system deps, so it builds anywhere. The `app`
+  # crate links Slint (winit + femtovg), which needs the X/Wayland/GL/fontconfig
+  # dev libraries below even to compile and run the headless unit tests.
+  rust-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p keydviz-core --all-targets
+      - run: cargo clippy -p keydviz-core --all-targets -- -D warnings
+
+  rust-app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Slint system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libfontconfig1-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libgl1-mesa-dev
+      - run: cargo build -p keydviz
+      - run: cargo test -p keydviz --all-targets
+      - run: cargo clippy -p keydviz --all-targets -- -D warnings
