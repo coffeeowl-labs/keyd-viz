@@ -4,12 +4,14 @@
 //! ([`layout_for`]), and display constants ([`style`]). No I/O beyond an optional
 //! file read; all keyd-domain knowledge lives here so the GUI stays a thin layer.
 
+pub mod board;
 pub mod layout;
 pub mod model;
 pub mod parser;
 pub mod prettify;
 pub mod style;
 
+pub use board::{Badge, Board, KeyCap, KeyState, Sheet};
 pub use layout::{layout_for, Layout, Row, ANSI60, HHKB};
 pub use model::{Config, Hold, HoldKind, Layer};
 pub use parser::{parse_file, parse_text};
