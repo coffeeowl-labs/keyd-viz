@@ -1,0 +1,13 @@
+# keyd-viz — native Rust + Slint GUI for keyd. See ROADMAP.md for the full plan.
+#
+# `core` is pure, dependency-free keyd logic (parser, prettifier, layouts) and is
+# always offline-buildable. The `app` (Slint UI) crate is added to this member list
+# once its GUI dependencies are wired up.
+[workspace]
+resolver = "2"
+members = ["crates/core"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/coffeeowl-labs/keyd-cheatsheet"

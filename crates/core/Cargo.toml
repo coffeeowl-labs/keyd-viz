@@ -1,0 +1,13 @@
+[package]
+name = "keydviz-core"
+version = "0.1.0"
+description = "Pure keyd config parsing, value prettifying, and physical-layout model for keyd-viz."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "keydviz_core"
+
+# Intentionally zero dependencies: this crate is pure logic and must build offline.
+[dependencies]

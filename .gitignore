@@ -13,3 +13,7 @@ venv/
 # Generated output
 *.html
 docs/_preview.html
+
+# Rust
+/target/
+
