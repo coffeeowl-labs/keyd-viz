@@ -370,3 +370,15 @@ P4 is the ambitious frontier.
 - *(initial)* Document created. Decisions locked: Rust+Slint stack; first milestone = Phase
   0+1 (foundation + active-keyboard detection); privilege model = privileged helper +
   unprivileged GUI; packaging = native-first (AUR/AppImage). keyd runtime feasibility verified.
+- *(Phase 0 — in progress)* Rust workspace scaffolded (`crates/core`, `crates/app`).
+  - `core`: keyd parser, value prettifier, physical layouts (HHKB/ANSI-60), and the
+    semantic board model (`Sheet`/`Board`/`KeyCap`) ported faithfully from the Python tool.
+    15 unit/integration tests green; zero deps; offline-buildable.
+  - `app`: Slint UI (`crates/app/ui/app.slint`) reproducing the original dark cheatsheet
+    look natively — rounded caps, color-coded hold badges, ghost legends, dim/HOLD states,
+    per-layer accents. Renders `/etc/keyd/*.conf` (falls back to bundled examples).
+  - **Visual-parity gate MET** (verified via screenshot on KDE/Wayland). Font: Slint takes a
+    single `font-family`, so the original CSS fallback chain doesn't apply; currently set to
+    "Fira Code" (installed; was the original 2nd choice). Open follow-up: bundle/register a
+    font for cross-machine reproducibility (see §8).
+  - Remaining for Phase 0/1: decide font-bundling; then Phase 1 active-keyboard detection.

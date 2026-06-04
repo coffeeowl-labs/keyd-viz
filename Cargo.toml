@@ -5,7 +5,7 @@
 # once its GUI dependencies are wired up.
 [workspace]
 resolver = "2"
-members = ["crates/core"]
+members = ["crates/core", "crates/app"]
 
 [workspace.package]
 edition = "2021"

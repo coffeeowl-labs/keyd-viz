@@ -1,0 +1,254 @@
+// keyd-viz UI — reproduces the original HTML cheatsheet's look natively.
+// Data structs below mirror keydviz_core's Sheet/Board/KeyCap model; main.rs
+// fills them in. Visual tokens (colors, sizes) match the original CSS.
+
+import { ScrollView } from "std-widgets.slint";
+
+export struct KeyCapData {
+    width: float,            // width in key units
+    label: string,
+    emphasized: bool,        // large bold glyph (remap/override/momentary mod)
+    ghost: string,           // faint top-right normal legend
+    has_accent: bool,
+    accent: brush,
+    state: int,              // 0 normal, 1 dim, 2 hold
+    badge_left: string,
+    badge_left_color: brush,
+    has_badge_left: bool,
+    badge_right: string,
+    badge_right_color: brush,
+    has_badge_right: bool,
+}
+
+export struct RowData {
+    keys: [KeyCapData],
+}
+
+export struct BoardData {
+    is_base: bool,
+    title: string,
+    accent: brush,
+    has_accent: bool,
+    how: string,
+    hint: string,
+    rows: [RowData],
+}
+
+export struct SheetData {
+    name: string,
+    path: string,
+    profile: string,
+    ids: string,
+    boards: [BoardData],
+}
+
+// ---- one key cap --------------------------------------------------------------
+component KeyCapView inherits Rectangle {
+    in property <KeyCapData> data;
+
+    // unit = 46px, gap = 5px  ->  width = u*units + gap*(units-1)
+    width: data.width * 46px + (data.width - 1) * 5px;
+    height: 46px;
+    border-radius: 7px;
+    background: data.state == 1 ? #161b22 : #1b2129;
+    border-width: data.state == 2 ? 2px : 1px;
+    border-color: data.state == 2 ? data.accent : #2a3340;
+    // raised "lip" approximating the CSS thick bottom border.
+    drop-shadow-offset-y: 2px;
+    drop-shadow-blur: 0px;
+    drop-shadow-color: #0b0e13;
+    clip: true;
+
+    // primary label, centered
+    Text {
+        width: 100%;
+        height: 100%;
+        text: data.label;
+        color: data.state == 1 ? #4a525e : (data.has_accent ? data.accent : #cfd6df);
+        font-size: data.emphasized ? 16px : 15px;
+        font-weight: data.emphasized ? 700 : 400;
+        font-family: "Fira Code";
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    // faint normal-legend, top-right
+    if data.ghost != "": Text {
+        x: parent.width - self.width - 4px;
+        y: 3px;
+        text: data.ghost;
+        color: #5b6573;
+        font-size: 9px;
+        font-family: "Fira Code";
+    }
+
+    // bottom-left badge (hold target / HOLD)
+    if data.has_badge_left: Rectangle {
+        x: 4px;
+        y: parent.height - self.height - 2px;
+        width: bl.preferred-width + 6px;
+        height: bl.preferred-height + 2px;
+        background: data.badge_left_color;
+        border-radius: 4px;
+        bl := Text {
+            x: 3px;
+            y: 1px;
+            text: data.badge_left;
+            color: #11151c;
+            font-size: 9px;
+            font-weight: 700;
+            font-family: "Fira Code";
+        }
+    }
+
+    // bottom-right badge (chord marker)
+    if data.has_badge_right: Rectangle {
+        x: parent.width - self.width - 4px;
+        y: parent.height - self.height - 2px;
+        width: br.preferred-width + 6px;
+        height: br.preferred-height + 2px;
+        background: data.badge_right_color;
+        border-radius: 4px;
+        br := Text {
+            x: 3px;
+            y: 1px;
+            text: data.badge_right;
+            color: #11151c;
+            font-size: 9px;
+            font-weight: 700;
+            font-family: "Fira Code";
+        }
+    }
+}
+
+// ---- one board (base layer or a single layer) ---------------------------------
+component BoardView inherits VerticalLayout {
+    in property <BoardData> data;
+    spacing: 9px;
+
+    // header row: title/tag + how + hint
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+
+        if data.is_base: Text {
+            text: "Base layer";
+            color: #e6e6e6;
+            font-size: 14px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+        if !data.is_base: Rectangle {
+            width: tag.preferred-width + 16px;
+            height: tag.preferred-height + 4px;
+            background: data.accent;
+            border-radius: 6px;
+            tag := Text {
+                x: 8px;
+                y: 2px;
+                text: data.title;
+                color: #11151c;
+                font-size: 11px;
+                font-weight: 700;
+                font-family: "Fira Code";
+            }
+        }
+        if data.how != "": Text {
+            text: data.how;
+            color: #7d8694;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: data.is_base ? data.hint : "\u{b7} \{data.hint}";
+            color: #7d8694;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+
+    // keyboard panel, hugging its content
+    HorizontalLayout {
+        alignment: start;
+        Rectangle {
+            background: #0c0f14;
+            border-color: #1e2630;
+            border-width: 1px;
+            border-radius: 12px;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 5px;
+                for row in data.rows: HorizontalLayout {
+                    spacing: 5px;
+                    alignment: center;
+                    for key in row.keys: KeyCapView {
+                        data: key;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---- main window --------------------------------------------------------------
+export component MainWindow inherits Window {
+    title: "keyd-viz";
+    background: #11151c;
+    preferred-width: 1120px;
+    preferred-height: 820px;
+    default-font-family: "Fira Code";
+
+    in property <string> subtitle;
+    in property <[SheetData]> sheets;
+
+    ScrollView {
+        VerticalLayout {
+            padding: 28px;
+            spacing: 16px;
+            alignment: start;
+
+            Text {
+                text: "keyd layout cheatsheet";
+                color: #e6e6e6;
+                font-size: 21px;
+                font-weight: 700;
+            }
+            Text {
+                text: root.subtitle;
+                color: #7d8694;
+                font-size: 12px;
+            }
+
+            // legend
+            HorizontalLayout {
+                spacing: 18px;
+                alignment: start;
+                Text { text: "tap = key legend"; color: #9aa7b8; font-size: 12px; }
+                Text { text: "\u{2193}badge = hold layer/mod"; color: #9aa7b8; font-size: 12px; }
+                Text { text: "HOLD = key you hold for a layer"; color: #9aa7b8; font-size: 12px; }
+                Text { text: "orange = plain remap"; color: #9aa7b8; font-size: 12px; }
+                Text { text: "\u{21e7}\u{21e7} = both-shift chord"; color: #9aa7b8; font-size: 12px; }
+            }
+
+            for sheet in root.sheets: VerticalLayout {
+                spacing: 6px;
+                padding-top: 10px;
+
+                Text {
+                    text: sheet.name;
+                    color: #e6e6e6;
+                    font-size: 17px;
+                    font-weight: 700;
+                }
+                Text {
+                    text: "\{sheet.profile} \u{b7} ids: \{sheet.ids} \u{b7} \{sheet.path}";
+                    color: #7d8694;
+                    font-size: 12px;
+                }
+                for board in sheet.boards: BoardView {
+                    data: board;
+                }
+            }
+        }
+    }
+}
