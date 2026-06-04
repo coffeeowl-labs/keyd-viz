@@ -45,6 +45,13 @@ secondary view; decide when we build the live single-board mode.
   active-device signal from `keyd monitor` → **Phase 4** (privileged helper).
 
 ### Hard requirements (non-negotiable)
+- **Zero manual permission setup.** The shipped product must deliver *full* functionality
+  right after install — **no `usermod`, no manual group membership, no re-login, no fiddling.**
+  All privileged access (the keyd layer socket *and* `/dev/input`) is brokered by the installed
+  helper service; the GUI stays unprivileged and "just works." Any manual group step (e.g. the
+  `keyd` group used to test Phase 3 today) is **development-interim only** and must not survive
+  into the shipped experience. This is what makes the privileged-helper architecture mandatory,
+  not optional.
 - **No browser dependency.** Must not require a browser to be installed or running. No
   bundled Chromium. Low idle RAM (it may run resident in the tray all day).
 - **Modern, beautiful UI.** Must look modern, never dated. Porting the current cheatsheet's
@@ -112,11 +119,25 @@ not a consideration; Flatpak not important."
   no manual group fiddling.
 - Keeps the GUI Flatpak-able later if ever wanted, so ignoring Flatpak now costs us nothing.
 - **The first milestone (P0+1) needs no privilege at all** (it only parses config files and
-  reads world-readable `/sys`), so the helper lands exactly when first required (Phase 3) and
-  we do not pay for it early.
+  reads world-readable `/sys`), so the helper lands exactly when first required.
 
-- **Packaging:** native-first — **AUR + AppImage**. Flatpak deprioritized / optional later
-  (layer-only, since the sandbox fights `/dev/input` access).
+**The helper brokers ALL keyd access — including the layer stream — so the GUI never needs
+group membership (per the zero-manual-permission hard requirement).** Revises the earlier
+Phase 3 note: shelling out to `keyd listen` + the `keyd` group is a **dev-only interim**; the
+shipped path routes layer events (and keypress events) through the helper.
+
+**Helper socket security model (no groups, no world-writable socket):** the helper runs as a
+**root system service** (installed by the package; install-time root is expected — that's not
+"user gymnastics"). It reads the keyd socket and `/dev/input` (it has the privilege), and
+exposes a **single, one-directional** event stream (layer + key events out only) over a unix
+socket that is **restricted to the active session user** — the helper resolves the seat's
+logged-in user via logind and `chown`s the socket to them (or checks the peer UID via
+`SO_PEERCRED`). This keeps keystroke/layer data off a world-readable socket *and* off a broad
+group grant — the GUI connects with zero setup, and no other local process can read the stream.
+
+- **Packaging:** native-first — **AUR + AppImage**. The package installs the helper as a
+  systemd service and wires everything up so the user does nothing. Flatpak deprioritized /
+  optional later (sandbox fights `/dev/input`; the helper sidesteps it for native packages).
 
 ### 2.4 Smaller decisions (assumed unless overridden)
 - **Sunset the Python tool.** The parser is reimplemented in Rust; the Python version retires
@@ -431,11 +452,14 @@ P4 is the ambitious frontier.
     highlight (accent border + "● ACTIVE" tag) on whichever board is currently active.
   - `--demo` mode cycles the active layer for testing the highlight without keyd access.
     **Verified visually via --demo** (pill + NAV board highlight render correctly).
-  - **Architecture note:** Phase 3 uses `keyd listen` directly (socket exposes only layer
-    *names*, low-risk), gated on `keyd`-group membership — keyd's own documented pattern. The
-    privileged helper is deferred to Phase 4, where `/dev/input` keypress capture actually
-    warrants it. (On this dev machine the user is in `input` but not `keyd`, so the real live
-    view needs `sudo usermod -aG keyd <user>` + re-login to confirm.)
+  - **Architecture note (revised):** Phase 3 currently uses `keyd listen` directly, gated on
+    `keyd`-group membership — but per the **zero-manual-permission hard requirement (§1)**, that
+    group step is **dev-interim only**. The shipped path routes the layer stream through the
+    privileged helper too (built in Phase 4), so the GUI needs no group. The `layer` module is
+    already source-agnostic (it consumes a `LiveState` stream), so swapping `keyd listen` for
+    the helper socket is a localized change. (On this dev machine the user is in `input` but not
+    `keyd`; to confirm the live view *now*, `sudo usermod -aG keyd <user>` + re-login — but the
+    end product will not require this.)
   - 27 tests total green.
   - Next: confirm live view on hardware (keyd group), then Phase 4 (live keypress + helper)
     or Phase 2 (physical-layout engine).
