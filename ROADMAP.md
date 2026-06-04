@@ -232,6 +232,18 @@ Linux/Wayland. We would be the **first real visual face for keyd**.
   carries *remapped* keys — wrong layer of abstraction. Useful only to *exclude* it.
 - **Privilege:** `keyd monitor` needs read access to `/dev/input/event*` → **root or `input`
   group**. This is what the privileged helper exists to encapsulate.
+- **Confirmed (2026-06-04, runtime):** inspecting `/proc/<pid>/fd` of a live `keyd monitor`
+  shows it holding fds on **every `/dev/input/event*` node directly** — no `/run/keyd.socket`,
+  no `keyd`-group dependency. So the keypress half works for any user in `input` (verified to
+  *spawn* fine as user `ryan`, who is in `input` but not `keyd`).
+- **⚠️ UNVERIFIED — top hardware check:** whether a press on a keyd-*managed* (grabbed)
+  keyboard surfaces in `monitor` tagged with the **physical** `vendor:product` (e.g.
+  `04fe:0021`) — which `app::monitor`/`device_map` assume — or with keyd's **virtual** output
+  device (`0fac:0ade`, post-remap), which would *not* match any `[ids]` and so wouldn't glow.
+  §4.2 (from source) says physical/pre-remap; a synthetic non-grabbed device (ydotool) only
+  proved the non-grabbed case. **Test:** run the app, press a key, confirm the cap glows. If it
+  doesn't, monitor is emitting the virtual id and the glow needs to key off it (and follow-by-
+  keypress would need another signal).
 
 ### 4.3 Active-keyboard detection — YES (config→device mapping doable) ✅
 - keyd's internal device id format is `"%04x:%04x:%08x"` = **vendor:product:uid**, where uid is
@@ -387,7 +399,9 @@ P4 is the ambitious frontier.
 ## 8. Open questions / deferred decisions
 - **Final project name** (Phase 5): `keyd-viz` / `keyd-board` / `keyflow` / other.
 - **IPC mechanism for the helper** (P3): unix socket protocol + serialization (likely a small
-  framed JSON or bincode stream). Decide at P3.
+  framed JSON or bincode stream). Decide at P3. **Options drafted in
+  [`docs/helper-design.md`](docs/helper-design.md)** (helper daemon vs udev/uaccess ACL vs
+  auto-group), with a recommendation — review pending.
 - **Slint rendering backend** (femtovg/skia/software) — pick during P0 based on look + deps.
 - **Heatmap persistence** (P4) — local data store format/location, opt-in.
 - **Upstream opportunity:** propose adding key events to keyd's IPC so external GUIs don't need
