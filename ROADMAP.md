@@ -383,5 +383,18 @@ P4 is the ambitious frontier.
     is identical on every machine regardless of installed fonts. Verified resolvable at
     startup. (Slint takes a single `font-family`, so the CSS fallback chain doesn't apply —
     bundling is the robust answer.)
-  - **Phase 0 complete.** Next: Phase 1 — active-keyboard detection (enumerate `/sys` input
-    devices, match `[ids]`, show only the active keyboard's config).
+  - **Phase 0 complete.**
+- *(Phase 1 — complete)* Active-keyboard detection.
+  - `core::ids` — replicates keyd's `[ids]` matching (prefix match, `k:`/`m:`/`-`/`*`,
+    explicit-beats-wildcard) as pure, tested logic (`Ids`, `MatchKind`). 5 tests.
+  - `app::devices` — enumerates `/proc/bus/input/devices` and classifies keyboards with
+    keyd's exact capability rule (all of `KEY_1..KEY_0,KEY_Q..KEY_Y`, or any media key),
+    read from the `B: KEY=` bitmap — no privilege. 4 tests.
+  - App now detects connected keyboards, assigns each to its best-matching config, and
+    renders **only the matching config(s)** (labeled with a green "connected: <device>"
+    line), grouping a keyboard's multiple event nodes by `vendor:product`. Falls back to
+    all configs if nothing matches, or bundled examples if `/etc/keyd` is empty.
+  - Added a `--list` CLI mode (prints detection result, no GUI) for debugging/scripting.
+  - Verified on real hardware (HHKB `04fe:0021` → hhkb.conf; laptop `0b05:19b6` →
+    laptop.conf). 24 tests total green.
+  - Next: Phase 2 (physical-layout engine) or Phase 3 (live layer view via the helper).

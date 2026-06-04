@@ -39,6 +39,7 @@ export struct SheetData {
     path: string,
     profile: string,
     ids: string,
+    device: string,         // connected device that matched this config (empty if none)
     boards: [BoardData],
 }
 
@@ -244,6 +245,12 @@ export component MainWindow inherits Window {
                     text: "\{sheet.profile} \u{b7} ids: \{sheet.ids} \u{b7} \{sheet.path}";
                     color: #7d8694;
                     font-size: 12px;
+                }
+                if sheet.device != "": Text {
+                    text: "\u{25cf} connected: \{sheet.device}";
+                    color: #3ddc84;
+                    font-size: 12px;
+                    font-weight: 700;
                 }
                 for board in sheet.boards: BoardView {
                     data: board;
