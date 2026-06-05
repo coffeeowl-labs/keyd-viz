@@ -77,7 +77,7 @@ fn to_keycap(k: &KeyCap) -> KeyCapData {
     }
 }
 
-fn to_sheet_data(sheet: &Sheet, device: &str, layout_id: &str) -> SheetData {
+fn to_sheet_data(sheet: &Sheet, device: &str, layout_id: &str, matched_ids: &[String]) -> SheetData {
     let boards = sheet
         .boards
         .iter()
@@ -94,7 +94,14 @@ fn to_sheet_data(sheet: &Sheet, device: &str, layout_id: &str) -> SheetData {
         })
         .collect();
 
-    let ids = if sheet.ids.is_empty() { "\u{2014}".to_string() } else { sheet.ids.join(", ") };
+    let id_tags: Vec<IdTag> = sheet
+        .ids
+        .iter()
+        .map(|id| IdTag {
+            text: id.clone().into(),
+            matched: matched_ids.iter().any(|d| id_matches(id, d)),
+        })
+        .collect();
     let name = Path::new(&sheet.source)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -104,11 +111,18 @@ fn to_sheet_data(sheet: &Sheet, device: &str, layout_id: &str) -> SheetData {
         name: name.into(),
         path: sheet.source.clone().into(),
         profile: sheet.profile.clone().into(),
-        ids: ids.into(),
+        id_tags: model(id_tags),
         device: device.into(),
         layout_id: layout_id.into(),
         boards: model(boards),
     }
+}
+
+/// Whether a config `[ids]` entry refers to a concrete connected `vendor:product`. Handles
+/// a bare `vvvv:pppp` and keyd's `k:`/`m:` type prefixes; wildcards (`*`) never match a
+/// specific device, so they stay un-highlighted.
+fn id_matches(config_id: &str, devid: &str) -> bool {
+    config_id == devid || config_id.ends_with(devid)
 }
 
 /// Everything needed to (re)build one sheet, retained so the layout picker can morph it
@@ -119,6 +133,9 @@ struct SheetSrc {
     path: PathBuf,
     cfg: Config,
     device: String,
+    /// Concrete `vendor:product` ids of connected keyboards that matched this config, so
+    /// the UI can highlight which `[ids]` entry is currently plugged in.
+    matched_ids: Vec<String>,
     layout_id: String,
     qmk: Option<(Geometry, String)>,
 }
@@ -126,7 +143,7 @@ struct SheetSrc {
 impl SheetSrc {
     /// A catalog-backed source for a parsed config, defaulting the layout to the saved
     /// choice (if any) or the name-based guess.
-    fn catalog(path: &Path, cfg: &Config, device: &str) -> Self {
+    fn catalog(path: &Path, cfg: &Config, device: &str, matched_ids: Vec<String>) -> Self {
         let path_str = path.to_string_lossy().into_owned();
         // `--layout <id>` forces a layout (handy for testing); else the saved choice,
         // else the name-based guess.
@@ -134,7 +151,14 @@ impl SheetSrc {
             .filter(|id| catalog::name(id).is_some())
             .or_else(|| prefs::load(&path_str))
             .unwrap_or_else(|| catalog::guess(&path_str).to_string());
-        SheetSrc { path: path.to_path_buf(), cfg: cfg.clone(), device: device.into(), layout_id, qmk: None }
+        SheetSrc {
+            path: path.to_path_buf(),
+            cfg: cfg.clone(),
+            device: device.into(),
+            matched_ids,
+            layout_id,
+            qmk: None,
+        }
     }
 }
 
@@ -153,7 +177,7 @@ fn build_sheet_data(src: &SheetSrc) -> SheetData {
         }
     };
     let sheet = Sheet::build(&src.cfg, &path_str, &geom, &profile);
-    to_sheet_data(&sheet, &src.device, &layout_id)
+    to_sheet_data(&sheet, &src.device, &layout_id, &src.matched_ids)
 }
 
 /// All `*.conf` files directly inside `dir` (sorted; empty if unreadable).
@@ -218,11 +242,16 @@ struct Detection {
     /// `(vendor:product, index into srcs)` for each matched connected keyboard.
     device_map: Vec<(String, i32)>,
     subtitle: String,
+    /// Keep following connected keyboards while running (re-highlight `[ids]` and refresh
+    /// the device map on hotplug)? True for the auto-detect paths; false for explicit path
+    /// args and QMK import, which show exactly what was asked for.
+    live_devices: bool,
 }
 
 impl Detection {
+    /// An auto-detect result that keeps following devices (used by the detection fallbacks).
     fn new(srcs: Vec<SheetSrc>, subtitle: String) -> Self {
-        Detection { srcs, device_map: Vec::new(), subtitle }
+        Detection { srcs, device_map: Vec::new(), subtitle, live_devices: true }
     }
 }
 
@@ -270,10 +299,11 @@ fn qmk_detection(info_path: &str) -> Result<Detection, String> {
         path: PathBuf::from(source),
         cfg,
         device: String::new(),
+        matched_ids: Vec::new(),
         layout_id: String::new(),
         qmk: Some((imp.geometry, profile)),
     };
-    Ok(Detection { srcs: vec![src], device_map: Vec::new(), subtitle })
+    Ok(Detection { srcs: vec![src], device_map: Vec::new(), subtitle, live_devices: false })
 }
 
 /// Decide which sheets to render, the device→sheet map, and a subtitle.
@@ -302,10 +332,17 @@ fn gather_sheets() -> Detection {
         }
     }
     if !args.is_empty() {
-        let srcs: Vec<SheetSrc> =
-            parse_configs(&args).iter().map(|(p, c)| SheetSrc::catalog(p, c, "")).collect();
+        let srcs: Vec<SheetSrc> = parse_configs(&args)
+            .iter()
+            .map(|(p, c)| SheetSrc::catalog(p, c, "", Vec::new()))
+            .collect();
         let n = srcs.len();
-        return Detection::new(srcs, format!("{n} config(s) from arguments"));
+        return Detection {
+            srcs,
+            device_map: Vec::new(),
+            subtitle: format!("{n} config(s) from arguments"),
+            live_devices: false,
+        };
     }
 
     let conf_paths = conf_files_in(Path::new("/etc/keyd"));
@@ -313,7 +350,7 @@ fn gather_sheets() -> Detection {
         let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
         let srcs: Vec<SheetSrc> = parse_configs(&conf_files_in(&examples))
             .iter()
-            .map(|(p, c)| SheetSrc::catalog(p, c, ""))
+            .map(|(p, c)| SheetSrc::catalog(p, c, "", Vec::new()))
             .collect();
         let n = srcs.len();
         return Detection::new(
@@ -346,7 +383,7 @@ fn gather_sheets() -> Detection {
     if !matched_any {
         // No connected keyboard matched — show everything rather than nothing.
         let srcs: Vec<SheetSrc> =
-            configs.iter().map(|(p, c)| SheetSrc::catalog(p, c, "")).collect();
+            configs.iter().map(|(p, c)| SheetSrc::catalog(p, c, "", Vec::new())).collect();
         let n = srcs.len();
         return Detection::new(srcs, format!("{n} config(s) \u{2014} no connected keyboard detected"));
     }
@@ -359,17 +396,74 @@ fn gather_sheets() -> Detection {
         }
         let idx = srcs.len() as i32;
         let label = device_label(&devices, &per_config[ci]);
-        srcs.push(SheetSrc::catalog(path, cfg, &label));
-        // Map every device id that matched this config to its sheet index (deduped).
+        // Concrete ids of the keyboards that matched this config (deduped) — drives both
+        // the device→sheet map and the "which [ids] entry is plugged in" highlight.
+        let mut matched_ids: Vec<String> = Vec::new();
         for &di in &per_config[ci] {
             let devid = devices[di].devid();
+            if !matched_ids.contains(&devid) {
+                matched_ids.push(devid);
+            }
+        }
+        srcs.push(SheetSrc::catalog(path, cfg, &label, matched_ids.clone()));
+        for devid in matched_ids {
             if !device_map.iter().any(|(d, _)| *d == devid) {
                 device_map.push((devid, idx));
             }
         }
     }
     let n = srcs.len();
-    Detection { srcs, device_map, subtitle: format!("{n} connected keyboard(s) detected") }
+    Detection {
+        srcs,
+        device_map,
+        subtitle: format!("{n} connected keyboard(s) detected"),
+        live_devices: true,
+    }
+}
+
+/// Per-source `(matched vendor:product ids, device label)`, plus a `vendor:product → sheet`
+/// map — the result of (re)matching connected keyboards against the sheet sources.
+type DeviceMatching = (Vec<(Vec<String>, String)>, Vec<(String, i32)>);
+
+/// Re-scan connected keyboards and re-match them against the current sheet sources,
+/// returning per-source `(matched ids, device label)` and a fresh `vendor:product → sheet`
+/// map. Same matching as [`gather_sheets`], but over the already-chosen sources — so a
+/// hotplugged keyboard refreshes the id highlight, the device label, and the
+/// follow-keyboard map without re-deciding which configs are shown.
+fn rescan(srcs: &[SheetSrc]) -> DeviceMatching {
+    let matchers: Vec<Ids> = srcs.iter().map(|s| Ids::parse(&s.cfg.ids)).collect();
+    let devices = devices::connected_devices();
+    let mut per_src: Vec<Vec<usize>> = vec![Vec::new(); srcs.len()];
+    for (di, dev) in devices.iter().enumerate() {
+        let devid = dev.devid();
+        let mut best: Option<(usize, u8)> = None;
+        for (ci, ids) in matchers.iter().enumerate() {
+            let rank = ids.match_device(&devid, dev.is_keyboard).rank();
+            if rank > 0 && best.is_none_or(|(_, br)| rank > br) {
+                best = Some((ci, rank));
+            }
+        }
+        if let Some((ci, _)) = best {
+            per_src[ci].push(di);
+        }
+    }
+    let mut out = Vec::with_capacity(srcs.len());
+    let mut device_map: Vec<(String, i32)> = Vec::new();
+    for (ci, idxs) in per_src.iter().enumerate() {
+        let label = device_label(&devices, idxs);
+        let mut ids: Vec<String> = Vec::new();
+        for &di in idxs {
+            let devid = devices[di].devid();
+            if !ids.contains(&devid) {
+                ids.push(devid.clone());
+            }
+            if !device_map.iter().any(|(d, _)| *d == devid) {
+                device_map.push((devid, ci as i32));
+            }
+        }
+        out.push((ids, label));
+    }
+    (out, device_map)
 }
 
 /// Register the bundled JetBrains Mono faces so typography is identical on every
@@ -420,7 +514,6 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let win = MainWindow::new()?;
     register_fonts(); // after MainWindow::new() so the platform is initialized
-    win.set_subtitle(det.subtitle.into());
 
     // The layout picker. Hidden for QMK-imported boards (their geometry is fixed, not
     // catalog-pickable); otherwise the full curated library.
@@ -455,6 +548,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // Layout picker: re-lay-out the active keyboard to the chosen geometry, update both
     // the live `active_sheet` and its stored entry (so following-the-keyboard keeps the
     // choice), persist it, and re-stamp the board. QMK sheets ignore this.
+    let live_devices = det.live_devices;
     let srcs = Rc::new(RefCell::new(det.srcs));
     {
         let weak = win.as_weak();
@@ -514,6 +608,10 @@ fn main() -> Result<(), slint::PlatformError> {
     // Keep a quick tap visible: expire the min-glow decay and repaint. Skipped in demo
     // mode, which drives the glow directly.
     let _glow_timer = (!demo).then(|| spawn_glow_decay(&win));
+
+    // Follow keyboard hotplug: re-highlight matched ids + refresh the device map as
+    // keyboards come and go. Only in auto-detect mode (not explicit args / QMK / demo).
+    let _device_watch = (live_devices && !demo).then(|| spawn_device_watch(&win, srcs.clone()));
 
     // Live-reload the board when a watched config file changes on disk. Kept alive in a
     // binding so the timer outlives setup and fires for the app's whole life.
@@ -877,6 +975,49 @@ fn handle_key_event(win: &MainWindow, ev: monitor::MonitorEvent) {
         win.set_pressed_keys(model(glow));
     });
     render_board(win);
+}
+
+/// Watch for keyboard hotplug: every ~1.5s, re-scan connected devices and — when the set of
+/// matched keyboards changes — refresh each sheet's highlighted `[ids]` + device label and
+/// the follow-the-keyboard map. Polling (not udev) keeps it dependency-free; a sysfs scan is
+/// cheap and hotplug is rare. Returns the timer; keep it alive for the app's life.
+fn spawn_device_watch(win: &MainWindow, srcs: Rc<RefCell<Vec<SheetSrc>>>) -> slint::Timer {
+    use slint::Model;
+    let weak = win.as_weak();
+    // Seed with the current match so the first tick doesn't redundantly repaint.
+    let mut last: Vec<(String, i32)> = {
+        let mut m = rescan(&srcs.borrow()).1;
+        m.sort();
+        m
+    };
+    let timer = slint::Timer::default();
+    timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(1500), move || {
+        let Some(win) = weak.upgrade() else { return };
+        let mut srcs = srcs.borrow_mut();
+        let (per_src, device_map) = rescan(&srcs);
+        let mut sig = device_map.clone();
+        sig.sort();
+        if sig == last {
+            return; // no hotplug change since last scan
+        }
+        last = sig;
+        for (i, src) in srcs.iter_mut().enumerate() {
+            let (ids, label) = &per_src[i];
+            src.matched_ids = ids.clone();
+            src.device = label.clone();
+            let data = build_sheet_data(src);
+            win.get_sheets().set_row_data(i, data.clone());
+            if win.get_active_index().max(0) as usize == i {
+                win.set_active_sheet(data);
+            }
+        }
+        drop(srcs);
+        let device_map: Vec<DeviceMatch> =
+            device_map.into_iter().map(|(d, i)| DeviceMatch { devid: d.into(), sheet: i }).collect();
+        win.set_device_map(model(device_map));
+        render_board(&win); // reapply the live layer/glow overlays onto the refreshed sheet
+    });
+    timer
 }
 
 /// Expire the min-glow decay: a few times a second, recompute the lit set and repaint if

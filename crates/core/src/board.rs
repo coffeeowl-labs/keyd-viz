@@ -372,7 +372,9 @@ fn build_base(cfg: &Config, geom: &Geometry) -> Board {
         title: "Base layer".to_string(),
         accent: String::new(),
         how: String::new(),
-        hint: "tap = legend \u{b7} \u{2193}badge = hold \u{b7} orange = remap".to_string(),
+        // No hint on the base board: it duplicated the window's global legend. Layer
+        // boards still carry a hint (how the layer is reached / what it does).
+        hint: String::new(),
         keys,
         extent: geom.extent(),
     }
