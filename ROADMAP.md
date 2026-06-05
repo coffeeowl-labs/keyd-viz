@@ -249,11 +249,24 @@ Linux/Wayland. We would be the **first real visual face for keyd**.
   1. **Glow:** key events whose device id isn't a specific mapped board are attributed to the
      board currently shown (glow by physical key name, no switch) — so the cap lights up. This
      fixes "live keypresses show no change."
-  2. **Follow-the-last-pressed-keyboard is *not possible* from the keypress stream** when keyd
-     manages the boards: keyd aggregates every grabbed keyboard into one virtual device, discarding
-     which physical keyboard a press came from. With a single shown board this is moot; with
-     multiple keyboards the view can't auto-switch on typing (layer changes via `keyd listen`
-     still work). Following would need a different signal — **open question for §1's north star.**
+  2. **Follow-the-last-pressed-keyboard is *not possible* from the stock keyd IPC** when keyd
+     manages the boards: `monitor` aggregates every grabbed keyboard into one virtual device, and
+     `listen` only emits `/<layout>` `+<layer>` `-<layer>` with no device id. With a single shown
+     board this is moot; with multiple keyboards the view can't auto-switch on typing.
+- **But keyd HAS the signal internally** (keyd v2.6.0 `daemon.c`): `active_kbd = ev->dev->data`
+  is set on *every* keypress (≈line 514) — literally the last-pressed keyboard — and each device's
+  `->data` carries its keyboard + `config.path`. It's just never exposed over IPC. Three paths to
+  the §1 north star, in order of cleanliness:
+  1. **Upstream keyd patch** — emit the active device id on the `listen` stream (e.g. `@<id>` when
+     `active_kbd` changes; ~10 lines in `on_layer_change` + the `EV_DEV_EVENT` handler). The right
+     fix since keyd-viz is *the visual face of keyd*; costs a keyd-version dependency.
+  2. **Infer from layer names** — distinct per-config layer names in the `listen` stream identify
+     the keyboard. Fragile; useless on the base layer.
+  3. **Manual keyboard switcher** — tabs/chips to pick the shown board when several keyboards are
+     detected; the glow works for whichever is shown. Robust, zero keyd changes, not automatic.
+- **Secondary nuance to verify:** `monitor` reads keyd's *output* device, so a *remapped* key may
+  glow the output keysym (CapsLock→Esc glows Esc), not the physical key. Unverified; passthrough
+  keys are unaffected.
 
 ### 4.3 Active-keyboard detection — YES (config→device mapping doable) ✅
 - keyd's internal device id format is `"%04x:%04x:%08x"` = **vendor:product:uid**, where uid is
