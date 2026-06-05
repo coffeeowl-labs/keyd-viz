@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  appimage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Same Slint stack the CI rust-app job uses, needed to build the GUI.
+      - name: Install Slint system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libfontconfig1-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libgl1-mesa-dev
+
+      - name: Build AppImage
+        run: ./packaging/appimage/build-appimage.sh
+
+      - name: Extract release notes for this tag
+        run: awk '/^## \[/{c++} c==1' CHANGELOG.md > RELEASE_NOTES.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: target/appimage/keyd-viz-*-x86_64.AppImage
+          fail_on_unmatched_files: true

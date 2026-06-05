@@ -2461,7 +2461,7 @@ dependencies = [
 
 [[package]]
 name = "keydviz"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "keydviz-core",
  "slint",
@@ -2470,7 +2470,7 @@ dependencies = [
 
 [[package]]
 name = "keydviz-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2478,7 +2478,7 @@ dependencies = [
 
 [[package]]
 name = "keydviz-helper"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "keydviz-core",
  "libc",

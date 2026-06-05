@@ -10,4 +10,4 @@ members = ["crates/core", "crates/app", "crates/helper"]
 [workspace.package]
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/coffeeowl-labs/keyd-cheatsheet"
+repository = "https://github.com/coffeeowl-labs/keyd-viz"

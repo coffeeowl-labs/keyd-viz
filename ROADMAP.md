@@ -1,13 +1,14 @@
 # keyd-viz — Roadmap & Design Record
 
-> **Status:** Planning complete, pre-implementation.
+> **Status:** v1.0 shipped (2026-06-04) — Phases 0–4 complete. v1.1 in planning
+> (tray-resident process + KDE global-hotkey summon).
 > **Purpose of this document:** the single durable source of truth for this project's
 > direction, decisions, rationale, and the verified technical facts behind them. It is
 > written to survive context loss — if you are picking this up cold, read this top to
 > bottom and you will have everything.
 
-> **Project name:** working title `keyd-viz` (current repo dir is `keyd-cheatsheet`).
-> Final name TBD at launch — candidates: `keyd-viz`, `keyd-board`, `keyflow`.
+> **Project name:** **`keyd-viz`** (settled 2026-06-04). The GitHub repo is
+> `coffeeowl-labs/keyd-viz`; the local checkout directory may still read `keyd-cheatsheet`.
 
 ---
 
@@ -360,6 +361,9 @@ Clean separation so each piece is independently testable and the privileged surf
 
 Each phase ships standalone value. Build order is fixed; later phases assume earlier ones.
 
+> **Phases 0–4 shipped in v1.0 (2026-06-04).** Phase 5 is split: distribution + live
+> config reload landed in v1.0; the tray-resident process and global-hotkey summon are v1.1.
+
 ### Phase 0 — Foundation & visual parity  *(no privilege)*  ← FIRST MILESTONE
 1. Rust workspace: `core` (pure logic) + `app` (Slint UI). No helper yet.
 2. Port the keyd `.conf` parser from `keyd_cheatsheet.py` into `core`: remaps, tap/hold,
@@ -395,11 +399,13 @@ Each phase ships standalone value. Build order is fixed; later phases assume ear
 - Hardest phase (privilege + timing). Gated behind the helper from Phase 3.
 
 ### Phase 5 — Tray, summon & distribution
-- System-tray resident; KDE global-shortcut to summon/dismiss. ~~Live config reload on `.conf`
-  change.~~ **DONE** (§10) — UI-thread mtime poll redraws the board on edit.
-- Packaging: AUR + AppImage (Flatpak optional, layer-only). Helper install scripted
-  (`packaging/install.sh`/`uninstall.sh`, §10); AUR/AppImage still open.
-- README / positioning as "the face of keyd"; rename; publish.
+- **v1.0 (shipped):** live config reload (UI-thread mtime poll, redraws the board on edit);
+  helper install scripted (`packaging/install.sh`/`uninstall.sh`); **AUR PKGBUILD**
+  (`packaging/aur/`) and an **AppImage** of the GUI (`packaging/appimage/build-appimage.sh`,
+  built in CI on tag push via `.github/workflows/release.yml`); README repositioned as "the
+  face of keyd"; renamed `keyd-cheatsheet` → `keyd-viz`.
+- **v1.1 (next):** system-tray resident process; KDE global-shortcut to summon/dismiss;
+  Flatpak (optional, layer-only).
 
 **Value checkpoints:** after P0–1 the tool already beats today's. P3 is the cheap headline.
 P4 is the ambitious frontier.

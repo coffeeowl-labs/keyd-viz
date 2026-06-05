@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="keyd-viz">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#262a3b"/>
+      <stop offset="1" stop-color="#1b1e2b"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7fe3d6"/>
+      <stop offset="1" stop-color="#43b8a8"/>
+    </linearGradient>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+
+  <!-- rounded app tile -->
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="url(#bg)"/>
+
+  <!-- keyboard body -->
+  <rect x="40" y="78" width="176" height="100" rx="16" fill="#10131d"/>
+  <rect x="40" y="78" width="176" height="100" rx="16" fill="none" stroke="#3a4055" stroke-width="2"/>
+
+  <!-- key rows (dim) -->
+  <g fill="#2c3245">
+    <rect x="56" y="94"  width="22" height="22" rx="5"/>
+    <rect x="84" y="94"  width="22" height="22" rx="5"/>
+    <rect x="112" y="94" width="22" height="22" rx="5"/>
+    <rect x="140" y="94" width="22" height="22" rx="5"/>
+    <rect x="168" y="94" width="32" height="22" rx="5"/>
+
+    <rect x="56" y="124" width="22" height="22" rx="5"/>
+    <rect x="112" y="124" width="22" height="22" rx="5"/>
+    <rect x="140" y="124" width="22" height="22" rx="5"/>
+    <rect x="168" y="124" width="32" height="22" rx="5"/>
+
+    <rect x="56" y="154" width="50" height="14" rx="5"/>
+    <rect x="112" y="154" width="50" height="14" rx="5"/>
+    <rect x="168" y="154" width="32" height="14" rx="5"/>
+  </g>
+
+  <!-- the live-glowing key -->
+  <rect x="84" y="124" width="22" height="22" rx="5" fill="url(#glow)" filter="url(#soft)"/>
+  <rect x="84" y="124" width="22" height="22" rx="5" fill="url(#glow)"/>
+</svg>

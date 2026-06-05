@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=keyd-viz
+GenericName=Keyboard Layout Viewer
+Comment=Visualize your keyd layout with live layers and keypress glow
+Exec=keydviz
+Icon=keyd-viz
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=keyboard;keyd;layout;remap;cheatsheet;layers;
+StartupWMClass=keydviz

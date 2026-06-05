@@ -1,6 +1,6 @@
 # keyd-viz
 
-[![CI](https://github.com/coffeeowl-labs/keyd-cheatsheet/actions/workflows/ci.yml/badge.svg)](https://github.com/coffeeowl-labs/keyd-cheatsheet/actions/workflows/ci.yml)
+[![CI](https://github.com/coffeeowl-labs/keyd-viz/actions/workflows/ci.yml/badge.svg)](https://github.com/coffeeowl-labs/keyd-viz/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 The visual face of [keyd](https://github.com/rvaiya/keyd): a native Linux GUI that draws your
@@ -39,30 +39,41 @@ A Rust workspace plus a small system service:
 
 ## Install
 
-Build the GUI:
+### AppImage — any distro (GUI only)
+
+Download `keyd-viz-*-x86_64.AppImage` from the
+[latest release](https://github.com/coffeeowl-labs/keyd-viz/releases), make it executable, and
+run it. Without the broker (below) the GUI reads keyd directly, which needs membership in the
+`keyd`/`input` groups.
+
+### AUR (Arch) — full experience
+
+A [`PKGBUILD`](packaging/aur/) installs the GUI, the broker service, a desktop entry, and the
+icon. Once it's published to the AUR:
 
 ```sh
-git clone https://github.com/coffeeowl-labs/keyd-cheatsheet
-cd keyd-cheatsheet
-cargo build --release -p keydviz        # -> target/release/keydviz
+paru -S keyd-viz
+sudo systemctl enable --now keydviz-helperd   # broker: live layers, zero per-user setup
+keydviz
 ```
 
-Install the broker service so the GUI gets live data with zero per-user setup:
+Keypress glow is opt-in (it reads `/dev/input`) — the package prints how to enable it.
+
+### From source
 
 ```sh
-./packaging/install.sh                  # layers only (safe default)
+git clone https://github.com/coffeeowl-labs/keyd-viz
+cd keyd-viz
+cargo build --release -p keydviz        # -> target/release/keydviz
+
+./packaging/install.sh                  # broker service, layers only (safe default)
 ./packaging/install.sh --keys           # also enable keypress glow (reads /dev/input)
 ```
 
-Then run it:
-
-```sh
-cargo run --release -p keydviz          # or: target/release/keydviz
-```
-
-The GUI auto-discovers the broker socket — no groups to join, no logout. Without the helper
-installed it falls back to reading keyd directly (which needs membership in the `keyd`/`input`
-groups); the helper is the recommended zero-permission path.
+The GUI auto-discovers the broker socket — no groups to join, no logout. Without the helper it
+falls back to reading keyd directly (needs the `keyd`/`input` groups); the helper is the
+recommended zero-permission path. See [`packaging/README.md`](packaging/README.md) for the
+security model.
 
 ## Usage
 
