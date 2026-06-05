@@ -491,7 +491,8 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    if std::env::args().any(|a| a == "--demo") {
+    let demo = std::env::args().any(|a| a == "--demo");
+    if demo {
         spawn_demo(&win);
     } else {
         // Prefer the broker daemon (the zero-permission shipped path); fall back to
@@ -509,6 +510,10 @@ fn main() -> Result<(), slint::PlatformError> {
             spawn_monitor(&win); // keypress stream (keyd monitor)
         }
     }
+
+    // Keep a quick tap visible: expire the min-glow decay and repaint. Skipped in demo
+    // mode, which drives the glow directly.
+    let _glow_timer = (!demo).then(|| spawn_glow_decay(&win));
 
     // Live-reload the board when a watched config file changes on disk. Kept alive in a
     // binding so the timer outlives setup and fires for the app's whole life.
@@ -689,7 +694,7 @@ fn spawn_helper(win: &MainWindow, socket: String) {
                             if !connected {
                                 win.set_keys_connected(false);
                                 win.set_active_stack(model(Vec::new()));
-                                win.set_pressed_keys(model(Vec::new()));
+                                clear_glow(&win);
                                 render_board(&win);
                             }
                         }
@@ -763,7 +768,7 @@ fn spawn_monitor(win: &MainWindow) {
                     if let Some(win) = weak.upgrade() {
                         win.set_keys_connected(connected);
                         if !connected {
-                            win.set_pressed_keys(model(Vec::new()));
+                            clear_glow(&win);
                             render_board(&win);
                         }
                     }
@@ -781,10 +786,66 @@ fn spawn_monitor(win: &MainWindow) {
     });
 }
 
-/// Apply one `keyd monitor` key event on the UI thread: follow the last-pressed
-/// keyboard (switch the shown sheet), maintain the pressed-key set, and re-render.
-/// The decision logic lives in [`monitor::next_press_state`] (pure, tested); this
-/// just reads the current state from the window and writes the result back.
+/// Minimum time a key stays lit after it goes down, so a fast tap-hold *tap* — which keyd
+/// emits as a near-simultaneous down+up at release — is still visible instead of flashing
+/// for less than a display frame. (Why "fear" wouldn't light `f` but "after" would: an
+/// isolated tap resolves on release and emits down+up together; a rolled tap emits the
+/// down earlier, spread across frames. This makes both visible.)
+///
+/// Tuned to the minimum that reliably survives a painted frame: ~3–4 frames at 60Hz (more
+/// at higher refresh), with margin for a dropped frame. Anchored to key-*down*, so any key
+/// held at least this long turns off the instant it's released — most typists, even fast
+/// ones, get no visible tail; only genuine sub-frame taps linger, just enough to be seen.
+const MIN_GLOW: std::time::Duration = std::time::Duration::from_millis(60);
+
+/// Glow bookkeeping (UI-thread only): the truly-held keys, plus a short per-key "keep lit
+/// until" decay so quick taps remain visible. A thread-local because every keypress
+/// callback runs on the Slint event loop and the `Rc`-backed models aren't `Send`, so it
+/// can't be shared across the source threads anyway.
+#[derive(Default)]
+struct GlowState {
+    /// Physically-held keys (from keyd's output), maintained by [`monitor::next_press_state`].
+    held: Vec<String>,
+    /// key → instant after which it may stop glowing (refreshed on every event for that key).
+    until: std::collections::HashMap<String, std::time::Instant>,
+}
+
+impl GlowState {
+    /// The set to light: everything held, plus any key still inside its decay window.
+    /// Prunes expired decay entries as a side effect.
+    fn glow_set(&mut self) -> Vec<String> {
+        let now = std::time::Instant::now();
+        self.until.retain(|_, t| *t > now);
+        let mut out = self.held.clone();
+        for k in self.until.keys() {
+            if !out.iter().any(|h| h == k) {
+                out.push(k.clone());
+            }
+        }
+        out
+    }
+
+    fn clear(&mut self) {
+        self.held.clear();
+        self.until.clear();
+    }
+}
+
+thread_local! {
+    static GLOW: RefCell<GlowState> = RefCell::new(GlowState::default());
+}
+
+/// Drop all glow state and clear the rendered set — used when a source disconnects or the
+/// shown keyboard switches (we don't know the new context's held keys).
+fn clear_glow(win: &MainWindow) {
+    GLOW.with(|g| g.borrow_mut().clear());
+    win.set_pressed_keys(model(Vec::new()));
+}
+
+/// Apply one `keyd monitor` key event on the UI thread: follow the last-pressed keyboard
+/// (switch the shown sheet), update the held set + min-glow decay, and re-render. The
+/// held-set + follow-keyboard decision stays in [`monitor::next_press_state`] (pure,
+/// tested); the decay overlay ([`GlowState`]) keeps fast taps visible.
 fn handle_key_event(win: &MainWindow, ev: monitor::MonitorEvent) {
     use slint::Model;
 
@@ -792,19 +853,61 @@ fn handle_key_event(win: &MainWindow, ev: monitor::MonitorEvent) {
 
     let map: Vec<(String, i32)> =
         win.get_device_map().iter().map(|m| (m.devid.to_string(), m.sheet)).collect();
-    let pressed_now: Vec<String> = win.get_pressed_keys().iter().map(|s| s.to_string()).collect();
 
-    let monitor::Press { switch_to, pressed } =
-        monitor::next_press_state(&k, &map, win.get_active_index(), &pressed_now);
-    if let Some(idx) = switch_to {
-        if let Some(sheet) = win.get_sheets().row_data(idx as usize) {
-            win.set_active_index(idx);
-            win.set_active_sheet(sheet);
+    GLOW.with(|g| {
+        let mut g = g.borrow_mut();
+        let monitor::Press { switch_to, pressed } =
+            monitor::next_press_state(&k, &map, win.get_active_index(), &g.held);
+        if let Some(idx) = switch_to {
+            g.until.clear(); // new board: don't carry the old board's decaying glow
+            if let Some(sheet) = win.get_sheets().row_data(idx as usize) {
+                win.set_active_index(idx);
+                win.set_active_sheet(sheet);
+            }
         }
-    }
-    let pressed: Vec<slint::SharedString> = pressed.into_iter().map(Into::into).collect();
-    win.set_pressed_keys(model(pressed));
+        g.held = pressed;
+        // Floor the glow at MIN_GLOW from *key-down* only. A key held longer than that is
+        // kept lit by `held` and turns off the instant it's released; only a sub-frame tap
+        // (an isolated tap-hold tap, whose down+up land in one frame) lingers — just long
+        // enough to be seen — so normal typing doesn't trail behind your fingers.
+        if matches!(k.action, monitor::KeyAction::Down) {
+            g.until.insert(k.key.clone(), std::time::Instant::now() + MIN_GLOW);
+        }
+        let glow: Vec<slint::SharedString> = g.glow_set().into_iter().map(Into::into).collect();
+        win.set_pressed_keys(model(glow));
+    });
     render_board(win);
+}
+
+/// Expire the min-glow decay: a few times a second, recompute the lit set and repaint if
+/// it shrank. This is what turns a quick tap's glow back off when no further key events
+/// arrive. Returns the timer; keep it alive for the app's life. (Not used in `--demo`,
+/// which drives the glow directly.)
+fn spawn_glow_decay(win: &MainWindow) -> slint::Timer {
+    use slint::Model;
+    let weak = win.as_weak();
+    let timer = slint::Timer::default();
+    timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(16), move || {
+        let Some(win) = weak.upgrade() else { return };
+        let changed = GLOW.with(|g| {
+            let mut glow = g.borrow_mut().glow_set();
+            let mut cur: Vec<String> =
+                win.get_pressed_keys().iter().map(|s| s.to_string()).collect();
+            glow.sort();
+            cur.sort();
+            if glow != cur {
+                let m: Vec<slint::SharedString> = glow.into_iter().map(Into::into).collect();
+                win.set_pressed_keys(model(m));
+                true
+            } else {
+                false
+            }
+        });
+        if changed {
+            render_board(&win);
+        }
+    });
+    timer
 }
 
 /// `--demo`: animate the live view without a running keyd — sweep a pressed key across
