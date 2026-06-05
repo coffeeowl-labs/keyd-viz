@@ -5,6 +5,7 @@
 //! the config(s) governing them; with explicit path args it shows exactly those.
 
 mod devices;
+mod helper;
 mod layer;
 mod monitor;
 mod prefs;
@@ -491,8 +492,18 @@ fn main() -> Result<(), slint::PlatformError> {
     if std::env::args().any(|a| a == "--demo") {
         spawn_demo(&win);
     } else {
-        spawn_live(&win); // layer stream  (keyd listen)
-        spawn_monitor(&win); // keypress stream (keyd monitor)
+        // Prefer the broker daemon (the zero-permission shipped path); fall back to
+        // spawning keyd directly when it isn't running (dev). `--helper-socket <path>`
+        // or `$KEYDVIZ_HELPER_SOCKET` overrides the path and forces the broker source.
+        let socket = flag_value("--helper-socket").unwrap_or_else(helper::socket_path);
+        let forced = flag_value("--helper-socket").is_some()
+            || std::env::var("KEYDVIZ_HELPER_SOCKET").is_ok();
+        if forced || helper::is_present(&socket) {
+            spawn_helper(&win, socket);
+        } else {
+            spawn_live(&win); // layer stream  (keyd listen)
+            spawn_monitor(&win); // keypress stream (keyd monitor)
+        }
     }
 
     win.run()
@@ -594,6 +605,66 @@ fn resolve_glow(
                 })
         })
         .collect()
+}
+
+/// Subscribe to the `keydviz-helperd` broker on a background thread: one socket carries
+/// both the layer stream and (if the helper brokers keypresses) the glow. Each
+/// [`LiveEvent`] is split onto the same UI paths the direct-`keyd` sources feed, so the
+/// view behaves identically whether the source is the helper or a spawned `keyd`.
+fn spawn_helper(win: &MainWindow, socket: String) {
+    use keydviz_core::live::LiveEvent;
+    let weak = win.as_weak();
+    std::thread::spawn(move || {
+        // Layer state is reduced here (the helper sends raw transitions, like keyd).
+        let mut active = keydviz_core::live::ActiveLayers::default();
+        helper::run_helper_client(
+            &socket,
+            {
+                let weak = weak.clone();
+                move |connected| {
+                    let weak = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(win) = weak.upgrade() {
+                            win.set_live_connected(connected);
+                            if !connected {
+                                win.set_keys_connected(false);
+                                win.set_active_stack(model(Vec::new()));
+                                win.set_pressed_keys(model(Vec::new()));
+                                render_board(&win);
+                            }
+                        }
+                    });
+                }
+            },
+            move |ev| {
+                // Reduce layer events on this thread; ship a plain snapshot to the UI.
+                let layer_snapshot = ev.as_layer().map(|le| {
+                    active.apply(&le);
+                    active.active()
+                });
+                let monitor_ev = ev.as_monitor();
+                let keys_connected = matches!(ev, LiveEvent::Key { .. });
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(win) = weak.upgrade() {
+                        if let Some(stack) = layer_snapshot {
+                            let stack: Vec<slint::SharedString> =
+                                stack.into_iter().map(Into::into).collect();
+                            win.set_active_stack(model(stack));
+                            win.set_live_connected(true);
+                            render_board(&win);
+                        }
+                        if let Some(mev) = monitor_ev {
+                            if keys_connected {
+                                win.set_keys_connected(true);
+                            }
+                            handle_key_event(&win, mev);
+                        }
+                    }
+                });
+            },
+        );
+    });
 }
 
 /// Subscribe to live layer state from `keyd listen` on a background thread, pushing
