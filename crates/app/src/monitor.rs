@@ -1,120 +1,20 @@
-//! Live keypresses from `keyd monitor`.
+//! Live keypresses from `keyd monitor` (the I/O + view-transition half).
 //!
-//! `keyd monitor` prints, to stdout, two kinds of newline-delimited records:
+//! The record format and parser now live in [`keydviz_core::live`] (shared with the
+//! helper daemon); this module keeps the process-spawning loop and the
+//! follow-keyboard / pressed-set transition the GUI needs. The moved event types are
+//! re-exported so existing call sites keep resolving `monitor::MonitorEvent`, etc.
 //!
-//! ```text
-//! device added: 04fe:0021:f26878c3 PFU Limited HHKB-Hybrid Keyboard (/dev/input/event9)
-//! device removed: 04fe:0021:f26878c3 PFU Limited HHKB-Hybrid Keyboard (/dev/input/event9)
-//! PFU Limited HHKB-Hybrid Keyboard\t04fe:0021:f26878c3\ta down
-//! ```
-//!
-//! i.e. a key event is three tab-separated fields — device *name*, device *id*
-//! (`vendor:product:hash`), and `"<key> <action>"` — matching keyd's internal
-//! `"%s\t%s\t%s %s"` format string (verified against keyd v2.6.0). The key name is
-//! the same namespace keyd configs use (`a`, `space`, `leftshift`, …), so it maps
-//! straight onto a board cap's `key`; the id's first two fields are the
-//! `vendor:product` used for `[ids]` matching, so a keypress can also tell us *which*
-//! keyboard is active.
-//!
-//! Unlike `keyd listen` (layer names, gated on the `keyd` group), `keyd monitor`
-//! reads `/dev/input` — typically the `input` group, which most desktop users are
-//! already in. The shipped product routes this through the privileged helper so even
-//! that group isn't required (see ROADMAP §1 zero-permission requirement); the parser
-//! here is source-agnostic and unchanged by that move.
+//! Unlike `keyd listen` (layer names, `keyd` group), `keyd monitor` reads `/dev/input`
+//! (typically the `input` group). The shipped product routes this through the
+//! privileged helper so even that group isn't required (ROADMAP §1); the parser here is
+//! source-agnostic and unchanged by that move.
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-/// Whether a key went down, came up, or auto-repeated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyAction {
-    Down,
-    Up,
-    Repeat,
-}
-
-/// A single key event from a specific device.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeyEvent {
-    /// `vendor:product` (the `[ids]`-matchable id; the per-device hash is stripped).
-    pub devid: String,
-    /// Human-readable device name (as keyd reports it).
-    pub device: String,
-    /// keyd key name (`a`, `space`, `leftshift`, …).
-    pub key: String,
-    pub action: KeyAction,
-}
-
-/// One parsed record from the `keyd monitor` stream.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MonitorEvent {
-    /// A device appeared (`vendor:product`, name).
-    DeviceAdded { devid: String, device: String },
-    /// A device went away (`vendor:product`, name).
-    DeviceRemoved { devid: String, device: String },
-    /// A key transition.
-    Key(KeyEvent),
-}
-
-/// Strip the trailing per-device hash from a `vendor:product:hash` id, yielding the
-/// `vendor:product` used for `[ids]` matching. Ids already in `vendor:product` form
-/// (or anything else) are returned unchanged.
-fn vendor_product(id: &str) -> String {
-    let mut it = id.split(':');
-    match (it.next(), it.next()) {
-        (Some(v), Some(p)) => format!("{v}:{p}"),
-        _ => id.to_string(),
-    }
-}
-
-/// Parse a `device added:` / `device removed:` line of the form
-/// `"<id> <name...> (/dev/input/eventN)"`. Returns `(devid, name)`.
-fn parse_device_line(rest: &str) -> Option<(String, String)> {
-    let rest = rest.trim();
-    let (id, after) = rest.split_once(' ')?;
-    // Drop the trailing " (/dev/input/eventN)" node path if present.
-    let name = match after.rfind(" (") {
-        Some(i) => &after[..i],
-        None => after,
-    };
-    Some((vendor_product(id), name.trim().to_string()))
-}
-
-/// Parse one line of `keyd monitor` output. Returns `None` for blank/unknown lines.
-pub fn parse_monitor_line(line: &str) -> Option<MonitorEvent> {
-    let line = line.trim_end_matches(['\n', '\r']);
-    if let Some(rest) = line.strip_prefix("device added:") {
-        let (devid, device) = parse_device_line(rest)?;
-        return Some(MonitorEvent::DeviceAdded { devid, device });
-    }
-    if let Some(rest) = line.strip_prefix("device removed:") {
-        let (devid, device) = parse_device_line(rest)?;
-        return Some(MonitorEvent::DeviceRemoved { devid, device });
-    }
-
-    // Key event: "name\tvendor:product:hash\tkey action"
-    let mut fields = line.split('\t');
-    let device = fields.next()?.trim();
-    let id = fields.next()?.trim();
-    let key_action = fields.next()?.trim();
-    if device.is_empty() || id.is_empty() {
-        return None;
-    }
-    let (key, action) = key_action.rsplit_once(' ')?;
-    let action = match action {
-        "down" => KeyAction::Down,
-        "up" => KeyAction::Up,
-        "repeat" => KeyAction::Repeat,
-        _ => return None,
-    };
-    Some(MonitorEvent::Key(KeyEvent {
-        devid: vendor_product(id),
-        device: device.to_string(),
-        key: key.trim().to_string(),
-        action,
-    }))
-}
+pub use keydviz_core::live::{parse_monitor_line, KeyAction, KeyEvent, MonitorEvent};
 
 /// Run `keyd monitor` and invoke `on_event` for each parsed record. Blocks forever
 /// (retries every few seconds on exit/failure), so call it from a background thread.
@@ -215,16 +115,12 @@ mod tests {
     #[test]
     fn down_up_maintains_pressed_set() {
         let map = vec![("1:1".to_string(), 0)];
-        // down adds
         let a = next_press_state(&ev("1:1", "a", KeyAction::Down), &map, 0, &[]);
         assert_eq!(a, Press { switch_to: None, pressed: vec!["a".into()] });
-        // a second key while holding the first
         let b = next_press_state(&ev("1:1", "b", KeyAction::Down), &map, 0, &["a".into()]);
         assert_eq!(b, Press { switch_to: None, pressed: vec!["a".into(), "b".into()] });
-        // repeat is idempotent
         let r = next_press_state(&ev("1:1", "a", KeyAction::Repeat), &map, 0, &["a".into(), "b".into()]);
         assert_eq!(r, Press { switch_to: None, pressed: vec!["a".into(), "b".into()] });
-        // up removes
         let u = next_press_state(&ev("1:1", "a", KeyAction::Up), &map, 0, &["a".into(), "b".into()]);
         assert_eq!(u, Press { switch_to: None, pressed: vec!["b".into()] });
     }
@@ -232,76 +128,7 @@ mod tests {
     #[test]
     fn mapped_keyboard_switches_view() {
         let map = vec![("aa:aa".to_string(), 0), ("bb:bb".to_string(), 1)];
-        // a device that *is* in the map (one keyd doesn't grab) selects its sheet:
-        // showing sheet 0 with 'a' held, a press on the sheet-1 device switches and
-        // starts that board's glow fresh.
         let out = next_press_state(&ev("bb:bb", "j", KeyAction::Down), &map, 0, &["a".into()]);
         assert_eq!(out, Press { switch_to: Some(1), pressed: vec!["j".into()] });
-    }
-
-    #[test]
-    fn parses_key_events() {
-        // The exact form captured from keyd v2.6.0 (ydotool synthetic press).
-        assert_eq!(
-            parse_monitor_line("ydotoold virtual device\t2333:6666:e7fb73a9\ta down"),
-            Some(MonitorEvent::Key(KeyEvent {
-                devid: "2333:6666".into(),
-                device: "ydotoold virtual device".into(),
-                key: "a".into(),
-                action: KeyAction::Down,
-            }))
-        );
-        assert_eq!(
-            parse_monitor_line("PFU HHKB\t04fe:0021:f26878c3\tleftshift up"),
-            Some(MonitorEvent::Key(KeyEvent {
-                devid: "04fe:0021".into(),
-                device: "PFU HHKB".into(),
-                key: "leftshift".into(),
-                action: KeyAction::Up,
-            }))
-        );
-        // repeat action
-        assert!(matches!(
-            parse_monitor_line("KB\t1:2:3\tspace repeat"),
-            Some(MonitorEvent::Key(KeyEvent { action: KeyAction::Repeat, .. }))
-        ));
-    }
-
-    #[test]
-    fn parses_device_lines() {
-        assert_eq!(
-            parse_monitor_line(
-                "device added: 04fe:0021:f26878c3 PFU Limited HHKB-Hybrid Keyboard (/dev/input/event9)"
-            ),
-            Some(MonitorEvent::DeviceAdded {
-                devid: "04fe:0021".into(),
-                device: "PFU Limited HHKB-Hybrid Keyboard".into(),
-            })
-        );
-        assert_eq!(
-            parse_monitor_line(
-                "device removed: 046d:c098:0910139a Logitech G502 X (/dev/input/event12)"
-            ),
-            Some(MonitorEvent::DeviceRemoved {
-                devid: "046d:c098".into(),
-                device: "Logitech G502 X".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn ignores_garbage_and_blanks() {
-        assert_eq!(parse_monitor_line(""), None);
-        assert_eq!(parse_monitor_line("   "), None);
-        assert_eq!(parse_monitor_line("device added:"), None); // no id/name
-        assert_eq!(parse_monitor_line("name\tid\tkey sideways"), None); // bad action
-        assert_eq!(parse_monitor_line("only one field"), None);
-    }
-
-    #[test]
-    fn vendor_product_strips_hash() {
-        assert_eq!(vendor_product("04fe:0021:f26878c3"), "04fe:0021");
-        assert_eq!(vendor_product("04fe:0021"), "04fe:0021");
-        assert_eq!(vendor_product("weird"), "weird");
     }
 }
