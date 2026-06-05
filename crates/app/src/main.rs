@@ -530,14 +530,24 @@ fn render_board(win: &MainWindow) {
         .or_else(|| boards.row_data(0));
     let Some(mut board) = chosen else { return };
 
-    // stamp the live keypress glow onto the caps whose keyd key name is held down
+    // stamp the live keypress glow onto the caps whose keyd output key is held down.
+    // keyd reports the post-remap keysym, so a remapped cap and its passthrough twin can
+    // share an output (num-layer `j = 4` vs the top-row `4`); prefer the emphasized cap so
+    // only the key you actually pressed glows.
     let pressed: Vec<slint::SharedString> = win.get_pressed_keys().iter().collect();
     if !pressed.is_empty() {
+        let claimed: Vec<slint::SharedString> = board
+            .keys
+            .iter()
+            .filter(|k| k.emphasized && pressed.iter().any(|p| p == &k.key))
+            .map(|k| k.key.clone())
+            .collect();
         let keys: Vec<KeyCapData> = board
             .keys
             .iter()
             .map(|mut k| {
-                k.pressed = pressed.iter().any(|p| p == &k.key);
+                k.pressed = pressed.iter().any(|p| p == &k.key)
+                    && (k.emphasized || !claimed.iter().any(|c| c == &k.key));
                 k
             })
             .collect();

@@ -135,6 +135,18 @@ fn cap_at(slot: &Slot, key: &str) -> KeyCap {
     }
 }
 
+/// The single plain keyd key a binding *emits*, used to match the live keypress glow
+/// (`keyd monitor` reports the post-remap output keysym, not the physical key). Returns
+/// `None` for actions/combos with no single output — `macro(...)`, `layer(...)`,
+/// modifier chords like `C-c` — which can't be matched to one cap.
+fn output_key(val: &str) -> Option<String> {
+    let v = val.trim();
+    if v.is_empty() || v.contains(['(', ' ', '-', '+']) {
+        return None;
+    }
+    Some(v.to_string())
+}
+
 /// The last tap/hold (or momentary) binding for a physical key. Last-wins mirrors
 /// the original dict comprehension over `cfg.holds`.
 fn last_hold_for<'a>(cfg: &'a Config, key: &str) -> Option<&'a crate::model::Hold> {
@@ -183,6 +195,10 @@ fn build_base(cfg: &Config, geom: &Geometry) -> Board {
                 }
                 Some(tap) => {
                     cap.label = prettify(tap);
+                    // A tap emits the tap action; glow on that, not the physical key.
+                    if let Some(out) = output_key(tap) {
+                        cap.key = out;
+                    }
                     cap.badge_left = Some(Badge {
                         text: format!("\u{2193}{label_text}"), // ↓<target>
                         color: col.to_string(),
@@ -194,6 +210,10 @@ fn build_base(cfg: &Config, geom: &Geometry) -> Board {
             cap.emphasized = true;
             cap.label = prettify(val);
             cap.ghost = base_legend(name);
+            // Remapped keys emit the remap target; glow matches that, not the physical key.
+            if let Some(out) = output_key(val) {
+                cap.key = out;
+            }
         } else {
             cap.label = base_legend(name);
         }
@@ -263,11 +283,18 @@ fn build_layer(cfg: &Config, layer: &Layer, geom: &Geometry) -> Board {
             cap.emphasized = true;
             cap.ghost = if is_game { String::new() } else { base_legend(nm) };
             cap.accent = accent.clone();
+            // Glow on what the remapped key emits (a num-layer `j = 4` glows the j-cap
+            // when keyd reports `4`). Game/passthrough keys still emit their own key.
+            if !is_game {
+                cap.key = output_key(val).unwrap_or_default();
+            }
         } else if act_key.as_deref() == Some(nm) {
             cap.label = base_legend(nm);
             cap.accent = accent.clone();
             cap.state = KeyState::Hold;
             cap.badge_left = Some(Badge { text: "HOLD".to_string(), color: accent.clone() });
+            // Held to reach this layer — keyd emits nothing for it, so never glow it.
+            cap.key = String::new();
         } else {
             cap.label = base_legend(nm);
             cap.state = KeyState::Dim;

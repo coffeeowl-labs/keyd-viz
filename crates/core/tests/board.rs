@@ -48,6 +48,9 @@ fn laptop_base_momentary_and_remap() {
         .expect("leftcontrol cap");
     assert!(lc.cap.emphasized);
     assert_eq!(lc.cap.accent, "#ffb454");
+    // Glow matches what the key emits: leftcontrol -> capslock, so the cap's match
+    // key is the output "capslock", not the physical "leftcontrol".
+    assert_eq!(lc.cap.key, "capslock");
 }
 
 #[test]
@@ -85,4 +88,22 @@ fn hhkb_sheet_structure_and_badges() {
     // GAME board is a toggle, hinted by the chord.
     let game = sheet.boards.iter().find(|b| b.title == "GAME").unwrap();
     assert!(game.how.starts_with("toggle:"));
+}
+
+#[test]
+fn layer_remap_glows_on_output_key() {
+    // num layer binds `j = 4`. keyd reports the *output* keysym `4` when you press
+    // physical j, so the j-cap must carry the output key "4" to glow — not "j".
+    let cfg = parse_text(include_str!("../../../examples/hhkb.conf"));
+    let (geom, profile) = layout_for("hhkb.conf");
+    let sheet = Sheet::build(&cfg, "hhkb.conf", &geom, profile);
+    let num = sheet.boards.iter().find(|b| b.title == "NUM").unwrap();
+
+    // The remapped cap shows "4" and matches the keyd output "4".
+    let four = find_cap(num, |v| v.cap.emphasized && v.cap.label == "4").expect("num j->4 cap");
+    assert_eq!(four.cap.key, "4");
+
+    // The key you hold to reach the layer emits nothing, so it never glows.
+    let held = find_cap(num, |v| matches!(v.cap.state, KeyState::Hold)).expect("held key");
+    assert_eq!(held.cap.key, "");
 }
