@@ -508,6 +508,10 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     }
 
+    // Live-reload the board when a watched config file changes on disk. Kept alive in a
+    // binding so the timer outlives setup and fires for the app's whole life.
+    let _reload_timer = spawn_config_reload(&win, srcs.clone());
+
     win.run()
 }
 
@@ -552,6 +556,58 @@ fn render_board(win: &MainWindow) {
         win.get_pressed_keys().iter().map(|s| s.to_string()).collect();
     stamp_glow(&mut board, &pressed);
     win.set_active_board(board);
+}
+
+/// File mtime, or `None` if the path is missing/unreadable (so a config saved via a
+/// temporary file mid-write is simply skipped until it settles).
+fn file_mtime(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// Watch each config's file mtime on the UI thread and live-reload the board when it
+/// changes — editing your keyd `.conf` redraws the layout without a restart (layers and
+/// glow are already live; this closes the gap for the base board). Polls once a second
+/// (no extra deps, no background thread — Slint timer callbacks run on the event-loop
+/// thread, so they can hold the non-`Send` `Rc` state). Reuses [`build_sheet_data`] and
+/// [`render_board`], so the current layer/glow overlays are reapplied after the swap.
+/// Returns the timer; keep it alive for the app's life or it stops.
+fn spawn_config_reload(win: &MainWindow, srcs: Rc<RefCell<Vec<SheetSrc>>>) -> slint::Timer {
+    use slint::Model;
+    let weak = win.as_weak();
+    // Seed last-seen mtimes so we only reload on a *future* change, not at startup.
+    let mut mtimes: Vec<Option<std::time::SystemTime>> =
+        srcs.borrow().iter().map(|s| file_mtime(&s.path)).collect();
+    let timer = slint::Timer::default();
+    timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(1000), move || {
+        let Some(win) = weak.upgrade() else { return };
+        let mut srcs = srcs.borrow_mut();
+        let mut changed = false;
+        for (idx, src) in srcs.iter_mut().enumerate() {
+            let now = file_mtime(&src.path);
+            if now.is_none() || now == mtimes[idx] {
+                continue; // missing (mid-save) or unchanged
+            }
+            mtimes[idx] = now;
+            match parse_file(&src.path) {
+                Ok(cfg) => {
+                    src.cfg = cfg;
+                    let data = build_sheet_data(src);
+                    win.get_sheets().set_row_data(idx, data.clone());
+                    if win.get_active_index().max(0) as usize == idx {
+                        win.set_active_sheet(data);
+                    }
+                    changed = true;
+                    eprintln!("keyd-viz: reloaded {}", src.path.display());
+                }
+                Err(e) => eprintln!("keyd-viz: reload of {} failed: {e}", src.path.display()),
+            }
+        }
+        drop(srcs);
+        if changed {
+            render_board(&win); // reapply the live layer/glow overlays onto the new board
+        }
+    });
+    timer
 }
 
 /// Light up the caps the held keysyms (`pressed`, what `keyd monitor` reports) map to.
