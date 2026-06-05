@@ -119,6 +119,12 @@ fn layer_remap_glows_on_output_key() {
     assert!(find_cap(base, |v| v.cap.key == "=").is_some(), "base = key glows on =");
     assert!(find_cap(base, |v| v.cap.key == "equal").is_none());
 
+    // keyd folds right modifiers to their left twin on output, so the right-shift cap
+    // must glow on `leftshift` (what monitor reports), never the never-emitted `rightshift`.
+    assert!(find_cap(base, |v| v.cap.key == "leftshift").is_some(), "right shift glows on leftshift");
+    assert!(find_cap(base, |v| v.cap.key == "rightshift").is_none());
+    assert!(find_cap(base, |v| v.cap.key == "rightmeta").is_none());
+
     // The key you hold to reach the layer emits nothing, so it never glows.
     let held = find_cap(num, |v| matches!(v.cap.state, KeyState::Hold)).expect("held key");
     assert_eq!(held.cap.key, "");

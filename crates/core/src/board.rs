@@ -147,8 +147,15 @@ fn cap_at(slot: &Slot, key: &str) -> KeyCap {
 /// map any of those to the primary name — otherwise the live-keypress glow can't match
 /// what monitor reports. Generated from keyd v2.6.0 `src/keys.c`; unknown names pass
 /// through unchanged (already primary, or a multi-key action handled elsewhere).
+///
+/// Right-hand modifiers are also folded to their left twin: keyd tracks every modifier by
+/// its mod *bit* and re-emits the canonical key (`keys.c` `modifiers[]` — `MOD_SHIFT`
+/// → leftshift, `MOD_CTRL` → leftcontrol, `MOD_SUPER` → leftmeta), so pressing right
+/// shift/ctrl/meta actually emits the left one (verified against keyd's offline `test-io`,
+/// even with no bindings). `rightalt` is AltGr (`MOD_ALT_GR`), a distinct mod, so it stays.
 fn canonical(name: &str) -> &str {
     const ALIAS: &[(&str, &str)] = &[
+        ("rightshift", "leftshift"), ("rightcontrol", "leftcontrol"), ("rightmeta", "leftmeta"),
         ("escape", "esc"), ("!", "1"), ("@", "2"), ("#", "3"),
         ("$", "4"), ("%", "5"), ("^", "6"), ("&", "7"),
         ("*", "8"), ("(", "9"), (")", "0"), ("minus", "-"),
