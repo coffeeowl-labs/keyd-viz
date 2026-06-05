@@ -4,7 +4,7 @@ All notable changes to keyd-viz are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-06-05
 
 ### Added
 
@@ -76,5 +76,5 @@ First public release — the visual face of [keyd](https://github.com/rvaiya/key
 - System-tray resident process and a KDE global-hotkey to summon/dismiss the window.
 - Flatpak packaging.
 
-[Unreleased]: https://github.com/coffeeowl-labs/keyd-viz/compare/v1.0.0...HEAD
+[1.1.0]: https://github.com/coffeeowl-labs/keyd-viz/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/coffeeowl-labs/keyd-viz/releases/tag/v1.0.0

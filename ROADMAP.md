@@ -1,7 +1,9 @@
 # keyd-viz — Roadmap & Design Record
 
-> **Status:** v1.0 shipped (2026-06-04) — Phases 0–4 complete. v1.1 in planning
-> (tray-resident process + KDE global-hotkey summon).
+> **Status:** v1.1.0 shipped (2026-06-05) — Phases 0–4 complete. v1.1.0 was a UI/UX
+> polish release (zoom, compact mode, live hotplug + id highlight, header redesign,
+> fast-tap glow fix). The tray-resident process + KDE global-hotkey summon are now the
+> **v1.2** headline (still in planning).
 > **Purpose of this document:** the single durable source of truth for this project's
 > direction, decisions, rationale, and the verified technical facts behind them. It is
 > written to survive context loss — if you are picking this up cold, read this top to
@@ -404,8 +406,11 @@ Each phase ships standalone value. Build order is fixed; later phases assume ear
   (`packaging/aur/`) and an **AppImage** of the GUI (`packaging/appimage/build-appimage.sh`,
   built in CI on tag push via `.github/workflows/release.yml`); README repositioned as "the
   face of keyd"; renamed `keyd-cheatsheet` → `keyd-viz`.
-- **v1.1 (next):** system-tray resident process; KDE global-shortcut to summon/dismiss;
-  Flatpak (optional, layer-only).
+- **v1.1.0 (shipped 2026-06-05):** UI/UX polish — board zoom (scroll + controls), compact
+  pinnable mode, auto-fit window, live keyboard hotplug tracking + connected-id highlight,
+  chooser-first header redesign, and the fast tap-hold glow fix.
+- **v1.2 (next):** system-tray resident process; KDE global-shortcut to summon/dismiss
+  (pairs with the new compact mode → pinned overlay); Flatpak (optional, layer-only).
 
 **Value checkpoints:** after P0–1 the tool already beats today's. P3 is the cheap headline.
 P4 is the ambitious frontier.
