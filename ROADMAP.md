@@ -694,3 +694,14 @@ P4 is the ambitious frontier.
   to the GUI. **Layers no longer exec anything**; only `keyd monitor` (keypresses, evdev) and the
   `keyd --version` hello string remain before the layers-only service can take the `~@exec` sandbox
   tier. `--keyd-socket PATH` overrides the path. Keypress glow (`keyd monitor`) is unchanged.
+- *(Phase 4 — drop the `keyd monitor` exec, read evdev directly, 2026-06-04)* Keypresses now come from
+  reading keyd's **virtual keyboard via evdev directly** instead of spawning `keyd monitor`.
+  `helper::evdev` finds keyd's uinput keyboard (`0fac:0ade`) by `EVIOCGID`, reads 24-byte
+  `input_event` records, maps each `EV_KEY` keycode through the new `core::keycodes::keycode_name`
+  (keyd v2.6.0 `keycode_table` transcribed; indexed by raw kernel keycode) and broadcasts down/up —
+  re-finding the device on keyd restart. Needs the same `/dev/input` access `keyd monitor` did (the
+  `input` group), just no child process and no dependency on the `keyd` binary. Verified live against
+  the real keyd virtual keyboard: 64 events, post-remap outputs correct (home-row → digits/arrows on
+  the num/nav layers, `leftcontrol`+`c` chord intact) — identical to `keyd monitor`. **The daemon now
+  spawns no `keyd` children at all**; only the cosmetic `keyd --version` hello exec remains before the
+  full service can take the `~@exec`/no-new-process sandbox tier.

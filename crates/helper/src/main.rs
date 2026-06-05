@@ -20,17 +20,18 @@
 //! lets it run as `keyd-viz` without a shared group or hard-coded uid. See `authz.rs`.
 
 mod authz;
+mod evdev;
 mod keyd_ipc;
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use authz::{Decision, Policy};
-use keydviz_core::live::{parse_listen_line, parse_monitor_line, LayerAction, LiveEvent};
+use keydviz_core::live::{parse_listen_line, LayerAction, LiveEvent};
 
 /// Connected clients plus the current layer snapshot, so a late-joining GUI is brought
 /// up to date instead of waiting for the next transition.
@@ -102,33 +103,6 @@ fn run_keyd_listen(socket: &str, hub: &Arc<Hub>) {
         }
         // Stream lost: the layer snapshot is stale — clear it so new clients don't get ghosts.
         *hub.snapshot.lock().unwrap() = (Vec::new(), None);
-        std::thread::sleep(Duration::from_secs(3));
-    }
-}
-
-/// Spawn `keyd <args…>`, parse each stdout line into a [`LiveEvent`] via `parse`, and fan
-/// it out. Used for keypresses (`keyd monitor`), which reads evdev directly and has no
-/// socket equivalent yet. Retries on exit/failure — blocks, so run it on its own thread.
-fn run_keyd_source(args: &[&str], hub: &Arc<Hub>, parse: impl Fn(&str) -> Option<LiveEvent>) {
-    loop {
-        match Command::new("keyd")
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            Ok(mut child) => {
-                if let Some(out) = child.stdout.take() {
-                    for line in BufReader::new(out).lines().map_while(Result::ok) {
-                        if let Some(ev) = parse(&line) {
-                            hub.broadcast(&ev);
-                        }
-                    }
-                }
-                let _ = child.wait();
-            }
-            Err(e) => eprintln!("keydviz-helperd: cannot spawn `keyd {}`: {e}", args.join(" ")),
-        }
         std::thread::sleep(Duration::from_secs(3));
     }
 }
@@ -290,9 +264,7 @@ fn main() {
         std::thread::spawn(move || run_keyd_listen(&keyd_socket, &h));
         if args.keys {
             let h = hub.clone();
-            std::thread::spawn(move || {
-                run_keyd_source(&["monitor"], &h, |l| parse_monitor_line(l).map(|e| (&e).into()))
-            });
+            std::thread::spawn(move || evdev::run_evdev_monitor(&h));
             eprintln!("keydviz-helperd: layers + keypresses");
         } else {
             eprintln!("keydviz-helperd: layers only (pass --keys to broker keypresses)");
