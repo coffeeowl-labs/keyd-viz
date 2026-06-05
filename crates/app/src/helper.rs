@@ -16,25 +16,39 @@ use std::time::Duration;
 
 use keydviz_core::live::LiveEvent;
 
-/// The helper socket path: `$KEYDVIZ_HELPER_SOCKET`, else `$XDG_RUNTIME_DIR/keyd-viz.sock`,
-/// else `/run/keyd-viz.sock`. Mirrors the daemon's default so they meet with no config.
+/// Where the packaged system service binds its socket (its unit's `RuntimeDirectory=`
+/// gives `keyd-viz` write access under `/run`). Must match `keydviz-helperd.service`.
+const SYSTEM_SOCKET: &str = "/run/keyd-viz/keyd-viz.sock";
+
+/// The helper socket path. In priority order: `$KEYDVIZ_HELPER_SOCKET`, else a running
+/// per-user dev daemon at `$XDG_RUNTIME_DIR/keyd-viz.sock` if that socket exists, else
+/// the system service socket [`SYSTEM_SOCKET`]. Mirrors the daemon so they meet with no
+/// config: a dev `keydviz-helperd` (no flags) binds the per-user path; the installed
+/// service binds the system path.
 pub fn socket_path() -> String {
     resolve_socket(
         std::env::var("KEYDVIZ_HELPER_SOCKET").ok().as_deref(),
         std::env::var("XDG_RUNTIME_DIR").ok().as_deref(),
+        |p| std::path::Path::new(p).exists(),
     )
 }
 
-/// Pure resolver behind [`socket_path`] (env read out for testability).
-fn resolve_socket(helper_env: Option<&str>, xdg: Option<&str>) -> String {
-    match helper_env {
-        Some(p) if !p.is_empty() => return p.to_string(),
-        _ => {}
+/// Pure resolver behind [`socket_path`] (env + existence check injected for testability).
+fn resolve_socket(helper_env: Option<&str>, xdg: Option<&str>, exists: impl Fn(&str) -> bool) -> String {
+    if let Some(p) = helper_env {
+        if !p.is_empty() {
+            return p.to_string();
+        }
     }
-    match xdg {
-        Some(dir) if !dir.is_empty() => format!("{dir}/keyd-viz.sock"),
-        _ => "/run/keyd-viz.sock".to_string(),
+    if let Some(dir) = xdg {
+        if !dir.is_empty() {
+            let user = format!("{dir}/keyd-viz.sock");
+            if exists(&user) {
+                return user;
+            }
+        }
     }
+    SYSTEM_SOCKET.to_string()
 }
 
 /// True if the helper socket exists — used to prefer the broker over direct `keyd`.
@@ -66,16 +80,23 @@ pub fn run_helper_client(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_socket;
+    use super::{resolve_socket, SYSTEM_SOCKET};
 
     #[test]
     fn socket_path_precedence() {
-        // explicit override wins
-        assert_eq!(resolve_socket(Some("/tmp/x.sock"), Some("/run/user/1000")), "/tmp/x.sock");
-        // else XDG_RUNTIME_DIR
-        assert_eq!(resolve_socket(None, Some("/run/user/1000")), "/run/user/1000/keyd-viz.sock");
+        let yes = |_: &str| true;
+        let no = |_: &str| false;
+        // explicit override always wins, regardless of what exists
+        assert_eq!(resolve_socket(Some("/tmp/x.sock"), Some("/run/user/1000"), no), "/tmp/x.sock");
+        // a running per-user dev socket is preferred when it exists
+        assert_eq!(
+            resolve_socket(None, Some("/run/user/1000"), yes),
+            "/run/user/1000/keyd-viz.sock"
+        );
+        // no per-user socket → fall through to the system service socket
+        assert_eq!(resolve_socket(None, Some("/run/user/1000"), no), SYSTEM_SOCKET);
         // empty values are ignored, fall through to the system default
-        assert_eq!(resolve_socket(Some(""), Some("")), "/run/keyd-viz.sock");
-        assert_eq!(resolve_socket(None, None), "/run/keyd-viz.sock");
+        assert_eq!(resolve_socket(Some(""), Some(""), no), SYSTEM_SOCKET);
+        assert_eq!(resolve_socket(None, None, no), SYSTEM_SOCKET);
     }
 }

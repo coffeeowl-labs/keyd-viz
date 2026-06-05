@@ -661,10 +661,26 @@ P4 is the ambitious frontier.
     the daemon's default so they meet with no config.
   - Workspace: 62 tests green, clippy clean. **Dev test:** `keydviz-helperd --demo` + `keydviz`
     shows the board morphing + glow driven entirely through the socket, no keyd perms needed.
-  - **Still open (productionization):** (1) **logind active-session authz** + socket perms so the
-    daemon can run as a dedicated `keyd-viz` system user yet serve the desktop user (the current
-    same-uid authz is the dev model); (2) the **systemd sandbox unit** (`PrivateNetwork`,
-    `DeviceAllow=/dev/input/event* r`, no-exec, drop caps — the security model in the design doc);
-    (3) read keyd's socket/virtual-evdev **directly** to drop the `keyd` exec; (4) AUR/AppImage
-    packaging that installs + enables it. Until (1)+(2) land, the helper is dev-functional
-    (same-user) but not yet the shipped zero-permission system service.
+- *(Phase 4 — brokering helper daemon, productionization, 2026-06-04)* Turned the dev-functional
+  core into the shipped zero-permission system service.
+  - **logind active-session authz** (`helper::authz`) — a `Policy` of either `Uid(n)` (the dev /
+    same-user default) or `ActiveSession`, which serves whatever uid logind reports as the
+    **active** (foreground) session user via libsystemd `sd_uid_get_state` (linked through a tiny
+    `build.rs`; the stable API over the "do-not-parse" `/run/systemd/users/<uid>` file — no D-Bus,
+    no exec). This lets the daemon run as the dedicated `keyd-viz` user yet serve the desktop user
+    with no shared group and no hard-coded uid; a user who switched away (`online`, not `active`) is
+    denied. Socket mode follows policy: `0600` for `Uid`, `0666` for `ActiveSession` (the per-conn
+    check, not the file mode, gates the data). Verified E2E: an `--active-session` daemon serves the
+    live uid-1000 session and binds `0666`.
+  - **systemd packaging** (`packaging/`) — a hardened `keydviz-helperd.service` (`User=keyd-viz`,
+    `RuntimeDirectory=keyd-viz` → socket at `/run/keyd-viz/keyd-viz.sock`, `PrivateNetwork`,
+    `RestrictAddressFamilies=AF_UNIX`, `ProtectSystem=strict`, dropped caps, `DevicePolicy=closed`,
+    `SystemCallFilter=@system-service`), `sysusers.d/keyd-viz.conf`, and a **layers-only base** that
+    grants only the `keyd` group + zero `/dev/input`; keypress glow is an explicit opt-in drop-in
+    (`keypresses.conf` adds the `input` group + `DeviceAllow=char-input r` + `--keys`). Unit verified
+    with `systemd-analyze verify`; install/uninstall steps in `packaging/README.md`. `app::helper`
+    now auto-discovers the system socket (`/run/keyd-viz/keyd-viz.sock`), preferring a running
+    per-user dev socket when present.
+  - **Still open:** (1) read keyd's socket/virtual-evdev **directly** to drop the `keyd` exec — which
+    then unlocks the `~@exec` / no-new-process tier of the sandbox; (2) AUR/AppImage packaging that
+    bundles install + enable. The service is now installable and is the shipped zero-permission path.

@@ -13,10 +13,13 @@
 //! the remaining hardening steps. By default it serves **layers only** (no `/dev/input`
 //! access at all — literally not a keylogger); keypresses are opt-in via `--keys`.
 //!
-//! Authz (interim): a connecting client is accepted only if its peer uid (`SO_PEERCRED`)
-//! matches the daemon's own uid (or `--uid <N>`). Production replaces this with a logind
-//! "owns the active graphical session" check so the daemon can run as `keyd-viz` yet
-//! serve the desktop user.
+//! Authz: every connection is gated by the peer uid (`SO_PEERCRED`, kernel-attested).
+//! The default [`Policy::Uid`] serves only the daemon's own uid — the dev / same-user
+//! path. The shipped service instead runs with `--active-session`, so it serves whoever
+//! logind reports as the foreground desktop user ([`Policy::ActiveSession`]); that's what
+//! lets it run as `keyd-viz` without a shared group or hard-coded uid. See `authz.rs`.
+
+mod authz;
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::io::AsRawFd;
@@ -25,6 +28,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use authz::{Decision, Policy};
 use keydviz_core::live::{parse_listen_line, parse_monitor_line, LayerAction, LiveEvent};
 
 /// Connected clients plus the current layer snapshot, so a late-joining GUI is brought
@@ -139,36 +143,42 @@ struct Args {
     socket: String,
     keys: bool,
     demo: bool,
-    uid: u32,
+    policy: Policy,
 }
 
 fn parse_args() -> Args {
     let mut socket = default_socket_path();
     let mut keys = false;
     let mut demo = false;
-    // SAFETY: getuid is always safe; it just reads the caller's real uid.
-    let mut uid = unsafe { libc::getuid() };
+    // Default policy: serve our own uid (dev / same-user). `--uid`/`--active-session`
+    // override it. SAFETY: getuid is always safe; it just reads the caller's real uid.
+    let mut policy = Policy::Uid(unsafe { libc::getuid() });
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--socket" => socket = it.next().unwrap_or_else(|| die("--socket needs a path")),
             "--keys" => keys = true,
             "--demo" => demo = true,
+            "--active-session" => policy = Policy::ActiveSession,
             "--uid" => {
-                uid = it
+                let uid = it
                     .next()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or_else(|| die("--uid needs a number"));
+                policy = Policy::Uid(uid);
             }
             "-h" | "--help" => {
                 println!(
                     "keydviz-helperd — broker keyd live streams to the GUI over a unix socket\n\n\
-                     Usage: keydviz-helperd [--socket PATH] [--keys] [--demo] [--uid N]\n\n\
-                     --socket PATH  unix socket to serve (default: {})\n\
-                     --keys         also broker keypresses (keyd monitor; needs /dev/input). \
+                     Usage: keydviz-helperd [--socket PATH] [--keys] [--demo] \
+                     [--active-session | --uid N]\n\n\
+                     --socket PATH     unix socket to serve (default: {})\n\
+                     --keys            also broker keypresses (keyd monitor; needs /dev/input). \
                      Default: layers only.\n\
-                     --demo         emit synthetic events instead of reading keyd (testing)\n\
-                     --uid N        only serve clients with this peer uid (default: own uid)",
+                     --demo            emit synthetic events instead of reading keyd (testing)\n\
+                     --active-session  serve the logind active (foreground) session user — the \
+                     shipped service mode\n\
+                     --uid N           serve only this peer uid (default: own uid)",
                     default_socket_path()
                 );
                 std::process::exit(0);
@@ -176,7 +186,7 @@ fn parse_args() -> Args {
             other => die(&format!("unknown argument: {other}")),
         }
     }
-    Args { socket, keys, demo, uid }
+    Args { socket, keys, demo, policy }
 }
 
 fn default_socket_path() -> String {
@@ -225,7 +235,9 @@ fn keyd_version() -> String {
 fn main() {
     let args = parse_args();
 
-    // Fresh socket: clear any stale node, bind, and lock perms to the owner only.
+    // Fresh socket: clear any stale node, bind, and set perms per the authz policy
+    // (owner-only for same-uid; world-connectable for active-session, where the
+    // per-connection check — not the file mode — gates the data).
     let _ = std::fs::remove_file(&args.socket);
     let listener = match UnixListener::bind(&args.socket) {
         Ok(l) => l,
@@ -233,7 +245,7 @@ fn main() {
     };
     if let Err(e) = std::fs::set_permissions(
         &args.socket,
-        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        std::os::unix::fs::PermissionsExt::from_mode(args.policy.socket_mode()),
     ) {
         eprintln!("keydviz-helperd: warning: cannot chmod socket: {e}");
     }
@@ -261,9 +273,9 @@ fn main() {
         }
     }
 
-    eprintln!("keydviz-helperd: serving {} (uid {})", args.socket, args.uid);
+    eprintln!("keydviz-helperd: serving {} ({:?})", args.socket, args.policy);
 
-    // Accept loop: peer-uid authz, then register the client for fan-out.
+    // Accept loop: authorize the kernel-attested peer uid, then register for fan-out.
     for stream in listener.incoming() {
         let stream = match stream {
             Ok(s) => s,
@@ -273,8 +285,12 @@ fn main() {
             }
         };
         match peer_uid(&stream) {
-            Some(uid) if uid == args.uid => hub.add_client(stream),
-            Some(uid) => eprintln!("keydviz-helperd: rejected client uid {uid}"),
+            Some(uid) => match args.policy.decide(uid) {
+                Decision::Allow => hub.add_client(stream),
+                Decision::Deny(why) => {
+                    eprintln!("keydviz-helperd: rejected client uid {uid}: {why}")
+                }
+            },
             None => eprintln!("keydviz-helperd: no peer creds, rejecting client"),
         }
     }

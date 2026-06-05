@@ -178,11 +178,21 @@ ships, the desktop user needs **neither** — the `keyd-viz` system user holds t
 **Do this cleanup only after the helper is in place and verified**, or it breaks the current
 working app. See ROADMAP §10 and memory `dev-interim-group-grants` for the exact revert.
 
-## Smallest next step if we proceed with A
+## Smallest next step if we proceed with A — **done (2026-06-04)**
 
-1. Define the event enum + JSON (de)serialization in `core` (shared by helper and app).
-2. Helper binary: open `keyd listen` + `keyd monitor`, fan their parsed events to connected
-   clients; `SO_PEERCRED` + logind active-session check for authz.
-3. systemd unit + socket; package wiring.
-4. App: add a "helper socket" event source behind the existing `run_listen`/`run_monitor`
-   seam; fall back to direct `keyd` spawning when the helper isn't present (dev mode).
+1. ✅ Event enum + JSON in `core` — `core::live::LiveEvent` (events-out-only wire protocol),
+   shared by helper and app.
+2. ✅ Helper binary (`crates/helper`, `keydviz-helperd`): spawns `keyd listen` (+ `keyd monitor`
+   under `--keys`), fans parsed `LiveEvent`s to clients. Authz is `SO_PEERCRED` + a logind
+   active-session check (`helper::authz::Policy::ActiveSession` → libsystemd `sd_uid_get_state`),
+   with a `Uid(n)` policy for dev/same-user. Socket mode follows policy (0600 / 0666).
+3. ✅ systemd unit + packaging (`packaging/`): hardened `keydviz-helperd.service` running as
+   `keyd-viz` with the full sandbox, `sysusers.d`, a layers-only base + keypresses opt-in drop-in,
+   and install docs in `packaging/README.md`.
+4. ✅ App: `app::helper` is the broker event source behind the `run_listen`/`run_monitor` seam,
+   auto-discovering `/run/keyd-viz/keyd-viz.sock` (or a per-user dev socket) and falling back to
+   direct `keyd` when absent.
+
+**Remaining hardening:** read keyd's control socket + virtual evdev directly so the daemon no
+longer spawns `keyd` — that drops the exec and unlocks the `~@exec` / no-new-process sandbox tier
+the security model calls for. Then AUR/AppImage packaging.

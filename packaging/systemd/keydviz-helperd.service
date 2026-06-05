@@ -1,0 +1,64 @@
+[Unit]
+Description=keyd-viz broker daemon (live layer/keypress stream for the GUI)
+Documentation=https://github.com/keyd-viz/keyd-viz
+# Layers come from keyd's control socket; if keyd isn't up there's nothing to broker.
+After=keyd.service
+Wants=keyd.service
+
+[Service]
+Type=simple
+# Dedicated, unprivileged system user (created by sysusers.d/keyd-viz.conf). The `keyd`
+# group is the *only* access the default layers-only mode needs: it reads keyd's control
+# socket (`keyd listen`). It deliberately gets NO `input` group and NO device access here,
+# so the shipped service literally cannot read /dev/input — it is not a keylogger. Keypress
+# glow is a separate, explicit opt-in: see keydviz-helperd.service.d/keypresses.conf.
+User=keyd-viz
+SupplementaryGroups=keyd
+
+# Socket lives under /run/keyd-viz/ (RuntimeDirectory gives `keyd-viz` write access there;
+# 0755 lets the desktop user traverse in to reach the socket). The socket node itself is
+# created 0666 by the daemon, but every connection is authorized by SO_PEERCRED +
+# `--active-session` (libsystemd sd_uid_get_state == "active"), so only the foreground
+# desktop user is ever served the stream — the file mode is not the security boundary.
+RuntimeDirectory=keyd-viz
+RuntimeDirectoryMode=0755
+ExecStart=/usr/bin/keydviz-helperd --active-session --socket /run/keyd-viz/keyd-viz.sock
+
+Restart=on-failure
+RestartSec=2
+
+# --- Sandbox -------------------------------------------------------------------------
+# A compromise of this box must stay keystroke-*read*-only, with no network and no
+# escalation. (It still spawns `keyd listen`/`keyd monitor`, so exec is NOT yet blocked;
+# the `~@exec` / no-new-process lockdown lands once the daemon reads keyd's socket and
+# virtual evdev directly — see docs/helper-design.md.)
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+# No network of any kind: the daemon only ever speaks AF_UNIX (keyd's socket + its own).
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+# Filesystem: read-only system, no home, private tmp, no device nodes by default.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+DevicePolicy=closed
+ProtectProc=invisible
+ProcSubset=pid
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target
