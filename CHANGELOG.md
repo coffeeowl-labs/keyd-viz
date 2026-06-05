@@ -4,6 +4,37 @@ All notable changes to keyd-viz are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Zoom.** Scroll over the board or use the `−`/`+` controls to scale the keyboard
+  (0.4×–2.4×); the window auto-fits the scaled board. Click the percentage to reset.
+- **Compact mode.** A toggle that hides all chrome, leaving a minimal, pinnable
+  keyboard-only window — a corner "what does this layer do" reminder.
+- **Auto-fit window.** The window sizes itself to the selected layout and re-fits when
+  you change the layout or zoom.
+- **Connected-keyboard id highlight.** The config's `[ids]` entries are shown as tags,
+  with the one matching a currently-plugged-in keyboard highlighted green.
+- **Live hotplug tracking.** Plugging or unplugging a keyboard updates the highlighted
+  ids, device label, and follow-keyboard map within ~1.5s, no restart.
+
+### Changed
+
+- **Header redesign.** The keyboard chooser is now the primary top-line navigation; the
+  old title/subtitle and a duplicate on-board legend were removed. Config path and `[ids]`
+  moved to line 2 alongside the live-status pill.
+- Dropped the per-board layer header so activating a layer no longer shifts the board; the
+  active layer is already named in the LIVE pill. The pill sits on line 2 so its width
+  changing with the layer name doesn't resize the window.
+
+### Fixed
+
+- **Fast tap-hold taps now glow.** An isolated tap-hold *tap* (e.g. the `f` in "fear")
+  resolves on release and emits down+up within a single display frame, so it never lit up.
+  A min-glow decay (60 ms, anchored to key-down) keeps such sub-frame taps visible without
+  adding a tail to normal typing.
+
 ## [1.0.0] - 2026-06-04
 
 First public release — the visual face of [keyd](https://github.com/rvaiya/keyd).
@@ -45,4 +76,5 @@ First public release — the visual face of [keyd](https://github.com/rvaiya/key
 - System-tray resident process and a KDE global-hotkey to summon/dismiss the window.
 - Flatpak packaging.
 
+[Unreleased]: https://github.com/coffeeowl-labs/keyd-viz/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/coffeeowl-labs/keyd-viz/releases/tag/v1.0.0
