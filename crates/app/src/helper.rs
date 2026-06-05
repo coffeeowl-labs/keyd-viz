@@ -20,21 +20,22 @@ use keydviz_core::live::LiveEvent;
 /// gives `keyd-viz` write access under `/run`). Must match `keydviz-helperd.service`.
 const SYSTEM_SOCKET: &str = "/run/keyd-viz/keyd-viz.sock";
 
-/// The helper socket path. In priority order: `$KEYDVIZ_HELPER_SOCKET`, else a running
-/// per-user dev daemon at `$XDG_RUNTIME_DIR/keyd-viz.sock` if that socket exists, else
-/// the system service socket [`SYSTEM_SOCKET`]. Mirrors the daemon so they meet with no
-/// config: a dev `keydviz-helperd` (no flags) binds the per-user path; the installed
-/// service binds the system path.
+/// The helper socket path. In priority order: `$KEYDVIZ_HELPER_SOCKET`, else a *live*
+/// per-user dev daemon at `$XDG_RUNTIME_DIR/keyd-viz.sock`, else the system service
+/// socket [`SYSTEM_SOCKET`]. Mirrors the daemon so they meet with no config: a dev
+/// `keydviz-helperd` (no flags) binds the per-user path; the installed service binds the
+/// system path. "Live" means a daemon is actually listening (see [`is_live`]) — a stale
+/// socket file from a crashed dev daemon is skipped rather than latched onto.
 pub fn socket_path() -> String {
     resolve_socket(
         std::env::var("KEYDVIZ_HELPER_SOCKET").ok().as_deref(),
         std::env::var("XDG_RUNTIME_DIR").ok().as_deref(),
-        |p| std::path::Path::new(p).exists(),
+        is_live,
     )
 }
 
-/// Pure resolver behind [`socket_path`] (env + existence check injected for testability).
-fn resolve_socket(helper_env: Option<&str>, xdg: Option<&str>, exists: impl Fn(&str) -> bool) -> String {
+/// Pure resolver behind [`socket_path`] (env + liveness probe injected for testability).
+fn resolve_socket(helper_env: Option<&str>, xdg: Option<&str>, live: impl Fn(&str) -> bool) -> String {
     if let Some(p) = helper_env {
         if !p.is_empty() {
             return p.to_string();
@@ -43,7 +44,7 @@ fn resolve_socket(helper_env: Option<&str>, xdg: Option<&str>, exists: impl Fn(&
     if let Some(dir) = xdg {
         if !dir.is_empty() {
             let user = format!("{dir}/keyd-viz.sock");
-            if exists(&user) {
+            if live(&user) {
                 return user;
             }
         }
@@ -51,9 +52,14 @@ fn resolve_socket(helper_env: Option<&str>, xdg: Option<&str>, exists: impl Fn(&
     SYSTEM_SOCKET.to_string()
 }
 
-/// True if the helper socket exists — used to prefer the broker over direct `keyd`.
-pub fn is_present(socket: &str) -> bool {
-    std::fs::metadata(socket).is_ok()
+/// True if a daemon is actually *listening* on `socket` — tested by a real `connect()`.
+/// This is what distinguishes a live broker from a stale socket *file* left behind by a
+/// crashed daemon: the file still exists (so an existence check would be fooled) but
+/// `connect()` fails with `ECONNREFUSED`. Used to choose broker-vs-direct so the GUI can't
+/// latch onto a dead socket and spin forever instead of falling back. The probe
+/// connection is immediately dropped.
+pub fn is_live(socket: &str) -> bool {
+    UnixStream::connect(socket).is_ok()
 }
 
 /// Connect to the helper and invoke `on_event` for each [`LiveEvent`]. `on_connect`
@@ -86,14 +92,14 @@ mod tests {
     fn socket_path_precedence() {
         let yes = |_: &str| true;
         let no = |_: &str| false;
-        // explicit override always wins, regardless of what exists
+        // explicit override always wins, regardless of liveness
         assert_eq!(resolve_socket(Some("/tmp/x.sock"), Some("/run/user/1000"), no), "/tmp/x.sock");
-        // a running per-user dev socket is preferred when it exists
+        // a *live* per-user dev socket is preferred
         assert_eq!(
             resolve_socket(None, Some("/run/user/1000"), yes),
             "/run/user/1000/keyd-viz.sock"
         );
-        // no per-user socket → fall through to the system service socket
+        // a dead/stale per-user socket → fall through to the system service socket
         assert_eq!(resolve_socket(None, Some("/run/user/1000"), no), SYSTEM_SOCKET);
         // empty values are ignored, fall through to the system default
         assert_eq!(resolve_socket(Some(""), Some(""), no), SYSTEM_SOCKET);

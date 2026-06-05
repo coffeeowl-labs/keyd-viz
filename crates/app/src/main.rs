@@ -493,12 +493,14 @@ fn main() -> Result<(), slint::PlatformError> {
         spawn_demo(&win);
     } else {
         // Prefer the broker daemon (the zero-permission shipped path); fall back to
-        // spawning keyd directly when it isn't running (dev). `--helper-socket <path>`
-        // or `$KEYDVIZ_HELPER_SOCKET` overrides the path and forces the broker source.
+        // spawning keyd directly when it isn't *running* (dev). `--helper-socket <path>`
+        // or `$KEYDVIZ_HELPER_SOCKET` overrides the path and forces the broker source
+        // (then it retries until the daemon comes up). For auto-discovery we probe
+        // liveness, not mere file existence, so a stale socket can't strand us.
         let socket = flag_value("--helper-socket").unwrap_or_else(helper::socket_path);
         let forced = flag_value("--helper-socket").is_some()
             || std::env::var("KEYDVIZ_HELPER_SOCKET").is_ok();
-        if forced || helper::is_present(&socket) {
+        if forced || helper::is_live(&socket) {
             spawn_helper(&win, socket);
         } else {
             spawn_live(&win); // layer stream  (keyd listen)
