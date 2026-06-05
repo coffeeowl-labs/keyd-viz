@@ -20,39 +20,35 @@ See `docs/helper-design.md` for the full security rationale. The short version:
 
 ## Install
 
+Run the script as a normal user (it builds as you and uses `sudo` only for the install
+steps). Re-running it cleanly updates an existing install.
+
 ```bash
-# 1. Build the release binary.
-cargo build --release -p keydviz-helper      # -> target/release/keydviz-helperd
-
-# 2. Install the binary.
-sudo install -Dm755 target/release/keydviz-helperd /usr/bin/keydviz-helperd
-
-# 3. Create the system user (sysusers handles useradd idempotently).
-sudo install -Dm644 packaging/sysusers.d/keyd-viz.conf /usr/lib/sysusers.d/keyd-viz.conf
-sudo systemd-sysusers
-
-# 4. Install and start the service (layers-only).
-sudo install -Dm644 packaging/systemd/keydviz-helperd.service \
-    /usr/lib/systemd/system/keydviz-helperd.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now keydviz-helperd
+./packaging/install.sh            # layers only (safe default)
+./packaging/install.sh --keys     # also enable keypress glow (reads /dev/input)
 ```
 
 Then just launch the GUI (`keydviz`): it auto-discovers the socket at
 `/run/keyd-viz/keyd-viz.sock` and uses the broker. No groups to join, no logout.
 
-### Optional: enable keypress glow
+To switch keypress glow on/off later, just re-run with or without `--keys`. To remove
+everything: `./packaging/uninstall.sh` (add `--purge` to also drop the `keyd-viz` user).
 
-This lets the daemon read `/dev/input` (foreground user only, still sandboxed). Opt in
-deliberately:
+<details><summary>What the script does (manual equivalent)</summary>
 
 ```bash
-sudo install -Dm644 packaging/systemd/keydviz-helperd.service.d/keypresses.conf \
-    /etc/systemd/system/keydviz-helperd.service.d/keypresses.conf
-sudo systemctl daemon-reload && sudo systemctl restart keydviz-helperd
+cargo build --release -p keydviz-helper
+sudo install -Dm755 target/release/keydviz-helperd /usr/bin/keydviz-helperd
+sudo install -Dm644 packaging/sysusers.d/keyd-viz.conf /usr/lib/sysusers.d/keyd-viz.conf
+sudo systemd-sysusers
+sudo install -Dm644 packaging/systemd/keydviz-helperd.service \
+    /usr/lib/systemd/system/keydviz-helperd.service
+# --keys only: also drop in keypresses.conf under /etc/systemd/system/keydviz-helperd.service.d/
+sudo systemctl daemon-reload
+sudo systemctl enable --now keydviz-helperd
 ```
 
-Remove that file and restart to drop back to layers-only.
+</details>
 
 ## Verify
 
