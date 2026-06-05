@@ -530,30 +530,70 @@ fn render_board(win: &MainWindow) {
         .or_else(|| boards.row_data(0));
     let Some(mut board) = chosen else { return };
 
-    // stamp the live keypress glow onto the caps whose keyd output key is held down.
-    // keyd reports the post-remap keysym, so a remapped cap and its passthrough twin can
-    // share an output (num-layer `j = 4` vs the top-row `4`); prefer the emphasized cap so
-    // only the key you actually pressed glows.
-    let pressed: Vec<slint::SharedString> = win.get_pressed_keys().iter().collect();
-    if !pressed.is_empty() {
-        let claimed: Vec<slint::SharedString> = board
-            .keys
-            .iter()
-            .filter(|k| k.emphasized && pressed.iter().any(|p| p == &k.key))
-            .map(|k| k.key.clone())
-            .collect();
-        let keys: Vec<KeyCapData> = board
-            .keys
-            .iter()
-            .map(|mut k| {
-                k.pressed = pressed.iter().any(|p| p == &k.key)
-                    && (k.emphasized || !claimed.iter().any(|c| c == &k.key));
-                k
-            })
-            .collect();
-        board.keys = model(keys);
-    }
+    // stamp the live keypress glow onto the caps whose keyd output is held down. keyd
+    // reports the post-remap keysym set, so a cap carries the full chord it emits
+    // (`leftcontrol+left`, `leftshift+9`). A cap fires when every keysym it emits is held;
+    // a more-specific cap suppresses its subsets so pressing nav `n` (=C-left) lights only
+    // n, not the real Ctrl and the arrow key it also reports.
+    let pressed: std::collections::HashSet<String> =
+        win.get_pressed_keys().iter().map(|s| s.to_string()).collect();
+    stamp_glow(&mut board, &pressed);
     win.set_active_board(board);
+}
+
+/// Light up the caps the held keysyms (`pressed`, what `keyd monitor` reports) map to.
+/// Each cap's `key` is the `+`-joined chord it emits; a cap fires when that whole set is
+/// held, and a cap whose set is a strict subset of another firing cap — or an equal,
+/// non-emphasized twin — is suppressed, so only the key you actually pressed glows.
+fn stamp_glow(board: &mut BoardData, pressed: &std::collections::HashSet<String>) {
+    use slint::Model;
+    if pressed.is_empty() {
+        return;
+    }
+    let caps: Vec<KeyCapData> = board.keys.iter().collect();
+    let sets: Vec<Vec<String>> = caps
+        .iter()
+        .map(|k| k.key.split('+').filter(|s| !s.is_empty()).map(str::to_string).collect())
+        .collect();
+    let emph: Vec<bool> = caps.iter().map(|k| k.emphasized).collect();
+    let glow = resolve_glow(&sets, &emph, pressed);
+    let keys: Vec<KeyCapData> = caps
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut k)| {
+            k.pressed = glow[i];
+            k
+        })
+        .collect();
+    board.keys = model(keys);
+}
+
+/// Decide which caps glow, given each cap's emitted keysym set (`sets`), whether it is an
+/// emphasized remap (`emph`), and the currently-held keysyms (`pressed`). A cap *fires*
+/// when every keysym it emits is held; it is then suppressed by any other firing cap that
+/// emits a strict superset (more specific — `n`=C-left beats the plain Ctrl and arrow it
+/// also reports), or by an equal-set emphasized twin (the remapped key beats its
+/// passthrough double, e.g. num-layer `j`=4 over the top-row `4`).
+fn resolve_glow(
+    sets: &[Vec<String>],
+    emph: &[bool],
+    pressed: &std::collections::HashSet<String>,
+) -> Vec<bool> {
+    let fires: Vec<bool> =
+        sets.iter().map(|s| !s.is_empty() && s.iter().all(|x| pressed.contains(x))).collect();
+    let subset = |a: &[String], b: &[String]| a.iter().all(|x| b.contains(x));
+    (0..sets.len())
+        .map(|i| {
+            fires[i]
+                && !(0..sets.len()).any(|j| {
+                    j != i
+                        && fires[j]
+                        && subset(&sets[i], &sets[j])
+                        && (sets[i].len() < sets[j].len()
+                            || (sets[i].len() == sets[j].len() && emph[j] && !emph[i]))
+                })
+        })
+        .collect()
 }
 
 /// Subscribe to live layer state from `keyd listen` on a background thread, pushing
@@ -672,4 +712,62 @@ fn spawn_demo(win: &MainWindow) {
             std::thread::sleep(std::time::Duration::from_millis(260));
         }
     });
+}
+
+#[cfg(test)]
+mod glow_tests {
+    use super::resolve_glow;
+    use std::collections::HashSet;
+
+    fn set(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+    fn held(parts: &[&str]) -> HashSet<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn chord_cap_suppresses_its_subsets() {
+        // nav `n`=C-left (leftcontrol+left), the real Ctrl cap, and `h`=left arrow.
+        let sets = vec![set(&["leftcontrol", "left"]), set(&["leftcontrol"]), set(&["left"])];
+        let emph = vec![true, false, true];
+        let glow = resolve_glow(&sets, &emph, &held(&["leftcontrol", "left"]));
+        assert_eq!(glow, vec![true, false, false], "only the n chord cap glows");
+    }
+
+    #[test]
+    fn plain_ctrl_still_glows_alone() {
+        // Holding only Ctrl: the chord cap can't fire, the Ctrl cap does.
+        let sets = vec![set(&["leftcontrol", "left"]), set(&["leftcontrol"]), set(&["left"])];
+        let emph = vec![true, false, true];
+        let glow = resolve_glow(&sets, &emph, &held(&["leftcontrol"]));
+        assert_eq!(glow, vec![false, true, false]);
+    }
+
+    #[test]
+    fn emphasized_twin_wins_over_passthrough() {
+        // num-layer `j`=4 (emphasized) vs the top-row passthrough `4`.
+        let sets = vec![set(&["4"]), set(&["4"])];
+        let emph = vec![true, false];
+        let glow = resolve_glow(&sets, &emph, &held(&["4"]));
+        assert_eq!(glow, vec![true, false]);
+    }
+
+    #[test]
+    fn shifted_symbol_chord_suppresses_digit_and_shift() {
+        // sym `j`=S-9 (leftshift+9) vs the real Shift cap and the passthrough `9`.
+        let sets = vec![set(&["leftshift", "9"]), set(&["leftshift"]), set(&["9"])];
+        let emph = vec![true, false, false];
+        let glow = resolve_glow(&sets, &emph, &held(&["leftshift", "9"]));
+        assert_eq!(glow, vec![true, false, false]);
+    }
+
+    #[test]
+    fn empty_set_never_glows() {
+        // the held layer-activator carries no output keysym.
+        let sets = vec![Vec::new(), set(&["a"])];
+        let emph = vec![false, false];
+        let glow = resolve_glow(&sets, &emph, &held(&["a"]));
+        assert_eq!(glow, vec![false, true]);
+    }
 }

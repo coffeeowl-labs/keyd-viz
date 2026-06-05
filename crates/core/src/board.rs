@@ -165,22 +165,64 @@ fn canonical(name: &str) -> &str {
     ALIAS.iter().find(|(a, _)| *a == name).map_or(name, |&(_, primary)| primary)
 }
 
-/// The single plain keyd key a binding *emits*, canonicalised to the name `keyd monitor`
-/// prints, used to match the live keypress glow. Returns `None` for actions/combos with
-/// no single output — `macro(...)`, `layer(...)`, modifier chords like `C-c` — which
-/// can't be matched to one cap.
-fn output_key(val: &str) -> Option<String> {
+/// The keyd modifier keysym a `C`/`M`/`A`/`S`/`G` chord prefix expands to (keyd v2.6.0
+/// `keys.c` `modifiers[]`): Ctrl / Super / Alt / Shift / AltGr.
+fn mod_keysym(c: u8) -> Option<&'static str> {
+    Some(match c {
+        b'C' => "leftcontrol",
+        b'M' => "leftmeta",
+        b'A' => "leftalt",
+        b'S' => "leftshift",
+        b'G' => "rightalt",
+        _ => return None,
+    })
+}
+
+/// True for a keyd *shifted* key name (`+`, `:`, `(`, `A`, …) — typing it emits the base
+/// key with Shift held. Generated from the shifted column of keyd v2.6.0 `src/keys.c`.
+fn is_shifted_name(t: &str) -> bool {
+    const SHIFTED: &[&str] = &[
+        "!", "@", "#", "$", "%", "^", "&", "*",
+        "(", ")", "_", "+", "Q", "W", "E", "R",
+        "T", "Y", "U", "I", "O", "P", "{", "}",
+        "A", "S", "D", "F", "G", "H", "J", "K",
+        "L", ":", "\"", "~", "|", "Z", "X", "C",
+        "V", "B", "N", "M", "<", ">", "?",
+    ];
+    SHIFTED.contains(&t)
+}
+
+/// The set of keysyms a binding *emits*, canonicalised to the names `keyd monitor` prints
+/// and joined with `+` for matching the live-keypress glow: `C-left` -> `leftcontrol+left`,
+/// `(` -> `leftshift+9`, `equal` -> `=`. Returns `None` for actions/sequences with no
+/// fixed single-chord output (`macro(...)`, `layer(...)`, a space-separated sequence).
+fn output_chord(val: &str) -> Option<String> {
     let v = val.trim();
     if v.is_empty() || v.contains('(') || v.contains(' ') {
         return None;
     }
-    // keyd modifier chord: one or more `C-`/`M-`/`A-`/`S-`/`G-` prefixes (a bare `-` or
-    // `+` is the minus/equal key, not a chord — keep those).
-    let b = v.as_bytes();
-    if b.len() >= 2 && b[1] == b'-' && matches!(b[0], b'C' | b'M' | b'A' | b'S' | b'G') {
-        return None;
+    // Strip leading `X-` modifier prefixes (keyd: `while (c[1] == '-')`).
+    let mut parts: Vec<&str> = Vec::new();
+    let mut c = v;
+    while c.len() >= 2 && c.as_bytes()[1] == b'-' {
+        let m = mod_keysym(c.as_bytes()[0])?; // unknown prefix => not a plain chord
+        if !parts.contains(&m) {
+            parts.push(m);
+        }
+        c = &c[2..];
     }
-    Some(canonical(v).to_string())
+    if c.is_empty() {
+        return None; // dangling modifiers, no key
+    }
+    // A shifted key name (`(`, `:`, `A`) carries an implicit Shift.
+    if is_shifted_name(c) && !parts.contains(&"leftshift") {
+        parts.push("leftshift");
+    }
+    let key = canonical(c);
+    if !parts.contains(&key) {
+        parts.push(key);
+    }
+    Some(parts.join("+"))
 }
 
 /// The last tap/hold (or momentary) binding for a physical key. Last-wins mirrors
@@ -232,7 +274,7 @@ fn build_base(cfg: &Config, geom: &Geometry) -> Board {
                 Some(tap) => {
                     cap.label = prettify(tap);
                     // A tap emits the tap action; glow on that, not the physical key.
-                    if let Some(out) = output_key(tap) {
+                    if let Some(out) = output_chord(tap) {
                         cap.key = out;
                     }
                     cap.badge_left = Some(Badge {
@@ -247,7 +289,7 @@ fn build_base(cfg: &Config, geom: &Geometry) -> Board {
             cap.label = prettify(val);
             cap.ghost = base_legend(name);
             // Remapped keys emit the remap target; glow matches that, not the physical key.
-            if let Some(out) = output_key(val) {
+            if let Some(out) = output_chord(val) {
                 cap.key = out;
             }
         } else {
@@ -322,7 +364,7 @@ fn build_layer(cfg: &Config, layer: &Layer, geom: &Geometry) -> Board {
             // Glow on what the remapped key emits (a num-layer `j = 4` glows the j-cap
             // when keyd reports `4`). Game/passthrough keys still emit their own key.
             if !is_game {
-                cap.key = output_key(val).unwrap_or_default();
+                cap.key = output_chord(val).unwrap_or_default();
             }
         } else if act_key.as_deref() == Some(nm) {
             cap.label = base_legend(nm);

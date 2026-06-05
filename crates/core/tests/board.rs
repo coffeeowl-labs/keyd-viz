@@ -123,3 +123,28 @@ fn layer_remap_glows_on_output_key() {
     let held = find_cap(num, |v| matches!(v.cap.state, KeyState::Hold)).expect("held key");
     assert_eq!(held.cap.key, "");
 }
+
+#[test]
+fn chord_remaps_emit_full_keysym_set() {
+    // Remaps that emit a modifier chord must carry the whole set keyd reports, so the
+    // glow matches when all of those keysyms are held — and a more-specific cap can
+    // suppress the plain Ctrl / arrow / digit caps it subsumes (handled app-side).
+    let cfg = parse_text(include_str!("../../../examples/hhkb.conf"));
+    let (geom, profile) = layout_for("hhkb.conf");
+    let sheet = Sheet::build(&cfg, "hhkb.conf", &geom, profile);
+
+    // nav: `n = C-left` -> leftcontrol + left (canonical modifier keysym + key).
+    let nav = sheet.boards.iter().find(|b| b.title == "NAV").unwrap();
+    let n = find_cap(nav, |v| v.cap.ghost == "N" && v.cap.emphasized).expect("nav n->C-left cap");
+    assert_eq!(n.cap.key, "leftcontrol+left");
+
+    // sym: `j = S-9` -> leftshift + 9; `m = S-leftbrace` -> leftshift + [ (alt name
+    // canonicalised inside the chord); `u = leftbrace` -> plain [.
+    let sym = sheet.boards.iter().find(|b| b.title == "SYM").unwrap();
+    let j = find_cap(sym, |v| v.cap.ghost == "J" && v.cap.emphasized).expect("sym j->S-9 cap");
+    assert_eq!(j.cap.key, "leftshift+9");
+    let m = find_cap(sym, |v| v.cap.ghost == "M" && v.cap.emphasized).expect("sym m cap");
+    assert_eq!(m.cap.key, "leftshift+[");
+    let u = find_cap(sym, |v| v.cap.ghost == "U" && v.cap.emphasized).expect("sym u cap");
+    assert_eq!(u.cap.key, "[");
+}
