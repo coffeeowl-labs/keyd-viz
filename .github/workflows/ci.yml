@@ -6,28 +6,6 @@ on:
   pull_request:
 
 jobs:
-  # ---- legacy Python tool ------------------------------------------------------
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - run: pip install pytest
-      - run: pytest
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/ruff-action@v3
-
-  # ---- Rust GUI (the active rewrite) ------------------------------------------
   # `core` is pure logic with zero system deps, so it builds anywhere. The `app`
   # crate links Slint (winit + femtovg), which needs the X/Wayland/GL/fontconfig
   # dev libraries below even to compile and run the headless unit tests.
@@ -61,3 +39,21 @@ jobs:
       - run: cargo build -p keydviz
       - run: cargo test -p keydviz --all-targets
       - run: cargo clippy -p keydviz --all-targets -- -D warnings
+
+  # The broker daemon links libsystemd (logind active-session authz), so the runner
+  # needs the systemd dev headers to build and link.
+  rust-helper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install libsystemd dev headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsystemd-dev
+      - run: cargo build -p keydviz-helper
+      - run: cargo test -p keydviz-helper --all-targets
+      - run: cargo clippy -p keydviz-helper --all-targets -- -D warnings
