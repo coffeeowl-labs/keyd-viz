@@ -684,3 +684,13 @@ P4 is the ambitious frontier.
   - **Still open:** (1) read keyd's socket/virtual-evdev **directly** to drop the `keyd` exec — which
     then unlocks the `~@exec` / no-new-process tier of the sandbox; (2) AUR/AppImage packaging that
     bundles install + enable. The service is now installable and is the shipped zero-permission path.
+- *(Phase 4 — drop the `keyd listen` exec, 2026-06-04)* The daemon now follows layers by reading
+  **keyd's control socket directly** instead of spawning `keyd listen`. `helper::keyd_ipc` connects to
+  `/var/run/keyd.socket`, writes keyd's 4112-byte `struct ipc_message` with `type=IPC_LAYER_LISTEN`
+  (verified against keyd v2.6.0 source + live), then reads the one-way `/`,`+`,`-` text stream that
+  `parse_listen_line` already handles — so it's a drop-in for `run_keyd_source(&["listen"])` with our
+  own reconnect loop and no child process. Needs no new permission (the `keyd` group it already has).
+  Verified E2E against a fake keyd socket: correct subscribe bytes, snapshot + layer on/off broadcast
+  to the GUI. **Layers no longer exec anything**; only `keyd monitor` (keypresses, evdev) and the
+  `keyd --version` hello string remain before the layers-only service can take the `~@exec` sandbox
+  tier. `--keyd-socket PATH` overrides the path. Keypress glow (`keyd monitor`) is unchanged.

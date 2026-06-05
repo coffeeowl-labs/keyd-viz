@@ -6,12 +6,12 @@
 //! Option A). The GUI never runs privileged and can only *read* events; it cannot
 //! command the daemon.
 //!
-//! **Security posture** (see the design doc): this is meant to run as a dedicated
-//! non-root system user in groups `keyd` + `input`, caged by a systemd sandbox
-//! (`PrivateNetwork`, read-only input devices, no exec, dropped caps). Today it is the
-//! functional core of that; the sandbox unit + a logind active-session authz check are
-//! the remaining hardening steps. By default it serves **layers only** (no `/dev/input`
-//! access at all — literally not a keylogger); keypresses are opt-in via `--keys`.
+//! **Security posture** (see the design doc): this runs as a dedicated non-root system
+//! user in groups `keyd` + `input`, caged by the systemd sandbox in `packaging/`
+//! (`PrivateNetwork`, read-only FS, dropped caps). By default it serves **layers only**
+//! (no `/dev/input` access at all — literally not a keylogger); keypresses are opt-in via
+//! `--keys`. Layers are read **directly from keyd's control socket** ([`keyd_ipc`], no
+//! child process); keypresses still spawn `keyd monitor` until that's read from evdev too.
 //!
 //! Authz: every connection is gated by the peer uid (`SO_PEERCRED`, kernel-attested).
 //! The default [`Policy::Uid`] serves only the daemon's own uid — the dev / same-user
@@ -20,6 +20,7 @@
 //! lets it run as `keyd-viz` without a shared group or hard-coded uid. See `authz.rs`.
 
 mod authz;
+mod keyd_ipc;
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::io::AsRawFd;
@@ -83,8 +84,31 @@ impl Hub {
     }
 }
 
-/// Spawn `keyd <args…>`, parse each stdout line into a [`LiveEvent`] via `parse`, and
-/// fan it out. Retries on exit/failure — this blocks, so run it on its own thread.
+/// Follow keyd's layer state by reading its **control socket directly** — no child
+/// process. Connect + subscribe ([`keyd_ipc`]), then parse the `/`,`+`,`-` text lines and
+/// fan them out. Reconnects on loss; blocks, so run it on its own thread.
+fn run_keyd_listen(socket: &str, hub: &Arc<Hub>) {
+    loop {
+        match keyd_ipc::connect_layer_listen(socket) {
+            Ok(stream) => {
+                for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                    if let Some(ev) = parse_listen_line(&line) {
+                        let live: LiveEvent = (&ev).into();
+                        hub.broadcast(&live);
+                    }
+                }
+            }
+            Err(e) => eprintln!("keydviz-helperd: cannot connect to keyd socket {socket}: {e}"),
+        }
+        // Stream lost: the layer snapshot is stale — clear it so new clients don't get ghosts.
+        *hub.snapshot.lock().unwrap() = (Vec::new(), None);
+        std::thread::sleep(Duration::from_secs(3));
+    }
+}
+
+/// Spawn `keyd <args…>`, parse each stdout line into a [`LiveEvent`] via `parse`, and fan
+/// it out. Used for keypresses (`keyd monitor`), which reads evdev directly and has no
+/// socket equivalent yet. Retries on exit/failure — blocks, so run it on its own thread.
 fn run_keyd_source(args: &[&str], hub: &Arc<Hub>, parse: impl Fn(&str) -> Option<LiveEvent>) {
     loop {
         match Command::new("keyd")
@@ -104,10 +128,6 @@ fn run_keyd_source(args: &[&str], hub: &Arc<Hub>, parse: impl Fn(&str) -> Option
                 let _ = child.wait();
             }
             Err(e) => eprintln!("keydviz-helperd: cannot spawn `keyd {}`: {e}", args.join(" ")),
-        }
-        // On layer-stream loss the snapshot is stale; clear it so we don't replay ghosts.
-        if args.first() == Some(&"listen") {
-            *hub.snapshot.lock().unwrap() = (Vec::new(), None);
         }
         std::thread::sleep(Duration::from_secs(3));
     }
@@ -141,6 +161,7 @@ fn run_demo(hub: &Arc<Hub>) {
 
 struct Args {
     socket: String,
+    keyd_socket: String,
     keys: bool,
     demo: bool,
     policy: Policy,
@@ -148,6 +169,7 @@ struct Args {
 
 fn parse_args() -> Args {
     let mut socket = default_socket_path();
+    let mut keyd_socket = keyd_ipc::KEYD_SOCKET.to_string();
     let mut keys = false;
     let mut demo = false;
     // Default policy: serve our own uid (dev / same-user). `--uid`/`--active-session`
@@ -157,6 +179,9 @@ fn parse_args() -> Args {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--socket" => socket = it.next().unwrap_or_else(|| die("--socket needs a path")),
+            "--keyd-socket" => {
+                keyd_socket = it.next().unwrap_or_else(|| die("--keyd-socket needs a path"))
+            }
             "--keys" => keys = true,
             "--demo" => demo = true,
             "--active-session" => policy = Policy::ActiveSession,
@@ -170,23 +195,25 @@ fn parse_args() -> Args {
             "-h" | "--help" => {
                 println!(
                     "keydviz-helperd — broker keyd live streams to the GUI over a unix socket\n\n\
-                     Usage: keydviz-helperd [--socket PATH] [--keys] [--demo] \
-                     [--active-session | --uid N]\n\n\
+                     Usage: keydviz-helperd [--socket PATH] [--keyd-socket PATH] [--keys] \
+                     [--demo] [--active-session | --uid N]\n\n\
                      --socket PATH     unix socket to serve (default: {})\n\
+                     --keyd-socket P   keyd control socket to read layers from (default: {})\n\
                      --keys            also broker keypresses (keyd monitor; needs /dev/input). \
                      Default: layers only.\n\
                      --demo            emit synthetic events instead of reading keyd (testing)\n\
                      --active-session  serve the logind active (foreground) session user — the \
                      shipped service mode\n\
                      --uid N           serve only this peer uid (default: own uid)",
-                    default_socket_path()
+                    default_socket_path(),
+                    keyd_ipc::KEYD_SOCKET
                 );
                 std::process::exit(0);
             }
             other => die(&format!("unknown argument: {other}")),
         }
     }
-    Args { socket, keys, demo, policy }
+    Args { socket, keyd_socket, keys, demo, policy }
 }
 
 fn default_socket_path() -> String {
@@ -259,9 +286,8 @@ fn main() {
         eprintln!("keydviz-helperd: demo mode (synthetic events)");
     } else {
         let h = hub.clone();
-        std::thread::spawn(move || {
-            run_keyd_source(&["listen"], &h, |l| parse_listen_line(l).map(|e| (&e).into()))
-        });
+        let keyd_socket = args.keyd_socket.clone();
+        std::thread::spawn(move || run_keyd_listen(&keyd_socket, &h));
         if args.keys {
             let h = hub.clone();
             std::thread::spawn(move || {
