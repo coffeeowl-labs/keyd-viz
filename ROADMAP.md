@@ -395,9 +395,10 @@ Each phase ships standalone value. Build order is fixed; later phases assume ear
 - Hardest phase (privilege + timing). Gated behind the helper from Phase 3.
 
 ### Phase 5 — Tray, summon & distribution
-- System-tray resident; KDE global-shortcut to summon/dismiss; live config reload on `.conf`
-  change.
-- Packaging: AUR + AppImage (Flatpak optional, layer-only).
+- System-tray resident; KDE global-shortcut to summon/dismiss. ~~Live config reload on `.conf`
+  change.~~ **DONE** (§10) — UI-thread mtime poll redraws the board on edit.
+- Packaging: AUR + AppImage (Flatpak optional, layer-only). Helper install scripted
+  (`packaging/install.sh`/`uninstall.sh`, §10); AUR/AppImage still open.
 - README / positioning as "the face of keyd"; rename; publish.
 
 **Value checkpoints:** after P0–1 the tool already beats today's. P3 is the cheap headline.
