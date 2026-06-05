@@ -125,8 +125,12 @@ fn cap_at(slot: &Slot, key: &str) -> KeyCap {
         rx: slot.rx,
         ry: slot.ry,
         // Match the glow against the name `keyd monitor` prints (catalog slots use alt
-        // names like `equal`/`minus`; monitor emits the primary `=`/`-`).
-        key: canonical(key).to_string(),
+        // names like `equal`/`minus`; monitor emits the primary `=`/`-`). Firmware-only
+        // legends (`lower`/`raise`) aren't keyd keys, so they carry no glow key.
+        key: {
+            let c = canonical(key);
+            if is_primary_keysym(c) { c.to_string() } else { String::new() }
+        },
         label: String::new(),
         emphasized: false,
         ghost: String::new(),
@@ -163,6 +167,53 @@ fn canonical(name: &str) -> &str {
         ("prog1", "f21"), ("prog2", "f22"), ("prog3", "f23"), ("prog4", "f24"),
     ];
     ALIAS.iter().find(|(a, _)| *a == name).map_or(name, |&(_, primary)| primary)
+}
+
+/// True if `name` is a keyd *primary* key name — the vocabulary `keyd monitor` actually
+/// prints, and therefore the only kind of token a cap may carry for glow matching.
+/// Generated from the primary column of keyd v2.6.0 `src/keys.c`.
+///
+/// This is a cheap invariant oracle: every keysym a cap claims to emit (each `+`-joined
+/// part of [`KeyCap::key`]) must satisfy this, or it can never light up on a live
+/// keypress — catching alt names (`equal`), shifted names (`(`), and unexpanded chords
+/// (`C-left`) without authoring a layout or pressing a key. (It cannot catch a *valid*
+/// token attributed to the wrong cap — that needs keyd itself as the oracle.)
+pub fn is_primary_keysym(name: &str) -> bool {
+    const PRIMARY: &[&str] = &[
+        "esc", "1", "2", "3", "4", "5", "6", "7",
+        "8", "9", "0", "-", "=", "backspace", "tab", "q",
+        "w", "e", "r", "t", "y", "u", "i", "o",
+        "p", "[", "]", "enter", "leftcontrol", "a", "s", "d",
+        "f", "g", "h", "j", "k", "l", ";", "'",
+        "`", "leftshift", "\\", "z", "x", "c", "v", "b",
+        "n", "m", ",", ".", "/", "rightshift", "kpasterisk", "leftalt",
+        "space", "capslock", "f1", "f2", "f3", "f4", "f5", "f6",
+        "f7", "f8", "f9", "f10", "numlock", "scrolllock", "kp7", "kp8",
+        "kp9", "kpminus", "kp4", "kp5", "kp6", "kpplus", "kp1", "kp2",
+        "kp3", "kp0", "kpdot", "zenkakuhankaku", "102nd", "f11", "f12", "ro",
+        "katakana", "hiragana", "henkan", "katakanahiragana", "muhenkan", "kpjpcomma", "kpenter", "rightcontrol",
+        "kpslash", "sysrq", "rightalt", "linefeed", "home", "up", "pageup", "left",
+        "right", "end", "down", "pagedown", "insert", "delete", "macro", "mute",
+        "volumedown", "volumeup", "power", "kpequal", "kpplusminus", "pause", "scale", "kpcomma",
+        "hangeul", "hanja", "yen", "leftmeta", "rightmeta", "compose", "stop", "again",
+        "props", "undo", "front", "copy", "open", "paste", "find", "cut",
+        "help", "menu", "calc", "setup", "sleep", "wakeup", "file", "sendfile",
+        "deletefile", "xfer", "scrolldown", "scrollup", "www", "msdos", "coffee", "display",
+        "cyclewindows", "mail", "favorites", "computer", "back", "forward", "closecd", "ejectcd",
+        "ejectclosecd", "nextsong", "playpause", "previoussong", "stopcd", "record", "rewind", "phone",
+        "iso", "config", "homepage", "refresh", "exit", "move", "edit", "kpleftparen",
+        "kprightparen", "new", "redo", "f13", "f14", "f15", "f16", "f17",
+        "f18", "f19", "f20", "f21", "f22", "f23", "f24", "playcd",
+        "pausecd", "scrollright", "scrollleft", "dashboard", "suspend", "close", "play", "fastforward",
+        "bassboost", "print", "hp", "camera", "sound", "question", "email", "chat",
+        "search", "connect", "finance", "sport", "shop", "voicecommand", "cancel", "brightnessdown",
+        "brightnessup", "media", "switchvideomode", "kbdillumtoggle", "kbdillumdown", "kbdillumup", "send", "reply",
+        "forwardmail", "save", "documents", "battery", "bluetooth", "wlan", "uwb", "unknown",
+        "next", "prev", "cycle", "auto", "off", "wwan", "rfkill", "micmute",
+        "leftmouse", "rightmouse", "middlemouse", "mouse1", "mouse2", "mouseback", "mouseforward", "fn",
+        "zoom", "noop",
+    ];
+    PRIMARY.contains(&name)
 }
 
 /// The keyd modifier keysym a `C`/`M`/`A`/`S`/`G` chord prefix expands to (keyd v2.6.0
@@ -214,11 +265,14 @@ fn output_chord(val: &str) -> Option<String> {
     if c.is_empty() {
         return None; // dangling modifiers, no key
     }
+    let key = canonical(c);
+    if !is_primary_keysym(key) {
+        return None; // not a real keyd key (layer name, unknown action) -> nothing to glow
+    }
     // A shifted key name (`(`, `:`, `A`) carries an implicit Shift.
     if is_shifted_name(c) && !parts.contains(&"leftshift") {
         parts.push("leftshift");
     }
-    let key = canonical(c);
     if !parts.contains(&key) {
         parts.push(key);
     }

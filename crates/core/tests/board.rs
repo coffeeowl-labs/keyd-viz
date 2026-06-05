@@ -2,7 +2,7 @@
 //! Verifies that keyd bindings translate into the right cap labels, badges,
 //! ghosts, colors, and states — the visual semantics the GUI depends on.
 
-use keydviz_core::board::KeyState;
+use keydviz_core::board::{is_primary_keysym, KeyState};
 use keydviz_core::{layout_for, parse_text, Sheet};
 
 /// Find a cap by physical key index helper: returns the cap whose label/ghost we
@@ -147,4 +147,41 @@ fn chord_remaps_emit_full_keysym_set() {
     assert_eq!(m.cap.key, "leftshift+[");
     let u = find_cap(sym, |v| v.cap.ghost == "U" && v.cap.emphasized).expect("sym u cap");
     assert_eq!(u.cap.key, "[");
+}
+
+/// Invariant net: every keysym any cap claims to emit must be a name `keyd monitor`
+/// actually prints (a keyd *primary* name). Walks every `examples/*.conf` on every
+/// catalog geometry, so a new config or layout is covered automatically — no need to
+/// author a board per combination. Catches alt names (`equal`), shifted names (`(`), and
+/// unexpanded chords (`C-left`) that silently never glow.
+#[test]
+fn every_cap_emits_a_primary_keysym() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
+    let mut checked = 0usize;
+    for entry in std::fs::read_dir(dir).expect("examples dir") {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("conf") {
+            continue;
+        }
+        let cfg = parse_text(&std::fs::read_to_string(&path).unwrap());
+        let src = path.file_name().unwrap().to_str().unwrap();
+        for board_id in keydviz_core::catalog::list() {
+            let geom = keydviz_core::catalog::geometry(board_id.id).unwrap();
+            let sheet = Sheet::build(&cfg, src, &geom, board_id.name);
+            for board in &sheet.boards {
+                for cap in &board.keys {
+                    for tok in cap.key.split('+').filter(|s| !s.is_empty()) {
+                        assert!(
+                            is_primary_keysym(tok),
+                            "{src} [{}] cap {:?} emits non-primary keysym {tok:?} — \
+                             keyd monitor never prints that, so it can't glow",
+                            board.title, cap.label,
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(checked > 0, "no caps checked — examples/ missing?");
 }
