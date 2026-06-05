@@ -11,8 +11,9 @@ makedepends=('cargo')
 options=('!lto' '!debug')
 install="$pkgname.install"
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-# After the GitHub release exists, run `updpkgsums` to replace SKIP with the real hash.
-sha256sums=('SKIP')
+# On each version bump: re-run `updpkgsums` then `makepkg --printsrcinfo > .SRCINFO`
+# (after the matching GitHub release tag exists, so the tarball is downloadable).
+sha256sums=('0e5c9b125dce783af64357f574bd909c9cbe206494a036e1a8880c1a4771266b')
 
 prepare() {
 	cd "$pkgname-$pkgver"
