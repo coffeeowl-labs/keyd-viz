@@ -124,7 +124,9 @@ fn cap_at(slot: &Slot, key: &str) -> KeyCap {
         r: slot.r,
         rx: slot.rx,
         ry: slot.ry,
-        key: key.to_string(),
+        // Match the glow against the name `keyd monitor` prints (catalog slots use alt
+        // names like `equal`/`minus`; monitor emits the primary `=`/`-`).
+        key: canonical(key).to_string(),
         label: String::new(),
         emphasized: false,
         ghost: String::new(),
@@ -135,16 +137,50 @@ fn cap_at(slot: &Slot, key: &str) -> KeyCap {
     }
 }
 
-/// The single plain keyd key a binding *emits*, used to match the live keypress glow
-/// (`keyd monitor` reports the post-remap output keysym, not the physical key). Returns
-/// `None` for actions/combos with no single output — `macro(...)`, `layer(...)`,
-/// modifier chords like `C-c` — which can't be matched to one cap.
+/// keyd's `keycode_table` lists each key as `{ primary, alt, shifted }`, but `keyd
+/// monitor` always prints the **primary** name. Configs (and our catalog slots) freely
+/// use the alt name (`equal`, `minus`, `dot`) or a shifted symbol (`+`, `_`, `:`), so
+/// map any of those to the primary name — otherwise the live-keypress glow can't match
+/// what monitor reports. Generated from keyd v2.6.0 `src/keys.c`; unknown names pass
+/// through unchanged (already primary, or a multi-key action handled elsewhere).
+fn canonical(name: &str) -> &str {
+    const ALIAS: &[(&str, &str)] = &[
+        ("escape", "esc"), ("!", "1"), ("@", "2"), ("#", "3"),
+        ("$", "4"), ("%", "5"), ("^", "6"), ("&", "7"),
+        ("*", "8"), ("(", "9"), (")", "0"), ("minus", "-"),
+        ("_", "-"), ("equal", "="), ("+", "="), ("Q", "q"),
+        ("W", "w"), ("E", "e"), ("R", "r"), ("T", "t"),
+        ("Y", "y"), ("U", "u"), ("I", "i"), ("O", "o"),
+        ("P", "p"), ("leftbrace", "["), ("{", "["), ("rightbrace", "]"),
+        ("}", "]"), ("A", "a"), ("S", "s"), ("D", "d"),
+        ("F", "f"), ("G", "g"), ("H", "h"), ("J", "j"),
+        ("K", "k"), ("L", "l"), ("semicolon", ";"), (":", ";"),
+        ("apostrophe", "'"), ("\"", "'"), ("grave", "`"), ("~", "`"),
+        ("backslash", "\\"), ("|", "\\"), ("Z", "z"), ("X", "x"),
+        ("C", "c"), ("V", "v"), ("B", "b"), ("N", "n"),
+        ("M", "m"), ("comma", ","), ("<", ","), ("dot", "."),
+        (">", "."), ("slash", "/"), ("?", "/"), ("bookmarks", "favorites"),
+        ("prog1", "f21"), ("prog2", "f22"), ("prog3", "f23"), ("prog4", "f24"),
+    ];
+    ALIAS.iter().find(|(a, _)| *a == name).map_or(name, |&(_, primary)| primary)
+}
+
+/// The single plain keyd key a binding *emits*, canonicalised to the name `keyd monitor`
+/// prints, used to match the live keypress glow. Returns `None` for actions/combos with
+/// no single output — `macro(...)`, `layer(...)`, modifier chords like `C-c` — which
+/// can't be matched to one cap.
 fn output_key(val: &str) -> Option<String> {
     let v = val.trim();
-    if v.is_empty() || v.contains(['(', ' ', '-', '+']) {
+    if v.is_empty() || v.contains('(') || v.contains(' ') {
         return None;
     }
-    Some(v.to_string())
+    // keyd modifier chord: one or more `C-`/`M-`/`A-`/`S-`/`G-` prefixes (a bare `-` or
+    // `+` is the minus/equal key, not a chord — keep those).
+    let b = v.as_bytes();
+    if b.len() >= 2 && b[1] == b'-' && matches!(b[0], b'C' | b'M' | b'A' | b'S' | b'G') {
+        return None;
+    }
+    Some(canonical(v).to_string())
 }
 
 /// The last tap/hold (or momentary) binding for a physical key. Last-wins mirrors

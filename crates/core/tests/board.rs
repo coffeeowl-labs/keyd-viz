@@ -103,6 +103,22 @@ fn layer_remap_glows_on_output_key() {
     let four = find_cap(num, |v| v.cap.emphasized && v.cap.label == "4").expect("num j->4 cap");
     assert_eq!(four.cap.key, "4");
 
+    // Symbol remaps: the config uses keyd's alt name (`p = equal`), but monitor prints
+    // the primary `=`. The cap must carry the primary so it glows. Likewise `slash = dot`
+    // emits `.` and `semicolon = minus` emits `-` — and no cap keeps the alt name.
+    let p = find_cap(num, |v| v.cap.ghost == "P" && v.cap.emphasized).expect("num p->equal cap");
+    assert_eq!(p.cap.key, "=");
+    assert!(find_cap(num, |v| v.cap.key == "-").is_some(), "semicolon->minus glows on -");
+    assert!(find_cap(num, |v| v.cap.key == ".").is_some(), "slash->dot glows on .");
+    for alt in ["equal", "minus", "dot", "semicolon"] {
+        assert!(find_cap(num, |v| v.cap.key == alt).is_none(), "{alt} should canonicalise");
+    }
+
+    // Base-layer passthrough also canonicalises: the `=` cap glows on monitor's `=`.
+    let base = &sheet.boards[0];
+    assert!(find_cap(base, |v| v.cap.key == "=").is_some(), "base = key glows on =");
+    assert!(find_cap(base, |v| v.cap.key == "equal").is_none());
+
     // The key you hold to reach the layer emits nothing, so it never glows.
     let held = find_cap(num, |v| matches!(v.cap.state, KeyState::Hold)).expect("held key");
     assert_eq!(held.cap.key, "");
