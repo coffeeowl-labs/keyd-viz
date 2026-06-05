@@ -531,8 +531,10 @@ P4 is the ambitious frontier.
     maps straight onto a cap — no evdev keycode table needed (layouts are already keyed by keyd
     names).
   - App: `spawn_monitor` maintains a pressed-key set → **live glow** (brighter fill, cyan ring,
-    white label) and **follows the last-pressed keyboard** via a `vendor:product → sheet` map
-    built during detection. `render_board()` now centralizes board selection + glow stamping;
+    white label). *(Auto-follow-the-last-pressed-keyboard was attempted here via a
+    `vendor:product → sheet` map but **does not work for keyd-managed keyboards** — see the
+    2026-06-04 entry below; a manual keyboard switcher replaced it.)* `render_board()` now
+    centralizes board selection + glow stamping;
     both the listen and monitor streams feed it through window-property state (kept on the UI
     thread, since Slint models aren't `Send`). Status pill gained a **"LIVE keys"** state for
     when monitor works but the `keyd`-group layer socket doesn't. `--demo` sweeps a glowing key
@@ -606,3 +608,34 @@ P4 is the ambitious frontier.
     boards. Per the user, this only comes back if users actually request it — the curated library
     covers the common case and `--qmk-info` covers the long tail, so the bespoke path isn't worth
     the click-to-edit UI cost on spec. (Was the last open Phase 2 item.)
+
+- *(Phase 4 — keypress correctness + manual keyboard switcher, 2026-06-04)* Made the live glow
+  actually correct, and replaced the (impossible) auto-follow with a manual switcher.
+  - **Auto-follow-the-last-pressed-keyboard is impossible from stock keyd IPC.** keyd grabs each
+    managed keyboard (`EVIOCGRAB`) and re-emits everything through **one virtual device**
+    (`0fac:0ade`), so `keyd monitor` reports every grabbed keyboard's presses under that single
+    id — the physical source is gone. `listen` carries no device id either. So with multiple
+    keyboards the view can't auto-switch on typing. Built a **manual keyboard-switcher** (chip row,
+    `on_pick_keyboard`) as the robust stopgap; unmapped-device key events glow on the shown board
+    (`monitor::next_press_state`). True auto-follow needs an upstream keyd patch to expose
+    `active_kbd` (see §4.2). Recorded in memory `keyd-monitor-virtual-device`.
+  - **Glow correctness — caps glow on what keyd *emits*, not the physical key.** `keyd monitor`
+    reports the **post-remap output keysym set**, so each cap now carries the keyd key(s) it emits:
+    (1) layer/base remaps glow on their target (num `j = 4` glows the j-cap on `4`, not the top-row
+    4); (2) names are canonicalised to keyd's **primary** vocabulary (`monitor` prints `=`/`-`/`;`,
+    not the config's `equal`/`minus`/`semicolon`); (3) modifier chords/shifted names expand to the
+    full set (`C-left` → `leftcontrol+left`, `S-9` → `leftshift+9`) and match by set-containment,
+    with a more-specific cap suppressing the plain Ctrl/arrow/digit it subsumes (`resolve_glow`);
+    (4) right modifiers fold to their left twin (keyd re-emits `MOD_SHIFT`→leftshift etc.); (5) only
+    real keyd keys get a glow key — firmware legends (`lower`/`raise`) and layer names carry none.
+    Also fixed HHKB bottom-row Meta/Alt ordering. Recorded in memory `keyd-monitor-primary-keysym`.
+  - **Validation without hand-authored layouts:** a committed pure-Rust invariant test
+    (`is_primary_keysym`) walks every `examples/*.conf` × every catalog geometry asserting each
+    cap's keysym is one `keyd monitor` can print (caught the firmware-legend slots). Plus a
+    **one-time differential sweep** drove keyd's offline `test-io` as the oracle across every key on
+    every layer — **343 keys confirmed** against the real keyd engine, which is also what surfaced
+    the right-modifier fold. Sweep scaffolding was throwaway (not committed); the invariant test is
+    the kept regression net.
+  - Workspace: 57 tests green, clippy clean.
+  - **Still open in Phase 4:** the **privileged helper** (the §1 zero-manual-permission
+    requirement) — unchanged from below; everything here is source-agnostic and slots behind it.
