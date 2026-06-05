@@ -639,3 +639,32 @@ P4 is the ambitious frontier.
   - Workspace: 57 tests green, clippy clean.
   - **Still open in Phase 4:** the **privileged helper** (the §1 zero-manual-permission
     requirement) — unchanged from below; everything here is source-agnostic and slots behind it.
+
+- *(Phase 4 — brokering helper daemon, functional core, 2026-06-04)* The §1 zero-permission
+  mechanism — built per `docs/helper-design.md` Option A. Decision recorded in memory
+  `helper-design-decided` (non-root, sandboxed, layers-default/keypresses-opt-in).
+  - **`core::live`** — moved the pure keyd listen/monitor parsers + active-layer reducer out of
+    `app` into core so the GUI and daemon share identical parsing, and added **`LiveEvent`**: the
+    one-JSON-object-per-line, **events-out-only** wire protocol (`hello`/`layer`/`key`/`device`)
+    with `From` conversions + `as_layer`/`as_monitor` accessors. `app::layer`/`monitor` keep only
+    the spawn loops + the UI-side `next_press_state`.
+  - **`crates/helper` (`keydviz-helperd`)** — reads keyd's listen/monitor streams, converts to
+    `LiveEvent`, and fans out to clients over a unix socket. **Events-out-only**; peer-uid authz via
+    `SO_PEERCRED` (serves own uid or `--uid N`); socket `chmod 0600`. **Layers-only by default** (no
+    `/dev/input` — not a keylogger); `--keys` opts into keypresses. Tracks a layer snapshot and
+    replays it to late-joining clients. `--demo` emits synthetic events for testing without keyd.
+    Deps: core + libc only (tiny by design). Verified E2E in `--demo`: client reads hello/layer/key;
+    a mismatched-uid client is rejected (0 bytes, logged).
+  - **`app::helper`** — the GUI prefers the broker socket when present (or forced via
+    `--helper-socket`/`$KEYDVIZ_HELPER_SOCKET`), reading one `LiveEvent` stream for both layers and
+    glow; falls back to spawning `keyd` directly when the helper isn't running. Socket path mirrors
+    the daemon's default so they meet with no config.
+  - Workspace: 62 tests green, clippy clean. **Dev test:** `keydviz-helperd --demo` + `keydviz`
+    shows the board morphing + glow driven entirely through the socket, no keyd perms needed.
+  - **Still open (productionization):** (1) **logind active-session authz** + socket perms so the
+    daemon can run as a dedicated `keyd-viz` system user yet serve the desktop user (the current
+    same-uid authz is the dev model); (2) the **systemd sandbox unit** (`PrivateNetwork`,
+    `DeviceAllow=/dev/input/event* r`, no-exec, drop caps — the security model in the design doc);
+    (3) read keyd's socket/virtual-evdev **directly** to drop the `keyd` exec; (4) AUR/AppImage
+    packaging that installs + enables it. Until (1)+(2) land, the helper is dev-functional
+    (same-user) but not yet the shipped zero-permission system service.
