@@ -1,8 +1,8 @@
 # keyd-viz — native Rust + Slint GUI for keyd. See ROADMAP.md for the full plan.
 #
-# `core` is pure, dependency-free keyd logic (parser, prettifier, layouts) and is
-# always offline-buildable. The `app` (Slint UI) crate is added to this member list
-# once its GUI dependencies are wired up.
+# `core` is pure, dependency-free keyd logic (parser, prettifier, layouts), always
+# offline-buildable; `app` is the Slint GUI; `helper` is the broker daemon that streams
+# keyd's live state to the GUI over a sandboxed unix socket.
 [workspace]
 resolver = "2"
 members = ["crates/core", "crates/app", "crates/helper"]

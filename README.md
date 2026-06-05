@@ -1,4 +1,4 @@
-# keyd-cheatsheet
+# keyd-viz
 
 [![CI](https://github.com/coffeeowl-labs/keyd-cheatsheet/actions/workflows/ci.yml/badge.svg)](https://github.com/coffeeowl-labs/keyd-cheatsheet/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -65,6 +65,9 @@ installed it falls back to reading keyd directly (which needs membership in the 
 groups); the helper is the recommended zero-permission path.
 
 ## Usage
+
+These assume `keydviz` is on your `PATH` (`cargo install --path crates/app` drops it in
+`~/.cargo/bin`); otherwise run `./target/release/keydviz`.
 
 ```sh
 keydviz                          # detect connected keyboards, show their /etc/keyd configs
