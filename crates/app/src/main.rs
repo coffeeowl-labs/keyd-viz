@@ -473,6 +473,21 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
+    // Keyboard switcher: manually show a different detected keyboard's board. keyd
+    // aggregates keyboards into one virtual device, so the keypress stream can't
+    // auto-follow which one you're on — this is the manual flip.
+    {
+        let weak = win.as_weak();
+        win.on_pick_keyboard(move |idx| {
+            let Some(win) = weak.upgrade() else { return };
+            if let Some(sheet) = win.get_sheets().row_data(idx as usize) {
+                win.set_active_index(idx);
+                win.set_active_sheet(sheet);
+                render_board(&win);
+            }
+        });
+    }
+
     if std::env::args().any(|a| a == "--demo") {
         spawn_demo(&win);
     } else {

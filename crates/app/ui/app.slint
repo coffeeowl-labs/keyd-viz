@@ -267,6 +267,8 @@ export component MainWindow inherits Window {
     in property <[LayoutChoice]> layouts;
     // The user picked a physical layout for the active keyboard (id of the choice).
     callback pick_layout(string);
+    // The user picked which detected keyboard to show (index into `sheets`).
+    callback pick_keyboard(int);
 
     ScrollView {
         VerticalLayout {
@@ -322,6 +324,44 @@ export component MainWindow inherits Window {
                 Text { text: "HOLD = key you hold for a layer"; color: #9aa7b8; font-size: 12px; }
                 Text { text: "orange = plain remap"; color: #9aa7b8; font-size: 12px; }
                 Text { text: "\u{21e7}\u{21e7} = both-shift chord"; color: #9aa7b8; font-size: 12px; }
+            }
+
+            // keyboard switcher: pick which detected keyboard to view. Shown only with
+            // 2+ keyboards (keyd merges them into one virtual device, so the view can't
+            // auto-follow the last-pressed one — this is the manual way to flip boards).
+            if root.sheets.length > 1: HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                padding-top: 4px;
+                Text {
+                    text: "keyboard";
+                    color: #7d8694;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+                for sheet[idx] in root.sheets: Rectangle {
+                    property <bool> sel: idx == root.active_index;
+                    width: kb.preferred-width + 18px;
+                    height: kb.preferred-height + 8px;
+                    border-radius: 7px;
+                    background: sel ? #3ddc84 : (kta.has-hover ? #1b2129 : #161b22);
+                    border-width: 1px;
+                    border-color: sel ? #3ddc84 : #2a3340;
+                    kta := TouchArea {
+                        clicked => {
+                            root.pick_keyboard(idx);
+                        }
+                    }
+                    kb := Text {
+                        x: 9px;
+                        y: 4px;
+                        text: sheet.device != "" ? sheet.device : sheet.name;
+                        color: sel ? #11151c : #cfd6df;
+                        font-size: 12px;
+                        font-weight: sel ? 700 : 400;
+                        font-family: "JetBrains Mono";
+                    }
+                }
             }
 
             // The active keyboard, and its one morphing board. Header from the active
