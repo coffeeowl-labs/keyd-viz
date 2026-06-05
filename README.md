@@ -12,8 +12,6 @@ layout. Once you have a few tap/hold layers going, it's easy to forget what `hol
 `hold f` actually does. keyd-viz parses your `.conf` files, draws them, and then shows the live
 state as you type.
 
-![screenshot](docs/screenshot.png)
-
 ## What it does
 
 - **Draws your real layout** from `/etc/keyd/*.conf` — a base board plus one board per layer, with

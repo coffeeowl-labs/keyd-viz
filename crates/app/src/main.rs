@@ -291,7 +291,9 @@ fn gather_sheets() -> Detection {
     let mut i = 0;
     while i < raw.len() {
         match raw[i].as_str() {
-            "--layout" => i += 2,
+            // value-flags: skip the flag *and* its argument so the value isn't picked up
+            // as a positional config path.
+            "--layout" | "--helper-socket" => i += 2,
             a if a.starts_with('-') => i += 1,
             a => {
                 args.push(PathBuf::from(a));
@@ -497,9 +499,9 @@ fn main() -> Result<(), slint::PlatformError> {
         // or `$KEYDVIZ_HELPER_SOCKET` overrides the path and forces the broker source
         // (then it retries until the daemon comes up). For auto-discovery we probe
         // liveness, not mere file existence, so a stale socket can't strand us.
-        let socket = flag_value("--helper-socket").unwrap_or_else(helper::socket_path);
-        let forced = flag_value("--helper-socket").is_some()
-            || std::env::var("KEYDVIZ_HELPER_SOCKET").is_ok();
+        let helper_flag = flag_value("--helper-socket");
+        let socket = helper_flag.clone().unwrap_or_else(helper::socket_path);
+        let forced = helper_flag.is_some() || std::env::var("KEYDVIZ_HELPER_SOCKET").is_ok();
         if forced || helper::is_live(&socket) {
             spawn_helper(&win, socket);
         } else {

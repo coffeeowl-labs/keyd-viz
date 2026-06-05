@@ -197,7 +197,7 @@ pub fn is_primary_keysym(name: &str) -> bool {
         "space", "capslock", "f1", "f2", "f3", "f4", "f5", "f6",
         "f7", "f8", "f9", "f10", "numlock", "scrolllock", "kp7", "kp8",
         "kp9", "kpminus", "kp4", "kp5", "kp6", "kpplus", "kp1", "kp2",
-        "kp3", "kp0", "kpdot", "zenkakuhankaku", "102nd", "f11", "f12", "ro",
+        "kp3", "kp0", "kpdot", "iso-level3-shift", "zenkakuhankaku", "102nd", "f11", "f12", "ro",
         "katakana", "hiragana", "henkan", "katakanahiragana", "muhenkan", "kpjpcomma", "kpenter", "rightcontrol",
         "kpslash", "sysrq", "rightalt", "linefeed", "home", "up", "pageup", "left",
         "right", "end", "down", "pagedown", "insert", "delete", "macro", "mute",

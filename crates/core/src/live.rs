@@ -1,12 +1,14 @@
 //! Live event model shared by the GUI and the brokering helper daemon.
 //!
-//! Two keyd text streams feed the live view:
-//! - `keyd listen` — layer transitions (`+name`/`-name`/`/layout`), via the keyd socket.
-//! - `keyd monitor` — keypresses + device hotplug, via `/dev/input`.
+//! Two keyd text formats drive the live view, parsed here:
+//! - layer transitions (`+name`/`-name`/`/layout`) — read from keyd's control socket (the
+//!   helper) or `keyd listen` stdout (the GUI's direct fallback).
+//! - keypresses + device hotplug (`keyd monitor` output) — used by the GUI's direct
+//!   fallback; the helper reads these from `/dev/input` (evdev) and builds events directly.
 //!
 //! This module holds the **pure** parsers for both ([`parse_listen_line`],
 //! [`parse_monitor_line`]) and the layer-stack reducer ([`ActiveLayers`]) — no I/O, so
-//! the GUI and the helper share identical parsing. It also defines [`LiveEvent`], the
+//! every source shares identical parsing. It also defines [`LiveEvent`], the
 //! one-event-per-line **JSON wire protocol** the helper emits and the GUI consumes
 //! (`events out only`, ROADMAP §5 / `docs/helper-design.md`).
 

@@ -40,7 +40,6 @@ struct Hub {
     /// Active layer stack (most recent last) + current layout, mirrored from the stream
     /// so we can replay a snapshot to new clients.
     snapshot: Mutex<(Vec<String>, Option<String>)>,
-    keyd_version: String,
 }
 
 impl Hub {
@@ -64,7 +63,9 @@ impl Hub {
     /// Register a new client: greet it, then replay the current layer snapshot so its
     /// view is immediately correct.
     fn add_client(&self, mut stream: UnixStream) {
-        let hello = LiveEvent::Hello { keyd: self.keyd_version.clone() };
+        // We no longer probe keyd's version (would need an exec); the field just marks
+        // the stream open. keyd's presence is implied by the layer events that follow.
+        let hello = LiveEvent::Hello { keyd: String::new() };
         if stream.write_all(hello.to_line().as_bytes()).is_err() {
             return;
         }

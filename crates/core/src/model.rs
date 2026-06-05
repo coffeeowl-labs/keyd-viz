@@ -61,9 +61,4 @@ impl Config {
     pub fn remap(&self, key: &str) -> Option<&str> {
         self.remaps.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
     }
-
-    /// True if `key` has a plain remap.
-    pub fn has_remap(&self, key: &str) -> bool {
-        self.remaps.iter().any(|(k, _)| k == key)
-    }
 }
