@@ -1,0 +1,281 @@
+//! keyd-viz brokering daemon (`keydviz-helperd`).
+//!
+//! Reads keyd's live streams and re-exposes them to the unprivileged GUI as a
+//! one-directional [`LiveEvent`] stream over a unix socket — the mechanism that
+//! delivers ROADMAP §1's "zero manual permission setup" (`docs/helper-design.md`,
+//! Option A). The GUI never runs privileged and can only *read* events; it cannot
+//! command the daemon.
+//!
+//! **Security posture** (see the design doc): this is meant to run as a dedicated
+//! non-root system user in groups `keyd` + `input`, caged by a systemd sandbox
+//! (`PrivateNetwork`, read-only input devices, no exec, dropped caps). Today it is the
+//! functional core of that; the sandbox unit + a logind active-session authz check are
+//! the remaining hardening steps. By default it serves **layers only** (no `/dev/input`
+//! access at all — literally not a keylogger); keypresses are opt-in via `--keys`.
+//!
+//! Authz (interim): a connecting client is accepted only if its peer uid (`SO_PEERCRED`)
+//! matches the daemon's own uid (or `--uid <N>`). Production replaces this with a logind
+//! "owns the active graphical session" check so the daemon can run as `keyd-viz` yet
+//! serve the desktop user.
+
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::io::AsRawFd;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use keydviz_core::live::{parse_listen_line, parse_monitor_line, LayerAction, LiveEvent};
+
+/// Connected clients plus the current layer snapshot, so a late-joining GUI is brought
+/// up to date instead of waiting for the next transition.
+#[derive(Default)]
+struct Hub {
+    clients: Mutex<Vec<UnixStream>>,
+    /// Active layer stack (most recent last) + current layout, mirrored from the stream
+    /// so we can replay a snapshot to new clients.
+    snapshot: Mutex<(Vec<String>, Option<String>)>,
+    keyd_version: String,
+}
+
+impl Hub {
+    /// Fan one event out to every client, dropping any that error. Layer events also
+    /// update the replay snapshot.
+    fn broadcast(&self, ev: &LiveEvent) {
+        if let LiveEvent::Layer { action, name } = ev {
+            let (stack, layout) = &mut *self.snapshot.lock().unwrap();
+            match action {
+                LayerAction::On if !stack.contains(name) => stack.push(name.clone()),
+                LayerAction::Off => stack.retain(|n| n != name),
+                LayerAction::Layout => *layout = Some(name.clone()),
+                LayerAction::On => {}
+            }
+        }
+        let line = ev.to_line();
+        let mut clients = self.clients.lock().unwrap();
+        clients.retain_mut(|c| c.write_all(line.as_bytes()).and_then(|_| c.flush()).is_ok());
+    }
+
+    /// Register a new client: greet it, then replay the current layer snapshot so its
+    /// view is immediately correct.
+    fn add_client(&self, mut stream: UnixStream) {
+        let hello = LiveEvent::Hello { keyd: self.keyd_version.clone() };
+        if stream.write_all(hello.to_line().as_bytes()).is_err() {
+            return;
+        }
+        let (stack, layout) = self.snapshot.lock().unwrap().clone();
+        if let Some(name) = layout {
+            let _ = stream.write_all(
+                LiveEvent::Layer { action: LayerAction::Layout, name }.to_line().as_bytes(),
+            );
+        }
+        for name in stack {
+            let line = LiveEvent::Layer { action: LayerAction::On, name }.to_line();
+            if stream.write_all(line.as_bytes()).is_err() {
+                return;
+            }
+        }
+        self.clients.lock().unwrap().push(stream);
+    }
+}
+
+/// Spawn `keyd <args…>`, parse each stdout line into a [`LiveEvent`] via `parse`, and
+/// fan it out. Retries on exit/failure — this blocks, so run it on its own thread.
+fn run_keyd_source(args: &[&str], hub: &Arc<Hub>, parse: impl Fn(&str) -> Option<LiveEvent>) {
+    loop {
+        match Command::new("keyd")
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                if let Some(out) = child.stdout.take() {
+                    for line in BufReader::new(out).lines().map_while(Result::ok) {
+                        if let Some(ev) = parse(&line) {
+                            hub.broadcast(&ev);
+                        }
+                    }
+                }
+                let _ = child.wait();
+            }
+            Err(e) => eprintln!("keydviz-helperd: cannot spawn `keyd {}`: {e}", args.join(" ")),
+        }
+        // On layer-stream loss the snapshot is stale; clear it so we don't replay ghosts.
+        if args.first() == Some(&"listen") {
+            *hub.snapshot.lock().unwrap() = (Vec::new(), None);
+        }
+        std::thread::sleep(Duration::from_secs(3));
+    }
+}
+
+/// Synthetic source for testing the socket/protocol without keyd access (`--demo`):
+/// cycles a few layers and taps a key, so a connected GUI shows live activity.
+fn run_demo(hub: &Arc<Hub>) {
+    let layers = ["nav", "num", "sym"];
+    let key = |k: &str, action| LiveEvent::Key {
+        devid: "0fac:0ade".into(),
+        device: "demo keyboard".into(),
+        key: k.into(),
+        action,
+    };
+    use keydviz_core::live::KeyAction::{Down, Up};
+    loop {
+        for layer in layers {
+            hub.broadcast(&LiveEvent::Layer { action: LayerAction::On, name: layer.into() });
+            std::thread::sleep(Duration::from_millis(900));
+            for k in ["j", "k", "l"] {
+                hub.broadcast(&key(k, Down));
+                std::thread::sleep(Duration::from_millis(250));
+                hub.broadcast(&key(k, Up));
+            }
+            hub.broadcast(&LiveEvent::Layer { action: LayerAction::Off, name: layer.into() });
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+}
+
+struct Args {
+    socket: String,
+    keys: bool,
+    demo: bool,
+    uid: u32,
+}
+
+fn parse_args() -> Args {
+    let mut socket = default_socket_path();
+    let mut keys = false;
+    let mut demo = false;
+    // SAFETY: getuid is always safe; it just reads the caller's real uid.
+    let mut uid = unsafe { libc::getuid() };
+    let mut it = std::env::args().skip(1);
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--socket" => socket = it.next().unwrap_or_else(|| die("--socket needs a path")),
+            "--keys" => keys = true,
+            "--demo" => demo = true,
+            "--uid" => {
+                uid = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| die("--uid needs a number"));
+            }
+            "-h" | "--help" => {
+                println!(
+                    "keydviz-helperd — broker keyd live streams to the GUI over a unix socket\n\n\
+                     Usage: keydviz-helperd [--socket PATH] [--keys] [--demo] [--uid N]\n\n\
+                     --socket PATH  unix socket to serve (default: {})\n\
+                     --keys         also broker keypresses (keyd monitor; needs /dev/input). \
+                     Default: layers only.\n\
+                     --demo         emit synthetic events instead of reading keyd (testing)\n\
+                     --uid N        only serve clients with this peer uid (default: own uid)",
+                    default_socket_path()
+                );
+                std::process::exit(0);
+            }
+            other => die(&format!("unknown argument: {other}")),
+        }
+    }
+    Args { socket, keys, demo, uid }
+}
+
+fn default_socket_path() -> String {
+    match std::env::var("XDG_RUNTIME_DIR") {
+        Ok(dir) if !dir.is_empty() => format!("{dir}/keyd-viz.sock"),
+        _ => "/run/keyd-viz.sock".to_string(),
+    }
+}
+
+fn die(msg: &str) -> ! {
+    eprintln!("keydviz-helperd: {msg}");
+    std::process::exit(2);
+}
+
+/// The connecting client's uid via `SO_PEERCRED` — the kernel-attested peer identity,
+/// unforgeable by the client. `None` if the lookup fails. (`UnixStream::peer_cred` would
+/// do this, but it's still unstable on stable Rust, so we read the sockopt directly.)
+fn peer_uid(stream: &UnixStream) -> Option<u32> {
+    // SAFETY: zeroed ucred is a valid initial value; getsockopt fills it and we pass the
+    // matching buffer size. We only read `cred.uid` on success (ret == 0).
+    let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let ret = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut cred as *mut libc::ucred as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    (ret == 0).then_some(cred.uid)
+}
+
+/// Best-effort keyd version string for the `hello` event (empty if keyd isn't runnable).
+fn keyd_version() -> String {
+    Command::new("keyd")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+fn main() {
+    let args = parse_args();
+
+    // Fresh socket: clear any stale node, bind, and lock perms to the owner only.
+    let _ = std::fs::remove_file(&args.socket);
+    let listener = match UnixListener::bind(&args.socket) {
+        Ok(l) => l,
+        Err(e) => die(&format!("cannot bind {}: {e}", args.socket)),
+    };
+    if let Err(e) = std::fs::set_permissions(
+        &args.socket,
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    ) {
+        eprintln!("keydviz-helperd: warning: cannot chmod socket: {e}");
+    }
+
+    let hub = Arc::new(Hub { keyd_version: keyd_version(), ..Default::default() });
+
+    // Event sources on background threads.
+    if args.demo {
+        let hub = hub.clone();
+        std::thread::spawn(move || run_demo(&hub));
+        eprintln!("keydviz-helperd: demo mode (synthetic events)");
+    } else {
+        let h = hub.clone();
+        std::thread::spawn(move || {
+            run_keyd_source(&["listen"], &h, |l| parse_listen_line(l).map(|e| (&e).into()))
+        });
+        if args.keys {
+            let h = hub.clone();
+            std::thread::spawn(move || {
+                run_keyd_source(&["monitor"], &h, |l| parse_monitor_line(l).map(|e| (&e).into()))
+            });
+            eprintln!("keydviz-helperd: layers + keypresses");
+        } else {
+            eprintln!("keydviz-helperd: layers only (pass --keys to broker keypresses)");
+        }
+    }
+
+    eprintln!("keydviz-helperd: serving {} (uid {})", args.socket, args.uid);
+
+    // Accept loop: peer-uid authz, then register the client for fan-out.
+    for stream in listener.incoming() {
+        let stream = match stream {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("keydviz-helperd: accept error: {e}");
+                continue;
+            }
+        };
+        match peer_uid(&stream) {
+            Some(uid) if uid == args.uid => hub.add_client(stream),
+            Some(uid) => eprintln!("keydviz-helperd: rejected client uid {uid}"),
+            None => eprintln!("keydviz-helperd: no peer creds, rejecting client"),
+        }
+    }
+}

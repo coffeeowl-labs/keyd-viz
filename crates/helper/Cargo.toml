@@ -1,0 +1,17 @@
+[package]
+name = "keydviz-helper"
+version = "0.1.0"
+description = "keyd-viz brokering daemon — re-exposes keyd's layer/keypress streams to the unprivileged GUI over a locked-down unix socket."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "keydviz-helperd"
+path = "src/main.rs"
+
+# core for the shared parsers + wire protocol; libc only for getuid() (peer-uid authz).
+# Deliberately tiny: this is the security-critical, would-be-privileged component.
+[dependencies]
+keydviz-core = { path = "../core" }
+libc = "0.2"
