@@ -26,7 +26,6 @@ mod keyd_ipc;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -222,17 +221,6 @@ fn peer_uid(stream: &UnixStream) -> Option<u32> {
     (ret == 0).then_some(cred.uid)
 }
 
-/// Best-effort keyd version string for the `hello` event (empty if keyd isn't runnable).
-fn keyd_version() -> String {
-    Command::new("keyd")
-        .arg("--version")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default()
-}
-
 fn main() {
     let args = parse_args();
 
@@ -251,7 +239,10 @@ fn main() {
         eprintln!("keydviz-helperd: warning: cannot chmod socket: {e}");
     }
 
-    let hub = Arc::new(Hub { keyd_version: keyd_version(), ..Default::default() });
+    // We no longer exec `keyd --version` (or any binary) — the hello's keyd field is left
+    // empty; keyd's presence is implied by the layer stream. Staying exec-free lets the
+    // unit deny execve entirely (see packaging/systemd/keydviz-helperd.service).
+    let hub = Arc::new(Hub::default());
 
     // Event sources on background threads.
     if args.demo {

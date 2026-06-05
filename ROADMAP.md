@@ -705,3 +705,14 @@ P4 is the ambitious frontier.
   the num/nav layers, `leftcontrol`+`c` chord intact) — identical to `keyd monitor`. **The daemon now
   spawns no `keyd` children at all**; only the cosmetic `keyd --version` hello exec remains before the
   full service can take the `~@exec`/no-new-process sandbox tier.
+- *(Phase 4 — exec-free daemon + no-exec sandbox tier, 2026-06-04)* Dropped the last exec (`keyd
+  --version` for the hello string; the GUI never used it, and keyd's presence is implied by the layer
+  stream). The daemon now execs **nothing** in any mode, so the unit denies it outright:
+  `SystemCallFilter=~execve execveat` + `MemoryDenyWriteExecute=yes` on the base service — a
+  code-exec foothold can't spawn a shell or map writable+executable memory, on top of the existing
+  no-network / read-only-FS / dropped-caps cage. The keypresses drop-in tightened to
+  `DeviceAllow=char-input r` (our evdev reader opens read-only, unlike `keyd monitor`'s O_RDWR). The
+  service no longer depends on the `keyd` binary at runtime at all (it talks to keyd's socket + evdev
+  device directly). Unit re-verified with `systemd-analyze verify`; needs a reinstall + restart on the
+  target to confirm the daemon runs clean under the tightened seccomp. **This completes the helper's
+  security hardening** — remaining work is just AUR/AppImage packaging.

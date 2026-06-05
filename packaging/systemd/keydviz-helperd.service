@@ -28,11 +28,13 @@ Restart=on-failure
 RestartSec=2
 
 # --- Sandbox -------------------------------------------------------------------------
-# A compromise of this box must stay keystroke-*read*-only, with no network and no
-# escalation. (It still spawns `keyd listen`/`keyd monitor`, so exec is NOT yet blocked;
-# the `~@exec` / no-new-process lockdown lands once the daemon reads keyd's socket and
-# virtual evdev directly — see docs/helper-design.md.)
+# A compromise of this box must stay keystroke-*read*-only, with no network, no
+# escalation, and no ability to run another program. The daemon reads keyd's control
+# socket + virtual evdev directly and spawns NOTHING, so we deny execve outright and
+# forbid writable+executable memory — a code-exec foothold has nowhere to go.
 NoNewPrivileges=yes
+SystemCallFilter=~execve execveat
+MemoryDenyWriteExecute=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
 # No network of any kind: the daemon only ever speaks AF_UNIX (keyd's socket + its own).
