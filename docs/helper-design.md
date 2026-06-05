@@ -28,11 +28,19 @@ localized swap (point the stream at the helper/socket instead of `Command::new("
 
 ---
 
-## Option A — Privileged helper daemon  *(ROADMAP's assumed path)*
+## Option A — Brokering helper daemon  *(ROADMAP's assumed path — CHOSEN)*
 
-A tiny root systemd service owns all keyd access and re-exposes **only** a one-directional
+A tiny systemd service owns all keyd access and re-exposes **only** a one-directional
 event stream (layers + keypresses, events out, no control in) on a unix socket the active
 desktop user can read.
+
+**It must NOT run as root.** It needs exactly two accesses — the keyd socket
+(`root:keyd`, 0660 → `keyd` group) and `/dev/input/event*` (`root:input`, 0660 → `input`
+group). A **dedicated system user `keyd-viz`** in those two groups has everything it needs,
+with no root at any point. A worst-case compromise then yields keystroke-*read* in a confined
+process — **not** root, no escalation, no filesystem writes, no module loading. See the
+**Security model** section below for the full hardening set; that analysis is why Option A,
+done this way, is a security *upgrade* over today's "add your login user to `input`."
 
 **Granting the right user, no group:** the standard trick is `logind`/`uaccess`-style
 session awareness:
@@ -47,8 +55,10 @@ session awareness:
 **Pros:** robust for multi-user / fast-user-switching; works regardless of distro group
 naming; smallest attack surface if the protocol stays events-out-only; the long-term
 "correct" answer and the only one that cleanly covers *keypresses* (see Option B's grab
-problem).
-**Cons:** most code (daemon + IPC + packaging); a root service to review and maintain.
+problem). Confines keystroke access to **one sandboxed, non-root, network-less daemon**
+instead of the whole login session (the group approach's keylogger surface).
+**Cons:** most code (daemon + IPC + packaging); a system service to review and maintain
+(non-root, but still the security-critical component — keep it tiny and audited).
 
 **v1 wire protocol (sketch — newline-delimited JSON, one event per line):**
 ```
@@ -100,22 +110,73 @@ requirement as written. Useful only as a documented fallback.
 
 ---
 
-## Recommendation
+## Recommendation — DECIDED: Option A, non-root + sandboxed
 
-**Option A (helper daemon)** as the shipped mechanism — it's the only one that robustly
-covers keypresses given keyd's grab, needs no group/re-login, and works multi-user. Keep
-the protocol **events-out-only** and **JSON v1** for reviewability.
+**Option A (brokering daemon), run as a dedicated non-root `keyd-viz` user inside a tight
+systemd sandbox.** It's the only option that robustly covers keypresses given keyd's grab,
+needs no group/re-login for the desktop user, and works multi-user. Protocol stays
+**events-out-only** and **JSON v1** for reviewability.
 
-**But gate the decision on one experiment first:** resolve ROADMAP §4.2's physical-vs-virtual
-device-id question on real hardware (press a key, watch for the glow). It determines:
-- whether keypresses are even brokerable as we assume (affects A's protocol and B entirely);
-- whether follow-by-keypress works at all, or needs the daemon's internal `active_kbd`
-  (which `keyd listen` doesn't currently expose — possible upstream ask, §8).
+**The gating experiment is now RESOLVED** (during the keypress-glow work, 2026-06-04):
+- keyd reports its **virtual** device id for managed keyboards, and keypresses **are**
+  brokerable — the glow works (so Option A's keypress protocol is sound; Option B is moot).
+- **Follow-by-keypress does NOT work** from stock keyd IPC (all grabbed keyboards aggregate
+  into one virtual device). True auto-follow needs the daemon's internal `active_kbd`, which
+  `keyd listen` doesn't expose → an **upstream keyd ask** (ROADMAP §8). The manual keyboard
+  switcher is the stopgap. This is independent of the helper choice.
 
-If keypresses turn out to be impractical to broker cleanly, a strong fallback is **A for
-layers only** (the easy, low-privilege win) + keep keypresses on the existing `input`-group
-path, documented — still a big step up from today and fully covers the single-keyboard north
-star.
+**Layers-only is the safe default, keypresses are opt-in.** Live layers need *only* the keyd
+socket — **zero `/dev/input` access**, so that mode is literally not a keylogger. Ship
+layers-only as the default; the user explicitly opts in to the keypress-glow capability (and
+the helper's `input`-device access) when they want it. Security-conscious users get the full
+live morphing board with no input-device surface at all.
+
+## Security model (hardening Option A)
+
+The concern: *"a root daemon that can read every keystroke is a keylogger if compromised."*
+Correct in spirit — live keypress display inherently requires **something** to read
+keystrokes — so the design minimizes both the chance of compromise and the blast radius.
+
+**1. Not root.** Runs as system user `keyd-viz` ∈ {`keyd`, `input`}. A compromise = keystroke
+*read* only: no escalation, no writes outside the sandbox, no module loading, no other users.
+
+**2. systemd sandbox (cage a compromise).** The keylogger threat is "read keys *and exfil*";
+we cut the exfil and the escalation:
+- `PrivateNetwork=yes` + `RestrictAddressFamilies=AF_UNIX` → **cannot open a network socket.**
+  A keylogger that can't phone home is largely defanged.
+- `DevicePolicy=closed` + `DeviceAllow=/dev/input/event* r` → read-only input, nothing else.
+- `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, read-only FS → nowhere to stash.
+- `NoNewPrivileges=yes`, `CapabilityBoundingSet=` (drop all), `SystemCallFilter=@system-service`
+  minus `@exec`/`@privileged` → no spawn, no escalation.
+- `MemoryDenyWriteExecute`, `LockPersonality`, `RestrictNamespaces`, `ProtectKernel*`,
+  `RestrictRealtime`, `RestrictSUIDSGID`, `UMask=0077`.
+
+**3. Tiny attack surface to *get* compromised.**
+- IPC is **events-out-only** — a compromised GUI cannot command the helper.
+- The helper parses bytes only from **trusted sources** (keyd / the kernel evdev stream),
+  never from the network or an untrusted client. The only thing a client supplies is "I
+  connected," authorized via `SO_PEERCRED` + logind active-session check. Near-zero
+  untrusted-input surface.
+- **Rust** → memory-corruption RCE classes largely eliminated.
+- Reads keyd's IPC socket + the virtual evdev device **directly** — it does **not** spawn
+  `keyd listen`/`keyd monitor`, so it needs no exec and we can forbid it outright.
+
+**4. Net effect: a security *upgrade*, not a downgrade.** Today's path ("add your login user
+to `input`") gives **every process in your session** ambient keylogger access, permanently.
+The helper shrinks that to **one small, non-root, network-less, sandboxed daemon** — and
+strictly less capability than keyd itself already has (keyd also *injects* via uinput; the
+helper has read-only device access).
+
+**Irreducible residual:** you can't show live keystrokes without something able to read them.
+The goal is to make that something minimal, unprivileged, contained, and **opt-in** — with
+layers-only as a first-class mode for users who want zero input-device surface.
+
+## Cleaning up the dev-interim group grants
+
+While prototyping we relied on the desktop user being in `keyd`/`input`. Once the helper
+ships, the desktop user needs **neither** — the `keyd-viz` system user holds those groups.
+**Do this cleanup only after the helper is in place and verified**, or it breaks the current
+working app. See ROADMAP §10 and memory `dev-interim-group-grants` for the exact revert.
 
 ## Smallest next step if we proceed with A
 
