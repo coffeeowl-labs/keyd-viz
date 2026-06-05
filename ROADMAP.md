@@ -236,14 +236,24 @@ Linux/Wayland. We would be the **first real visual face for keyd**.
   shows it holding fds on **every `/dev/input/event*` node directly** — no `/run/keyd.socket`,
   no `keyd`-group dependency. So the keypress half works for any user in `input` (verified to
   *spawn* fine as user `ryan`, who is in `input` but not `keyd`).
-- **⚠️ UNVERIFIED — top hardware check:** whether a press on a keyd-*managed* (grabbed)
-  keyboard surfaces in `monitor` tagged with the **physical** `vendor:product` (e.g.
-  `04fe:0021`) — which `app::monitor`/`device_map` assume — or with keyd's **virtual** output
-  device (`0fac:0ade`, post-remap), which would *not* match any `[ids]` and so wouldn't glow.
-  §4.2 (from source) says physical/pre-remap; a synthetic non-grabbed device (ydotool) only
-  proved the non-grabbed case. **Test:** run the app, press a key, confirm the cap glows. If it
-  doesn't, monitor is emitting the virtual id and the glow needs to key off it (and follow-by-
-  keypress would need another signal).
+- **✅ RESOLVED on hardware (2026-06-04):** a press on a keyd-*managed* (grabbed) keyboard
+  surfaces in `monitor` under keyd's **virtual** device id (`0fac:0ade`), **not** the physical
+  `vendor:product`. (The *key names* are still the physical/pre-remap keysyms — `a`, `leftmeta`
+  — which is what the glow needs; only the device id is virtualised.) Confirmed by debug build
+  on the user's HHKB: every key event read `devid="0fac:0ade"` while the `device_map` held the
+  physical `04fe:0021`, so the old `Ignore`-on-unmapped path dropped every press (no glow).
+  Non-grabbed devices (the Logitech mouse `046d:c098`, synthetic ydotool) *do* keep their
+  physical id — so the contradiction with the source read is: monitor reports the *originating*
+  device, and for grabbed keyboards that originator is keyd's own virtual device.
+- **Two consequences, both now handled in `app::monitor::next_press_state`:**
+  1. **Glow:** key events whose device id isn't a specific mapped board are attributed to the
+     board currently shown (glow by physical key name, no switch) — so the cap lights up. This
+     fixes "live keypresses show no change."
+  2. **Follow-the-last-pressed-keyboard is *not possible* from the keypress stream** when keyd
+     manages the boards: keyd aggregates every grabbed keyboard into one virtual device, discarding
+     which physical keyboard a press came from. With a single shown board this is moot; with
+     multiple keyboards the view can't auto-switch on typing (layer changes via `keyd listen`
+     still work). Following would need a different signal — **open question for §1's north star.**
 
 ### 4.3 Active-keyboard detection — YES (config→device mapping doable) ✅
 - keyd's internal device id format is `"%04x:%04x:%08x"` = **vendor:product:uid**, where uid is

@@ -598,20 +598,17 @@ fn handle_key_event(win: &MainWindow, ev: monitor::MonitorEvent) {
         win.get_device_map().iter().map(|m| (m.devid.to_string(), m.sheet)).collect();
     let pressed_now: Vec<String> = win.get_pressed_keys().iter().map(|s| s.to_string()).collect();
 
-    match monitor::next_press_state(&k, &map, win.get_active_index(), &pressed_now) {
-        monitor::KeyOutcome::Ignore => {}
-        monitor::KeyOutcome::Apply { switch_to, pressed } => {
-            if let Some(idx) = switch_to {
-                if let Some(sheet) = win.get_sheets().row_data(idx as usize) {
-                    win.set_active_index(idx);
-                    win.set_active_sheet(sheet);
-                }
-            }
-            let pressed: Vec<slint::SharedString> = pressed.into_iter().map(Into::into).collect();
-            win.set_pressed_keys(model(pressed));
-            render_board(win);
+    let monitor::Press { switch_to, pressed } =
+        monitor::next_press_state(&k, &map, win.get_active_index(), &pressed_now);
+    if let Some(idx) = switch_to {
+        if let Some(sheet) = win.get_sheets().row_data(idx as usize) {
+            win.set_active_index(idx);
+            win.set_active_sheet(sheet);
         }
     }
+    let pressed: Vec<slint::SharedString> = pressed.into_iter().map(Into::into).collect();
+    win.set_pressed_keys(model(pressed));
+    render_board(win);
 }
 
 /// `--demo`: animate the live view without a running keyd — sweep a pressed key across
