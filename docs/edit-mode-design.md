@@ -1,10 +1,12 @@
 # Phase 6 — Edit Mode (design doc)
 
-> **Status:** DRAFT v2 (2026-06-05). Living document — refined through adversarial critic
-> reviews before code is written. v2 incorporates **critic review #1**, which corrected the
-> security model (the drafted live-preview channel was unsafe) and moved lossless round-trip
-> from a deferred phase into the MVP. Decisions marked **PROPOSED** are not final; **OPEN**
-> marks unresolved questions; **DECIDED** marks settled ones.
+> **Status:** DRAFT v2 (2026-06-05; competitive research + planning added 2026-06-06). Living
+> document — refined through adversarial critic reviews before code is written. v2 incorporates
+> **critic review #1**, which corrected the security model (the drafted live-preview channel was
+> unsafe) and moved lossless round-trip from a deferred phase into the MVP; the 06-06 pass added
+> the competitive research (§10), the north-star UX vision (§9), and per-phase acceptance
+> criteria (§6). Decisions marked **PROPOSED** are not final; **OPEN** marks unresolved
+> questions; **DECIDED** marks settled ones.
 >
 > **What this feature is:** a GUI front-end for authoring and editing `/etc/keyd/*.conf` —
 > point at a key, pick what it does, see it on the board, save it back safely. It is *not*
@@ -259,25 +261,46 @@ to confirm the very dialog asking you to keep it. And it needs the unsafe channe
 ## 6. Phased plan
 
 Ordered to make "edit my real config safely" real as early as possible, and to de-risk the two
-cruxes before UI breadth.
+cruxes before UI breadth. Each phase carries a **Done when** — the acceptance bar, not a task
+list. Task-level breakdown is deliberately deferred until E0 freezes the data model and
+serializer; planning tasks against an interface that doesn't exist yet is the sequencing trap
+from review #1.
 
 - **E0 — Foundations & decisions (mostly non-UI).**
   1. Make the single parser round-trippable: typed + `Raw` bindings, opaque trivia/sections,
      and the `serialize(parse(file)) == file` gate (§5.1). **Freeze the EditModel + serializer
-     interface first**, then write its property tests (you can't write serializer tests before
-     the type exists — v1's "tests before the serializer" was a cycle).
+     interface first**, then write its property tests.
   2. Prototype the privileged apply tool (§5.2): no caller paths, name validation, `O_NOFOLLOW`
      + temp + `renameat`, byte-level safety scan (§5.3), dead-man's-switch revert (§5.4).
   3. Probe keyd at runtime (`keyd check`/`list-keys` presence, socket path, version).
+  - **Done when:** the parser round-trips a corpus of real-world configs (`serialize(parse(f))
+    == f`) under test; the EditModel + serializer interface is documented and frozen; the apply
+    tool prototype passes the safety scan and demonstrates dead-man's-switch revert in a manual
+    test; the keyd runtime probe works on this machine.
 - **E1 — Edit a real config (draft-then-install).** Open any config the round-trip gate accepts;
-  click a key → change a plain remap / disable / a couple of common actions; visual preview;
-  save a draft + show the install steps. No daemon changes, no privileged writer yet. This is the
-  first version with a real audience.
-- **E2 — Breadth + one-click apply.** More typed actions (common → uncommon), layers
-  (add/rename/delete), chords, `[global]` options; the polkit one-click apply with the
-  dead-man's-switch revert; key picker fed by `keyd list-keys`; create-config flow (§5.5).
-- **E3 — Power & fidelity.** Lossless CST for surgical formatting-preserving edits; macro editor;
-  `command()` behind explicit confirmation; aliases/includes/composite/layout layers; undo/redo.
+  click a key → change a plain remap / disable / a couple of common actions, entered via
+  **press-to-capture or a categorized palette** (§9); visual preview on the board (§5.6); save a
+  draft + show the install steps. No daemon changes, no privileged writer yet. First version with
+  a real audience.
+  - **Done when:** a user can open their real config, change a single binding by pressing the key
+    they want (or picking from the palette), see it re-render on the board, and save a draft with
+    copy-paste install steps; the round-trip gate sends unsupported files to view-only instead of
+    clobbering them; the viewer is unchanged when not editing.
+- **E2 — Breadth + one-click apply.** More typed actions (common → uncommon); the per-key **"when
+  tapped / when held"** editor for `overload`/`lettermod` (§9); layers (add/rename/delete) with
+  named layer-switch variants (momentary/toggle/oneshot); chords; `[global]` options; non-blocking
+  orphan/conflict warnings (§9); the polkit one-click apply with dead-man's-switch revert; key
+  picker fed by `keyd list-keys`; create-config flow with wildcard-id collision handling (§5.5).
+  - **Done when:** the common keyd vocabulary is editable visually (tap-hold first-class, not a
+    raw escape hatch); a source/AUR install can apply changes in one click with working
+    auto-revert; creating a config for an unconfigured keyboard never produces a colliding
+    `[ids]`; AppImage users still get draft-then-install (documented, §7).
+- **E3 — Power & fidelity.** Lossless CST for surgical formatting-preserving edits; macro editor
+  (editable step table / record-then-edit, §9); `command()` behind explicit confirmation;
+  aliases/includes/composite/layout layers; community snippet import (§9); undo/redo.
+  - **Done when:** edits to hand-authored files preserve exact formatting inside modeled sections;
+    macros are buildable without hand-writing the macro string; advanced sections are editable;
+    importing a shared snippet adapts it to the target config's layer/device names.
 
 ---
 
@@ -390,7 +413,88 @@ keep it from rotting into a permanently-skipped job:
 
 ---
 
-## 9. Decision log
+## 9. North-star end state & UX vision
+
+Where Edit Mode is headed once fully realized (well beyond the MVP) — so the phases aim at one
+coherent picture:
+
+> You open keyd-viz and see your real keyboard, drawn per layer. You click any key on any layer
+> board; it highlights. You **press the key you want it to become**, or pick from a categorized
+> palette (keys · modifiers · named layers · media · macro · command). For a dual-function key
+> you fill a **"when tapped"** and a **"when held"** slot independently; the board immediately
+> shows both legends on the cap. Layers are named, reorderable, each with its own color hue. You
+> can target a specific keyboard (keyd's `[ids]`) — something the big commercial tools can't do
+> cleanly. Bad edits are caught at authoring time (orphaned keys, lockouts) and again by a
+> `keyd check` dry-run; applying is one click, validated, backed up, and auto-reverts if you
+> don't confirm — with Backspace+Escape+Enter as the always-there panic escape. The same live
+> layer view, keypress glow, heatmap, and compact overlay that make keyd-viz a great *viewer*
+> double as the editor's instant feedback loop: edit → see it immediately, no compile, no flash.
+
+The MVP (§4) is the smallest honest step toward this: open a real config, change one binding by
+capture-or-palette, see it on the board, save it back without losing anything.
+
+---
+
+## 10. Prior art & competitive research
+
+No mainstream GUI edits keyd. The closest *software* remappers (config-file + GUI, our exact
+situation) are **Karabiner-Elements** (macOS) and **PowerToys Keyboard Manager** (Windows). The
+best *visual* editors are firmware tools — **ZSA Oryx / Keymapp**, **VIA**, **Vial**, **QMK
+Configurator**. Also surveyed: kanata/kmonad, Keyboard Maestro, AutoHotkey GUIs, and vendor
+suites (Logitech G HUB, Razer Synapse, SteelSeries GG). Full agent findings + source URLs are in
+the conversation log; the actionable distillation:
+
+### Where keyd-viz already leads — don't rebuild what we have
+- **One board per layer, live active-layer view, keypress glow, compact always-on-top overlay** —
+  these are exactly what Oryx/Keymapp are *praised* for and what VIA/QMK do worse. We're ahead on
+  visualization; Edit Mode is about matching their *authoring* UX, not their rendering.
+- We already render **both tap and hold legends on a dual-function keycap** — the precise thing
+  VIA is criticized for omitting.
+- **Per-device `[ids]` is a genuine moat:** PowerToys flatly can't target devices ("no API"),
+  Karabiner needs a separate EventViewer app to even find device IDs. We enumerate devices for
+  free — lean in, and surface device IDs in-app.
+
+### Patterns to adopt (priority order)
+1. **Press-to-capture key input** + searchable-dropdown fallback (PowerToys; the single most
+   common Karabiner complaint is the *lack* of it). "Press the key you want" beats dropdown-
+   hunting. Keep capture and browse in one affordance — don't make them fight (PowerToys
+   anti-pattern). → E1.
+2. **Per-key "when tapped / when held" slots, fully orthogonal** (Oryx) — this *is* keyd's
+   `overload`/`lettermod`. First-class in the GUI; never a raw-config escape hatch. Karabiner and
+   QMK both punt on tap-hold — their biggest gap — and tap-hold is keyd's headline. → E2.
+3. **Click-key-highlights → categorized action palette** (VIA): categories map to keyd as keys ·
+   modifiers · **named layers** (momentary/toggle/oneshot as named choices) · media · macro ·
+   command. Always show layer **names**, never indices (QMK anti-pattern). → E1/E2.
+4. **Non-blocking orphan/conflict warnings at authoring time** (PowerToys's orphaned-key flag):
+   if a remap leaves a key unproducible, or a modifier remap has downstream effects, warn inline —
+   not only in docs. → E2.
+5. **`keyd check` dry-run before apply** (kanata/Karabiner validate-on-save) — already in the
+   safety plan (§5.4). → E2.
+6. **Opaque pass-through preservation** (Karabiner) — independent validation of our §5.1 `Raw`
+   round-trip. Note Karabiner "solves" round-trip only by owning the file and *accepting comment
+   loss*; we do better with verbatim preservation + the round-trip gate, plus **timestamped
+   backups before every write** (which Karabiner lacks). → E0/E1.
+7. **Community snippet gallery with one-click import** (Karabiner's killer feature) — high value
+   but **later**: keyd snippets are less portable (layer names, device IDs), so they need
+   templating/namespacing or they paste rules that silently don't fit. → E3.
+8. **Macro editor as an editable step table / record-then-edit** (Keyboard Maestro, Pulover's
+   Macro Creator) for keyd `macro`/`macro2`. → E3.
+
+### Extensions to our live view (cheap, high perceived value)
+Per-layer **heatmap** (Keymapp), **tray layer indicator** (kanata-tray — already on the v1.2
+roadmap), per-layer **color hue** on boards (Oryx). The kanata+OverKeys live-layer-overlay idea
+is essentially what our compact mode already is.
+
+### Anti-patterns to avoid
+Dropdown-only key picking with no capture mode (Karabiner's #1 complaint); punting advanced
+features to a raw-text escape hatch (Karabiner/QMK); wholesale file rewrite that nukes comments
+(Karabiner); raw numeric layer indices (QMK); surfacing footguns only in docs instead of at
+authoring time (PowerToys); account/cloud lock-in and daemon bloat (vendor suites) — stay
+local-first and file-based, which is our advantage.
+
+---
+
+## 11. Decision log
 
 - **2026-06-05 — v1 drafted** from the E0 spike. Nothing finalized.
 - **2026-06-05 — critic review #1** (4 adversarial reviewers, verified against keyd source).
@@ -415,3 +519,12 @@ keep it from rotting into a permanently-skipped job:
   - **Dropped the "VIA/Vial moment" framing** — honestly positioned as a GUI for `/etc/keyd`.
   - Roadmap ordering unchanged: Phase 6 stays where it is (owner's call — the cost-based argument
     to do tray/hotkey first doesn't outweigh this being the project's defining ambition).
+- **2026-06-06 — competitive research** (Karabiner, PowerToys, Oryx/Keymapp, VIA, Vial, QMK,
+  kanata/kmonad, Keyboard Maestro, vendor suites). Added §9 (north-star UX vision), §10 (prior
+  art with steal/avoid lists), and per-phase **Done when** criteria in §6. Key conclusions:
+  keyd-viz already leads on *visualization* (board-per-layer, live layer, glow, overlay,
+  both-legends-on-cap) — Edit Mode targets *authoring* UX; **press-to-capture + categorized
+  palette** and **orthogonal tap/hold slots** are the highest-priority patterns to adopt;
+  **per-device `[ids]`** is a moat competitors can't match; the round-trip + backup design is
+  validated against how Karabiner *fails* to preserve comments. Task-level breakdown still
+  deferred to post-E0.
