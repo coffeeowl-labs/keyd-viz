@@ -14,6 +14,11 @@ All notable changes to keyd-viz are documented here. The format is based on
   in-app pin is a no-op there; use the compositor's keep-above instead (KDE: right-click
   titlebar → *More Actions → Keep Above Window*, or a KWin rule for class `keydviz`).
 
+### Changed
+
+- The **pin** and **compact** controls are now icon buttons, each with two states (pin /
+  pin-off; compact / expand), tinting green when active.
+
 ## [1.1.0] - 2026-06-05
 
 ### Added

@@ -215,10 +215,12 @@ component BoardView inherits VerticalLayout {
 // ---- small pill button (zoom −/+, compact toggle) -----------------------------
 component IconButton inherits Rectangle {
     in property <string> text;
+    in property <image> icon;           // when set (with use_icon), drawn instead of text
+    in property <bool> use_icon: false;
     in property <bool> wide: false;
     in property <bool> active: false;   // engaged/toggled state (e.g. pin on)
     callback clicked;
-    width: wide ? lbl.preferred-width + 18px : 26px;
+    width: root.use_icon ? 26px : (wide ? lbl.preferred-width + 18px : 26px);
     height: 24px;
     border-radius: 6px;
     background: active ? #16341f : (bta.has-hover ? #1b2129 : #161b22);
@@ -229,7 +231,19 @@ component IconButton inherits Rectangle {
             root.clicked();
         }
     }
+    Image {
+        visible: root.use_icon;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 15px;
+        height: 15px;
+        source: root.icon;
+        image-fit: contain;
+        // SVGs are monochrome; tint to the theme (green when engaged).
+        colorize: active ? #3ddc84 : (bta.has-hover ? #ffffff : #cfd6df);
+    }
     lbl := Text {
+        visible: !root.use_icon;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         text: root.text;
@@ -284,20 +298,23 @@ component ViewControls inherits HorizontalLayout {
         }
     }
     // Pin = keep the window above others (always-on-top). A persistent manual toggle;
-    // compact mode also pins transiently (see MainWindow.on_top). Shown active while the
-    // window should be floating on top (manual pin OR compact). Effective on X11/XWayland;
-    // on native Wayland keep-above is compositor-only (see set_window_on_top in Rust).
+    // compact mode also pins transiently (see MainWindow.on_top). Shown active (and the
+    // un-slashed pin icon) while the window should be floating on top (manual pin OR
+    // compact). Effective on X11/XWayland; on native Wayland keep-above is compositor-only
+    // (see set_window_on_top in Rust).
     IconButton {
-        wide: true;
-        text: "pin";
+        use_icon: true;
+        icon: (root.pinned || root.compact) ? @image-url("icons/pin.svg") : @image-url("icons/pin-off.svg");
         active: root.pinned || root.compact;
         clicked => {
             root.pinned = !root.pinned;
         }
     }
+    // Compact toggle: the icon shows the action — shrink (compact) when expanded, grow
+    // (expand) when compact.
     IconButton {
-        wide: true;
-        text: root.compact ? "expand" : "compact";
+        use_icon: true;
+        icon: root.compact ? @image-url("icons/expand.svg") : @image-url("icons/compact.svg");
         clicked => {
             root.compact = !root.compact;
         }
