@@ -1,329 +1,417 @@
 # Phase 6 — Edit Mode (design doc)
 
-> **Status:** DRAFT v1 (2026-06-05). Living document — to be refined over a few iterations
-> and adversarial critic reviews before any code is written. Decisions marked **PROPOSED**
-> are not final; **OPEN** marks unresolved questions.
+> **Status:** DRAFT v2 (2026-06-05). Living document — refined through adversarial critic
+> reviews before code is written. v2 incorporates **critic review #1**, which corrected the
+> security model (the drafted live-preview channel was unsafe) and moved lossless round-trip
+> from a deferred phase into the MVP. Decisions marked **PROPOSED** are not final; **OPEN**
+> marks unresolved questions; **DECIDED** marks settled ones.
 >
-> **Goal of the feature:** turn keyd-viz from a read-only visualizer into *the* GUI for keyd
-> — visually create and edit keyd configs, with safe live preview and apply. The VIA/Vial
-> moment for a software remapper that has never had a GUI.
+> **What this feature is:** a GUI front-end for authoring and editing `/etc/keyd/*.conf` —
+> point at a key, pick what it does, see it on the board, save it back safely. It is *not*
+> "VIA for keyd": VIA writes portable firmware to the device with no root; this edits a
+> root-owned text file and reloads a daemon, bound to this one Linux machine. Useful, but a
+> different thing — we describe it honestly to avoid setting up the wrong expectations.
 
 ---
 
 ## 1. Vision & scope
 
-Today keyd-viz *renders* a keyboard from a keyd config. Edit Mode adds the reverse: the user
-points at a key, picks what it should do, sees it live, and saves. It must:
+Today keyd-viz *renders* a keyboard from a keyd config. Edit Mode adds the reverse: edit the
+config visually and write it back. It must:
 
+- Edit a user's **real, existing** config without destroying it (comments, ordering, and any
+  keyd feature we don't model must survive a save — see §5.1). This is the MVP, not a later
+  luxury: every config in the wild is hand-authored, so an editor that can only touch files it
+  created has almost no audience.
 - Work for a keyboard that has **no config yet** (detect it, create a starter config).
 - Cover the **common** keyd actions first (remap, layer, overload, oneshot, toggle, lettermod,
   modifiers, chords, disable), then grow toward the full vocabulary.
-- Be **safe**: never silently brick the user's keyboard; always offer an escape and a revert.
+- Be **safe**: never silently brick the keyboard; the user always has a way back.
 - Preserve keyd-viz's identity: the **viewer stays the default**; editing is an explicit mode;
   the GUI itself stays unprivileged.
 
 **Non-goals (at least initially):**
-- Not a general keyd config text editor — power users keep their `$EDITOR`.
-- Not lossless round-tripping of hand-authored files in the MVP (see §4, §5.1).
+- Not a replacement for a text editor — a power user with a complex hand-tuned config can keep
+  `$EDITOR`; we aim to *not break* their file if they do open it in the GUI.
 - Not firmware/QMK editing (keyd is software-only; that's a different tool).
+- Not live remapping of the keyboard you're typing on *while editing* (see §5.6 — preview is
+  visual, not applied-to-your-input-device).
 
 ---
 
 ## 2. Why this is hard — the two cruxes
 
-The *breadth* of keyd features is steady, low-risk, parallelizable work. The genuine
-difficulty is two architectural cruxes that must be settled before building UI:
+The *breadth* of keyd features is steady, low-risk work. The genuine difficulty is two things:
 
-1. **Round-trip fidelity** — keyd configs are hand-authored (comments, aliases, ordering,
-   formatting). Our current parser is lossy and only understands a subset of actions. An
-   editor must either regenerate files (losing formatting) or carry a lossless representation.
-2. **Privileged write + reload + not bricking input** — configs live in root-owned
-   `/etc/keyd/`; applying needs a reload over a root-equivalent socket; a bad config can make
-   the keyboard unusable. This collides with keyd-viz's "GUI is never privileged" principle
-   and demands a real safety design.
+1. **Round-trip fidelity.** keyd configs are hand-authored. If the editor loads a file and
+   writes it back, it must not silently drop comments, ordering, or any action it doesn't
+   understand. v2 makes this an MVP requirement and solves it by **carrying every unmodeled
+   construct verbatim** plus a **round-trip safety gate** (§5.1) — not by restricting the
+   editor to files it created.
+2. **Privileged write + reload + not bricking input.** Configs live in root-owned `/etc/keyd/`;
+   applying needs a reload over a socket that is **root-equivalent**; a bad config can make the
+   keyboard unusable. This collides with keyd-viz's "GUI is never privileged" principle and
+   demands a real safety design (§5.2–§5.4).
 
 ---
 
-## 3. Verified facts (the spike)
+## 3. Verified facts (the spike + review #1, all checked against keyd 2.6.0 source @ `f564288`)
 
 ### 3.1 Our codebase
 
 | Area | Finding | Source |
 | --- | --- | --- |
-| Parser | **Lossy.** `parse_text` (`crates/core/src/parser.rs:36`) drops comments, blank lines, whitespace, section/key ordering, and even semantic detail (e.g. `lettermod` timings → discarded). Model (`crates/core/src/model.rs`) is semantic-only, no spans, no source text. | spike |
-| Action coverage | Parser only structures `overload*`, `lettermod`, `layer`, `toggle`. **Everything else passes through as a raw `remaps` string** (`macro`, `command`, `oneshot`, `swap`, sequences…). | spike |
+| Parser | **Semantic-only / lossy for round-trip.** `parse_text` (`crates/core/src/parser.rs`) builds a semantic model and discards comments, blank lines, whitespace, and ordering; no spans, no source text. (Two grammar bugs found in review #1 — `[layer:mods]`/`[a+b]` headers and inline `#` — are now **fixed**, but the model is still not round-trippable.) | spike, review #1 |
+| Action coverage | Parser structures `overload*`, `lettermod`, `layer`, `toggle`; **everything else becomes a raw `remaps` string** (`macro`, `command`, `oneshot`, `swap`, …) and already renders as that string. | `parser.rs` |
 | Serializer | **None exists.** No `Config → text`. | spike |
-| Device enum | `devices::connected_devices()` reads `/proc/bus/input/devices` (world-readable, zero privilege) and lists **all** keyboards using keyd's own classification rule — config-independent. | `crates/app/src/devices.rs` |
-| Config read | `/etc/keyd/*.conf` is world-readable; reading needs no privilege. | `crates/app/src/main.rs:348` |
-| Existing writes | App already writes `~/.config/keyd-viz/layouts.tsv` (`crates/app/src/prefs.rs`) — precedent for user-writable storage (XDG-aware, best-effort). | spike |
-| Helper | Strictly **one-directional, events-out**; hardened systemd sandbox (`SystemCallFilter=~execve`, `ProtectSystem=strict`, `PrivateNetwork`, `DevicePolicy=closed`). Runs as the `keyd-viz` system user, which **is in the `keyd` group**. | `crates/helper/`, `packaging/systemd/` |
+| Device enum | `devices::connected_devices()` reads `/proc/bus/input/devices` (world-readable, zero privilege) and lists **all** keyboards using keyd's own rule — config-independent. | `crates/app/src/devices.rs` |
+| Config read | `/etc/keyd/*.conf` is world-readable; reading needs no privilege. | `crates/app/src/main.rs` |
+| Existing writes | App writes `~/.config/keyd-viz/layouts.tsv` (`prefs.rs`) — precedent for user-writable storage. | spike |
+| Helper | Strictly **one-directional, events-out**; hardened systemd sandbox (`SystemCallFilter=~execve`, `ProtectSystem=strict`, `PrivateNetwork`, `DevicePolicy=closed`). Runs as the `keyd-viz` user, which **is in the `keyd` group** — see the security note below. | `crates/helper/`, `packaging/systemd/` |
 
-### 3.2 keyd itself (v2.6.0, man dated 2025-09-11; probe at runtime — facts are version-dependent)
+### 3.2 keyd itself (probe at runtime — facts are version-dependent)
 
 | Capability | Detail | Why it matters |
 | --- | --- | --- |
-| **Reload** | `keyd reload` over control socket `/var/run/keyd.socket` (`root:keyd`, `0660`). **Not** SIGUSR1; no file watching. Needs root **or** `keyd` group. | We must trigger reload ourselves, via a privileged path. |
-| **Validate** | `keyd check [files…]` — pure parse/validate, no apply, no daemon, nonzero exit on failure. Version-gated. | Catch syntax/semantic errors *before* touching `/etc/keyd`. |
-| **Live bind** | `keyd bind "<binding>"` applies a binding at runtime **without writing files**; `keyd bind reset` reverts to the on-disk keymap. | **Live preview** without persisting — and instant revert. |
-| **Panic** | Hard-coded **Backspace + Escape + Enter** terminates keyd, restoring the raw keyboard. Not config-overridable. | Last-resort failsafe; document prominently. |
+| **Reload** | `keyd reload` over `/var/run/keyd.socket` (`root:keyd`, `0660`). Not SIGUSR1; no file watching. **Reloads *all* configs in `/etc/keyd`, not just the changed file.** | We trigger reload via the privileged path; "we only touched one file" is not how reload behaves. |
+| **Validate** | `keyd check [files…]` — parse/validate only, no apply, no daemon. **Syntax-only: a file full of `command(rm -rf …)` passes clean** (verified `check.c` calls only `config_parse`). | Catches typos before apply. **It is NOT a security gate** — see §5.3. |
+| **Panic** | Hard-coded **Backspace + Escape + Enter** terminates keyd, restoring the raw keyboard. Not config-overridable. | **This is the primary failsafe** (§5.4). |
 | **Key names** | `keyd list-keys` enumerates valid key names; `keyd monitor` discovers names + device ids. | Populate the key picker authoritatively. |
 | **Files** | `/etc/keyd/*.conf`, `root:root 0644`, system-only. **No per-user config location.** | Writing the real config requires privilege. |
-| **Security** | *"Users with access to the keyd socket should be considered privileged (assumed to have access to the entire system)"* — because `command()` runs shell **as root**. | **The single most important constraint** — see §5.3. |
+| **Socket security** | The daemon does **zero peer authentication** — `handle_client` dispatches `bind`/`macro`/`reload` to anyone who can `connect()` (verified `ipc.c`, `daemon.c`). `keyd bind 'x = command(...)'` reaches `execute_command` → `execl("/bin/sh", …)` **as root**, with no privilege drop. | **Socket access = unauthenticated root.** So `keyd`-group membership is itself a root-equivalent capability; the helper's sandbox is the only thing caging it. Dictates the entire apply design (§5.2). |
+| **`keyd bind` has no safe subset** | `bind` runs the full config parser and can install **any** action on **any** layer — not just the key being edited. `macro(...)` injects arbitrary keystrokes into the focused window as root (e.g. open a terminal, type `curl…\|sh`). So "block `command()`" does **not** make a bind channel safe. | Kills the idea of a live `keyd bind` preview/command channel (§5.2, §5.6). |
 
-### 3.3 The full keyd action vocabulary (breadth estimate)
+### 3.3 The keyd action vocabulary (breadth estimate)
 
 - **Common (MVP):** plain remap (`a = b`), `noop` (disable), modifiers (`layer(control)`),
   `layer`, `oneshot`, `toggle`, `overload`, `lettermod`, chords (`a+b = …`), `macro`/`C-a`.
-- **Uncommon (E2):** `overloadt`, `overloadt2`, `overloadi`, `oneshotm`, `oneshotk`, `layerm`,
-  `togglem`, `swap`, `swapm`, `clear`, `clearm`, `macro2`, `timeout`, `setlayout`, `repeat`.
-- **Sections:** `[ids]`, `[global]`, `[main]`, `[<layer>]`, `[<layer>:<mods>]`,
-  `[<a>+<b>]` (composite), `[<name>:layout]`, `[aliases]`, `include`.
-- **`[global]` options:** `*_timeout` family, `layer_indicator`, `default_layout`, etc.
-- **Sensitive:** `command(<shell>)` runs as root — must be visibly flagged / gated in UI.
+- **Uncommon (later):** `overloadt`, `overloadt2`, `overloadi`, `oneshotm`, `oneshotk`,
+  `layerm`, `togglem`, `swap`, `swapm`, `clear`, `clearm`, `macro2`, `timeout`, `setlayout`,
+  `repeat`.
+- **Sections:** `[ids]`, `[global]`, `[main]`, `[<layer>]`, `[<layer>:<mods>]`, `[<a>+<b>]`
+  (composite), `[<name>:layout]`, `[aliases]`, `include`.
+- **`[global]` options:** the `*_timeout` family, `layer_indicator`, `default_layout`, etc.
+- **Sensitive:** `command(<shell>)` runs as root; `macro(...)` injects keystrokes; `include`
+  pulls in other files at reload. All three need explicit handling in the safety scan (§5.3).
 
 ---
 
-## 4. The insight that shrinks the MVP ~80%
+## 4. What makes the MVP tractable
 
-Both cruxes can be **deferred out of the first shippable version**:
+The feature is large, but two decisions keep the first version small **without** sacrificing the
+"edit my real config" requirement:
 
-- **App-owned configs dodge round-tripping.** If the editor's first job is *creating* configs
-  (and editing ones it created), keyd-viz owns the file format and can regenerate it freely —
-  no comment/format preservation needed. Hand-authored files are shown **view-only ("edit in
-  your text editor")** until the lossless layer exists. A managed-file header
-  (`# Managed by keyd-viz`) sets expectations.
-- **`keyd bind` live-preview + manual save dodges the privileged writer (at first).** The
-  editor can preview edits live via `keyd bind` (instant, no files) and, to persist, **write a
-  draft to `~/.config/keyd-viz/drafts/` and let the user install it** (even literally: show the
-  generated text + a `sudo cp … /etc/keyd/ && sudo keyd reload` one-liner). The one-click
-  polkit apply comes later as a self-contained phase.
+- **Verbatim preservation, not app-ownership.** The editor carries every construct it doesn't
+  model — comments, ordering, unknown actions, whole unmodeled sections — as opaque text, and a
+  **round-trip gate** refuses to save any file it can't reproduce exactly except for the user's
+  intended change (§5.1). This replaces v1's "only edit files we created" scoping, which served
+  nobody. The *first shippable* editor can be deliberately narrow in *what it lets you change*
+  (e.g. single-key remaps) while still safely round-tripping *any* file.
+- **Draft-then-install for persistence (at first).** Before the one-click privileged apply is
+  built, "save" writes the edited file to `~/.config/keyd-viz/drafts/` and shows exactly how to
+  install it (the diff + `sudo cp … /etc/keyd/ && sudo keyd reload`). This ships value without
+  the privileged-writer being on the critical path for v1. The polkit one-click apply (§5.2) is
+  a self-contained later phase.
 
-So the MVP is **"detect any keyboard → generate a starter config → set bindings visually →
-preview live → save a draft you install,"** not "reimplement keyd."
+MVP, restated: **open any real config → change a binding visually → see it on the board → save
+it back without losing anything.** Create-from-scratch for an unconfigured keyboard is a small
+addition on top.
 
 ---
 
 ## 5. Architecture
 
-### 5.1 Data model & round-trip — **PROPOSED**
+### 5.1 Data model, one parser, round-trip — **DECIDED (review #1)**
 
-Introduce an **edit model** distinct from the current render model:
+**One keyd-faithful parser drives both the viewer and the editor.** A second "edit parser"
+alongside the existing one would drift; instead we upgrade the single parser to be faithful to
+keyd's grammar and derive the render model from it. (Review #1 already fixed two places where the
+parser diverged from keyd.)
 
-- A structured representation of the keyd config: ids, global options, layers, and per-key
-  **bindings**. Each binding is either a **known action** (typed: remap / layer / overload /
-  oneshot / toggle / lettermod / chord / disable / modifier / macro…) **or an opaque `Raw`
-  binding** carrying the original right-hand-side string verbatim. Opaque bindings render as
-  "advanced (raw)" and are preserved untouched on save — this lets us cover 100% of configs
-  without having modeled 100% of actions.
-- **Serializer (`EditModel → text`)** with a single consistent formatting policy. ~200 LOC.
-- **MVP fidelity policy:** regenerate-from-model for **app-owned** files; hand-authored/complex
-  files are view-only. A file is "app-owned" if it carries our managed header (or lives in our
-  drafts dir).
-- **E3 upgrade path:** a lossless CST (spans + trivia) that enables surgical edits of
-  hand-authored files preserving comments/formatting (~500–800 LOC parser+serializer). The edit
-  model is designed so the CST can back it later without changing the UI layer.
+The editor works on an **edit model** in which each binding is either:
+- a **typed known action** (remap / layer / overload / oneshot / toggle / lettermod / chord /
+  disable / modifier / macro …), or
+- an **opaque `Raw` binding** carrying the original right-hand-side text verbatim. **Raw bindings
+  render as their RHS text** (what the viewer already does today) — never as a generic
+  "advanced" placeholder, which would make the board less informative than the current viewer.
 
-**OPEN:** Do we build the edit model on top of the existing lossy parser (re-parsing for
-structure, keeping raw RHS), or write a second, edit-oriented parser from the start? Leaning
-toward a dedicated edit parser that always retains raw RHS strings, so nothing is ever lost.
+Preservation extends to **whole unmodeled sections** (`[global]`, `[aliases]`, `include` lines)
+and to comments/ordering, carried as opaque trivia. Granularity (per-line vs per-section raw) is
+an implementation detail to settle in E0, but the contract is fixed:
 
-### 5.2 Privilege & apply path — **PROPOSED (needs critic review)**
+**The round-trip gate (the core safety invariant):** before any save, the editor checks that
+`serialize(parse(file))` reproduces the on-disk file. If it doesn't — i.e. the file contains
+something the model can't reproduce — the editor **refuses to regenerate** and falls back to
+view-only for that file. This gate, not a `# Managed by keyd-viz` header, is what prevents
+silent clobbering. A header is at most a hint; the gate is the guarantee.
 
-The GUI must stay unprivileged. Three boundaries are in play: **read** (free), **live preview**
-(`keyd bind`), and **persist** (`/etc/keyd` write + `keyd reload`). Candidate designs:
+> Why this replaces v1's plan: v1 keyed fidelity off file *ownership* (a header), which silently
+> clobbers a file the moment a user hand-edits it. The round-trip diff is an honest, content-
+> based check that works for any file.
 
-- **(A) pkexec one-shot for persist; helper untouched.** Persisting spawns
-  `pkexec /usr/libexec/keyd-viz-apply <draft>`, a tiny privileged tool that runs `keyd check`,
-  backs up the old file, writes `/etc/keyd/<name>.conf`, runs `keyd reload`, and arms the
-  auto-revert (§5.4). Simple, keeps the helper's events-out purity. **But** it can't drive
-  per-edit live preview (one auth prompt per save is fine; per keystroke is not).
-- **(B) helper gains a narrow, authz'd command channel** for `keyd bind`/`reload` (the helper
-  is already in the `keyd` group). Enables fluid live preview. **But** this breaks the
-  one-directional design and — critically — see §5.3, a command channel that can install
-  arbitrary bindings is a **root escalation surface**.
-- **(C) hybrid (leaning):** live preview via a *constrained* command channel (B) that
-  **refuses `command()` and other shell-capable actions** and is gated to the same-uid active
-  session; persist via pkexec one-shot (A) with full `keyd check` + backup + auto-revert.
+**Cost note:** the serializer is small for the *modeled* actions, but real fidelity lives in the
+unmodeled sections and trivia — the earlier "~200 LOC" figure was for the easy half. Budget for
+faithfully re-emitting `[ids]` (including `*` wildcards and `-id` exclusions), `[global]`,
+`[aliases]`, and `include`.
 
-**OPEN:** Is the constrained command channel worth the added attack surface, or do we ship
-preview-via-pkexec-on-explicit-"preview"-button (coarser, but no daemon change)? This is the
-top question for the first critic review.
+**E-later upgrade:** a full lossless CST (spans + trivia) enables *surgical* edits that preserve
+exact formatting even inside modeled sections. The edit model is designed so a CST can back it
+later; the UI depends only on a single `can_round_trip(file) -> bool` capability bit, which is
+the only formatting concern allowed above the model.
 
-### 5.3 Security: the `command()` / `keyd bind` escalation — **must-resolve**
+### 5.2 Privilege & apply path — **DECIDED: single transient privileged tool, no live channel**
 
-keyd socket access ⇒ root-equivalent, because a binding can be `command(<shell>)` run as root.
-Therefore **any** path that lets the GUI (or anything on the user's session) inject bindings is
-a privilege-escalation vector. Hard rules for whichever design wins:
+Review #1 established that there is **no safely-constrainable live `keyd bind` channel** (§3.2:
+`bind` can install `macro()`/any action; the socket has no caller auth; a same-uid channel
+re-grants root to every process running as the user). So we drop options B/C from v1 entirely.
 
-- The persist tool and any command channel **must reject** `command()` (and re-validate the
-  whole file with `keyd check`) — keyd-viz never installs a shell-executing binding on the
-  user's behalf without explicit, unmistakable, separately-confirmed intent.
-- A live command channel **must** authenticate the peer (`SO_PEERCRED` + logind active session,
-  exactly as the event socket already does) and **must not** be reachable by other users.
-- Writing `/etc/keyd` must go through polkit (auth dialog), **not** by adding the user to the
-  `keyd` group (that's a permanent, root-equivalent, session-wide downgrade — explicitly
-  rejected by the project's permission philosophy).
+**The only privileged path is a transient, one-shot tool invoked via polkit/pkexec for *persist
+only*:**
 
-### 5.4 Safety: validate, preview, auto-revert — **PROPOSED**
+- **No caller-supplied paths.** The GUI does not hand the tool a file path or a target name to
+  write. The tool reads the candidate config from a fixed, root-checked location (or from
+  stdin), and the destination filename is validated against a strict pattern (`^[A-Za-z0-9_-]+$`)
+  before becoming `/etc/keyd/<name>.conf`. This blocks `../cron.d/x`-style traversal and
+  arbitrary-`/etc`-write.
+- **No symlink / TOCTOU games.** Open the target directory with a dir-fd on `/etc/keyd`; write to
+  a temp file with `O_NOFOLLOW`; `keyd check` **the exact bytes just written** (not the draft the
+  GUI showed); then atomically `renameat` into place. Back up the prior file(s) the same way.
+- **The long-lived helper never gains write/bind capability.** Its events-out-only design and
+  sandbox stay intact. The privileged capability exists only for the lifetime of one
+  authenticated `pkexec` invocation.
+- **polkit action is itself a security artifact.** Spec its action id and `allow_active` setting
+  explicitly. If apply is `auth_admin` per save, accept the prompt; do **not** set
+  `allow_active=yes`, which would turn the tool into a silent root-write primitive any same-uid
+  process could drive.
 
-Layered defense so the user can never get stuck:
+**Preview is not on this path** — preview is visual (§5.6), so there is no per-keystroke
+privileged traffic and thus no auth-fatigue pressure to weaken the polkit policy.
 
-1. **Validate** every candidate with `keyd check` before it touches `/etc/keyd` (gate on the
-   command's presence; fall back to our own parser if absent).
-2. **Live preview** via `keyd bind` so edits are felt before they're persisted; `keyd bind
-   reset` is instant revert.
-3. **Apply-with-auto-revert** on persist: back up the current config, write+reload the new one,
-   start a timer, and show a "Keep these changes? (reverting in 15s…)" dialog. No confirmation
-   ⇒ restore the backup + reload. (`keyd check` can't catch *logical* lockouts like disabling
-   every key, so the timer is essential.)
-4. **Always surface the panic sequence** (Backspace+Escape+Enter) in the edit UI and docs.
+### 5.3 Security: what the apply tool must enforce — **DECIDED**
 
-### 5.5 Detect-all-keyboards & create-config flow
+Because socket access is root-equivalent and `keyd check` validates only syntax, the *content*
+safety check is ours to build, and it must run **on the final serialized bytes**, not on the
+edit model:
 
-Already free (`connected_devices()`). Edit Mode lists every connected keyboard; for one with no
-matching config, "Create config" generates a starter `[ids]` (its `vendor:product`) + `[main]`
-into the drafts dir, then opens the editor.
+- **Reject (or require separate, explicit, unmistakable confirmation for) `command(`, `macro(`,
+  and `include`** in the bytes being written. `command()` is root code-exec; `macro()` is
+  keystroke injection as root; `include` launders content past the scan by pulling in another
+  file at reload time. None are exempt just because they arrived as opaque `Raw` bindings — the
+  scan does not trust the model.
+- **Tokenize with keyd's own escaping rules.** keyd un-escapes `\(` `\)` etc. inside
+  `command(...)`; a naive substring scan can be evaded. The scan must replicate keyd's grammar so
+  obfuscated forms can't slip through.
+- **`include` policy:** for app-managed files, either refuse `include` outright, or vet the
+  transitive closure of included files on every save *and* note that the scan is meaningless if
+  an attacker can drop a file the include points at. Simplest MVP stance: refuse to persist a
+  config containing `include`.
+- **Never fall open.** If `keyd check` is absent or the environment can't be validated, **refuse
+  to persist** — do not fall back to our lossy parser as a security check.
+- The user's own machine is the trust boundary we *can't* fully close: `SO_PEERCRED` + active
+  session tells us *which human*, not *which program*, so it cannot distinguish the GUI from
+  other same-uid processes. This is exactly why there is no live channel and why apply is a
+  discrete, user-confirmed polkit action rather than a standing capability.
+
+### 5.4 Safety: validate, apply, dead-man's-switch revert — **DECIDED**
+
+So the user can never get stuck, in order of reliability:
+
+1. **The panic sequence is the primary failsafe.** Backspace+Escape+Enter terminates keyd and
+   restores the raw keyboard, no matter how broken the config — surface it prominently in the
+   edit UI and docs. Everything below is to avoid *needing* it.
+2. **`keyd check`** the exact bytes before they go live (syntax gate; not safety — see §5.3).
+3. **Apply with a dead-man's-switch held by the *root* tool, not the GUI.** The privileged tool
+   writes + reloads, then **blocks for N seconds waiting for a positive "keep" confirmation** on
+   a private fd. Confirm = keep; **anything else (timeout, GUI crash, user can't interact)
+   reverts** to the backup and reloads. Revert authority lives in the privileged process because
+   the unprivileged GUI cannot write `/etc/keyd`; "keep" is the action that requires working
+   input, and its *absence* is safe. (`keyd check` can't catch logical lockouts like disabling
+   every key, so this matters even for syntactically valid configs.)
+4. **Atomic multi-file backup/restore.** Because reload is global and one `[ids]` can be shared
+   across keyboards (§5.5), back up and restore the *set* of affected files together, so a revert
+   can't leave a half-old/half-new state that bricks a *different* keyboard.
+
+### 5.5 Detect-all-keyboards & create-config flow — **PROPOSED**
+
+Device enumeration is already free (`connected_devices()`). Edit Mode lists every connected
+keyboard. "Create config" for an unconfigured keyboard generates a starter `[ids]` (its
+`vendor:product`) + `[main]` as a draft. **But "no config names this id" ≠ "this device is
+unclaimed":** an existing config using `[ids] *` (wildcard) or exclusions already matches it, and
+keyd forbids the same id in two files. So before offering create, evaluate wildcard/exclusion
+matching; if a wildcard config already claims the device, offer to **edit that config** rather
+than spawn a colliding file.
+
+### 5.6 Preview is visual, not applied — **DECIDED (review #1)**
+
+v1 proposed previewing edits by pushing them to the live keyboard via `keyd bind`. On a single
+keyboard that's the device you're typing on — remap Enter or Space mid-edit and you may be unable
+to confirm the very dialog asking you to keep it. And it needs the unsafe channel (§5.2). So:
+
+- **MVP preview is purely visual** — the board already renders what a binding does; show the
+  edited binding's new legend/badge on the existing board. Zero privilege, zero risk, and it's
+  the thing keyd-viz is already good at.
+- A real *applied* "feel it on your keyboard" preview can come much later, only after the
+  dead-man's-switch apply infra is battle-tested, and only as an explicit momentary action
+  ("hold to preview") routed through the same audited apply path — never a standing channel.
 
 ---
 
 ## 6. Phased plan
 
-Each phase is independently shippable and ordered to deliver value early while de-risking the
-cruxes first.
+Ordered to make "edit my real config safely" real as early as possible, and to de-risk the two
+cruxes before UI breadth.
 
-- **E0 — Spikes & decisions (no user-facing code).** Prototype a surgical round-trip on a real
-  config; prototype the persist path (pkexec + `keyd check` + backup + auto-revert) and, if
-  pursued, the constrained command channel. Probe keyd at runtime (`keyd check`/`bind`/
-  `list-keys` presence, socket path). **Settle §5.1, §5.2, §5.3 via critic review.** Output:
-  this doc, finalized. **Also stand up the T0/T1 test harness (§8)** — vendor keyd at a pinned
-  SHA, get `test-io` building in CI, and land the serializer's first property + behavioral
-  tests — *before* the editor grows, since everything trusts the serializer.
-- **E1 — Create + simple edit (app-owned, draft-then-install).** Detect all keyboards; create a
-  starter config; click a key → set plain remap / disable / a couple of common actions; live
-  preview via `keyd bind`; draft saved to XDG; "how to install" path. No daemon changes.
-- **E2 — Breadth + one-click apply.** Layers (add/rename/delete), the common-then-uncommon
-  action set, chords, `[global]` options; polkit one-click apply with auto-revert; a key picker
-  fed by `keyd list-keys`.
-- **E3 — Power & fidelity.** Lossless editing of hand-authored files (CST); macro editor;
-  `command()` behind explicit confirmation; aliases, includes, composite/layout layers;
-  undo/redo; import/export.
+- **E0 — Foundations & decisions (mostly non-UI).**
+  1. Make the single parser round-trippable: typed + `Raw` bindings, opaque trivia/sections,
+     and the `serialize(parse(file)) == file` gate (§5.1). **Freeze the EditModel + serializer
+     interface first**, then write its property tests (you can't write serializer tests before
+     the type exists — v1's "tests before the serializer" was a cycle).
+  2. Prototype the privileged apply tool (§5.2): no caller paths, name validation, `O_NOFOLLOW`
+     + temp + `renameat`, byte-level safety scan (§5.3), dead-man's-switch revert (§5.4).
+  3. Probe keyd at runtime (`keyd check`/`list-keys` presence, socket path, version).
+- **E1 — Edit a real config (draft-then-install).** Open any config the round-trip gate accepts;
+  click a key → change a plain remap / disable / a couple of common actions; visual preview;
+  save a draft + show the install steps. No daemon changes, no privileged writer yet. This is the
+  first version with a real audience.
+- **E2 — Breadth + one-click apply.** More typed actions (common → uncommon), layers
+  (add/rename/delete), chords, `[global]` options; the polkit one-click apply with the
+  dead-man's-switch revert; key picker fed by `keyd list-keys`; create-config flow (§5.5).
+- **E3 — Power & fidelity.** Lossless CST for surgical formatting-preserving edits; macro editor;
+  `command()` behind explicit confirmation; aliases/includes/composite/layout layers; undo/redo.
 
 ---
 
 ## 7. Risks & open questions
 
-- **[OPEN, top priority]** Command channel (§5.2/§5.3): constrained live channel vs.
-  pkexec-on-preview. Security vs. UX.
-- **[OPEN]** Edit model atop existing parser vs. a new edit-oriented parser (§5.1).
-- **[RISK]** Logical lockouts `keyd check` can't catch → mitigated by auto-revert + panic seq.
-- **[RISK]** Version drift: `keyd check`/`bind`/socket path vary by keyd version → probe at
-  runtime, degrade gracefully.
-- **[RISK]** Scope creep: keyd's full vocabulary is large → opaque `Raw` bindings (§5.1) let us
-  ship without 100% coverage; grow typed actions incrementally.
-- **[RISK]** Regression of the beloved viewer → editing is a separate, opt-in mode.
-- **[OPEN]** Multi-keyboard configs share layer state and one `[ids]` lives in one file — how
-  does the editor present/guard that?
-- **[OPEN]** Distro variance for polkit packaging (AppImage has no installer → apply may be
-  AUR/source-install only; AppImage stays draft-then-manual).
-- **[OPEN]** Test oracle for complex-timing actions (§8.2): how big a hand-authored ground-truth
-  suite, and the golden-review policy on keyd version bumps.
-- **[OPEN]** Vendor keyd source as a git submodule vs. fetch-at-pinned-SHA in CI (§8.5).
+- **[DECIDED]** No live `keyd bind` channel; single transient pkexec apply tool (§5.2). *(was the
+  top open question in v1)*
+- **[DECIDED]** One keyd-faithful parser; round-trip-diff gate, not a header (§5.1).
+- **[DECIDED]** Revert authority lives in the privileged tool as a dead-man's switch; panic
+  sequence is the primary failsafe (§5.4).
+- **[OPEN]** `Raw`/trivia granularity (per-line vs per-section) and how `[global]`/`[aliases]`/
+  `include` are carried (§5.1).
+- **[OPEN]** `include` policy: refuse outright in managed files, or vet the transitive closure
+  (§5.3).
+- **[OPEN]** Multi-keyboard: shared `[ids]`/layer state across one file — UI presentation and the
+  atomic backup set (§5.4, §5.5).
+- **[OPEN]** Distro variance for polkit packaging: the AppImage has no installer, so one-click
+  apply is likely AUR/source-install only; **AppImage users stay on draft-then-install** even
+  after E2 — state this up front, not as a footnote.
+- **[OPEN]** Test oracle for complex-timing actions and golden-review policy on keyd bumps (§8).
+- **[RISK]** Version drift (`keyd check`/socket/grammar vary by version) → probe at runtime;
+  security checks must **fail closed**, never fall back to the lossy parser (§5.3).
+- **[RISK]** Regression of the beloved viewer → editing is a separate, opt-in mode; the parser
+  upgrade is covered by the existing + new parser tests.
 
 ---
 
-## 8. Testing protocol — behavioral verification at scale
+## 8. Testing protocol — honest about what each tier proves
 
-The goal (user's framing): **a test harness that emulates layout changes and proves the right
-keys come out — thousands of cases covering every keyd feature, kept green throughout
-development.** A virtual keyboard is the dream; the *better* foundation turns out to already
-exist upstream. Verified facts (E0 spike, keyd 2.6.0 source @ `f564288`):
+User's framing: **a harness that emulates layout changes and proves the right keys come out,
+kept green throughout development.** The good news from the spike: keyd ships a deterministic,
+kernel-free engine we can reuse. The correction from review #1: be precise about *what* it
+proves — much of it tests keyd, not our editor, so the hand-authored oracle has to be the spine.
 
-- **keyd ships `test-io` (`t/test-io.c`)** — a harness that `#include`s keyd's headers and links
-  its **actual processing core** (`keyboard.c`, `config.c`, `macro.c`, `keys.c`, …), calling the
-  real `kbd_process_events()`. Output is captured by an in-memory `send_key` callback. **No
-  kernel, no uinput, no root.** Timing is *simulated* — `.t` files carry virtual-time lines
-  (`NNNms`); the engine is fully deterministic. Cases run in microseconds.
-- **`.t` DSL:** input events (`<key> down/up`, interleaved `NNNms`), a blank line, then the
-  expected output event sequence; comparison is exact. `make test-io` runs ~95 such cases
-  against one shared `t/test.conf`.
-- **keyd's *other* harness (`t/run.sh` + `runner.py`)** is the real end-to-end one: root, builds
-  keyd with a temp `CONFIG_DIR`, launches the daemon, creates a `/dev/uinput` virtual keyboard,
-  grabs keyd's output device, injects + reads back. This is the "virtual test keyboard."
-- **Isolation:** `CONFIG_DIR`/`SOCKET_PATH` are **compile-time** macros (no runtime flag/env).
-  An isolated keyd = `make CONFIG_DIR=/tmp/t SOCKET_PATH=/tmp/t.sock && ./bin/keyd`. Two
-  instances coexist only with distinct socket paths.
-- **Tooling on this machine:** `keyd 2.6.0`, source at `/tmp/keyd-src`; `python-evdev 1.9.3`
-  and `libevdev 1.13.6` **installed**; `evemu` available in `extra` (record/replay fixtures).
+Verified facts (keyd 2.6.0 @ `f564288`, source at `/tmp/keyd-src`):
 
-### 8.1 The four tiers — **PROPOSED**
+- **keyd's `test-io` (`t/test-io.c`)** links keyd's real processing core and runs `.t` cases
+  (input events + virtual-time `NNNms` lines → expected output) with **simulated, deterministic
+  time, no kernel, no root** (confirmed: timeouts are driven by injected `ev->timestamp`, not
+  wall clock). It takes an arbitrary config path as `argv[1]`, but builds **one** keyboard from
+  it and runs all `.t` files against that — so per-config testing means one process spawn per
+  config, and there are hard limits (`static char buf[4096]` per file, 1024 events). "µs/case"
+  is in-loop time and excludes parse+spawn.
+- **keyd's `t/run.sh` + `runner.py`** is the real end-to-end harness: root, builds keyd with a
+  temp `CONFIG_DIR`, launches the daemon, creates a `/dev/uinput` virtual keyboard, grabs the
+  output device, injects + reads back. (`CONFIG_DIR`/`SOCKET_PATH` are **compile-time** macros;
+  isolation = build with custom values.)
+- **License: keyd is MIT** (top-level `LICENSE`; per-file headers point to it). So vendoring its
+  source into our test build is fine — **no copyleft contamination** (the earlier GPL worry was
+  unfounded). Obligation: preserve keyd's copyright notice + MIT text where we vendor it (e.g.
+  `tests/vendor/keyd/LICENSE`), and re-check the license on every SHA bump.
+- **Coupling caveat:** `test-io` links keyd's *internal* symbols (`kbd_process_events`,
+  `struct keyboard`, …), which have no stability contract. A keyd refactor can break our test
+  *build*, not just goldens — budget keyd bumps as deliberate ports.
+- Tooling present: `keyd 2.6.0`; `python-evdev 1.9.3` + `libevdev 1.13.6` installed; `evemu` in
+  `extra`.
 
-| Tier | What | Engine | Privilege | Speed | Scale | Runs |
-| --- | --- | --- | --- | --- | --- | --- |
-| **T0 Validate** | every generated config parses & validates | `keyd check` + our serializer property tests | none | µs–ms | all | every commit |
-| **T1 Behavioral** | input sequence → expected output, per action × key | **keyd's `test-io` core** fed *our* generated config | none | µs/case | **thousands** | every commit |
-| **T2 E2E smoke** | real virtual keyboard → isolated keyd → captured output | uinput (python-evdev) + isolated keyd build | root / `input`+uinput rule | ~100ms/case | curated dozens | nightly / pre-release |
-| **T3 Safety/UI** | apply-revert, backup restore, `command()` rejection; editor panel snapshots | our code; Slint demo mode | none | ms | per feature | every commit |
+### 8.1 The tiers — **PROPOSED**
 
-**T1 is the workhorse and the answer to "thousands of cases."** We vendor/build `test-io`
-against keyd's pinned source, generate a `(config, input, expected)` triple per scenario, and
-run keyd's *real* engine. This validates the whole chain **UI-intent → EditModel → serializer →
-keyd semantics** without a kernel — and doubles as a **regression canary for keyd upstream**.
+| Tier | What it actually proves | Engine | Privilege | Runs |
+| --- | --- | --- | --- | --- |
+| **T0 Round-trip + validate** | `serialize(parse(f)) == f` on a corpus of real configs; serializer output passes `keyd check` | our code + `keyd check` | none | every commit |
+| **T1 Serializer-intent** | for a *hand-authored* `(intent → expected output)` case, `serialize(intent)` produces a config whose `test-io` output matches the expected sequence | keyd `test-io` core | none | every commit |
+| **T1b keyd-regression canary** | generated configs' `test-io` output matches frozen goldens (catches drift in our serializer *or* in keyd) | keyd `test-io` core | none | every commit |
+| **T2 E2E smoke** | a dozen anchor cases agree on a real kernel/uinput path | uinput + isolated keyd | root / uinput | **self-hosted / pre-release, opt-in** |
+| **T3 Safety/UI** | dead-man's-switch revert, backup restore, `command(`/`macro(`/`include` rejection, panel snapshots | our code; Slint demo | none | every commit |
 
-### 8.2 The oracle problem (the honest hard part) — **OPEN**
+### 8.2 The oracle problem — why the hand-authored suite is the spine — **OPEN**
 
-For a *generated* config + *generated* input, what is the "expected output"? If we compute it
-ourselves we're reimplementing keyd's semantics — circular. So expected-output comes from three
-sources, used deliberately:
+The trap (review #1): in a purely *generated* test, keyd is **both** the oracle and the
+system-under-test. If our serializer emits a wrong-but-valid config (say it swaps `overloadt`'s
+two timing args), keyd faithfully runs the wrong config, `test-io` captures a self-consistent
+"golden," and the test goes **green** — the bug ships. So:
 
-1. **Direct oracle (correctness) — simple actions only.** For plain remap / disable / pure
-   modifier / straightforward layer, intent → output is unambiguous (`a = b` ⇒ press `a` yields
-   `b`). Assert directly. This is where generated breadth gives *true* correctness coverage.
-2. **Golden/snapshot (regression) — complex actions.** For tap/hold/overload/oneshot/chord
-   timing, capture `test-io` output once, freeze it as golden, diff thereafter. Catches *any*
-   future drift in our serializer **or** in keyd — but the first capture is assumed correct, so
-   each golden must be reviewed when added (and re-reviewed on keyd version bumps).
-3. **Hand-authored oracle (ground truth) — the keyd-style suite.** A curated set of
-   `(config, .t)` cases with human-verified expected output, exactly like keyd's own `t/*.t`,
-   covering every action type at least once. Small, high-trust, the backbone the generated
-   cases hang off.
+- **T1 (the real correctness tier)** requires the *expected output* to come from human intent,
+  independent of the serializer: a curated `(intent, config-or-not, expected key sequence)` suite
+  in keyd's `.t` style, covering every action type. This is small, high-trust, and the actual
+  proof that *our* mapping is right.
+- **T1b (canary)** is honestly just regression safety: "keyd still does what it did, and our
+  serializer still emits the same text." Valuable, but it does **not** prove correctness — don't
+  let its case count masquerade as coverage.
+- **Drop the "thousands of cases" framing.** keyd covers its whole engine in ~94 hand cases;
+  most key-iteration is redundant because keyd is key-agnostic for most actions. State coverage
+  as (action types × timing boundaries × structural contexts), cap key iteration to a few
+  representatives, and let the generator fuzz timing boundaries — not multiply trivially.
 
-> **Don't oversell auto-generation.** Thousands of *generated* cases give breadth + regression
-> safety; *correctness* of complex-timing cases still rests on the hand-authored oracle and
-> reviewed goldens. The protocol must make that boundary explicit, not paper over it.
+### 8.3 The virtual keyboard (T2) — real, but kept in its lane
 
-### 8.3 Generative strategy
+The uinput E2E is the only tier that exercises the real kernel/timing path, so it's the ground
+truth that T1/T1b agree with reality — on a **dozen** anchor cases, not the bulk. Caveats that
+keep it from rotting into a permanently-skipped job:
+- **Needs a self-hosted runner.** Hosted GitHub runners don't reliably provide `/dev/uinput` /
+  `modprobe uinput`; `--privileged` is a container notion that doesn't apply to the hosted host
+  VM. Make T2 non-gating and explicitly opt-in (release-tag / nightly / local).
+- **Real wall-clock timing flakes** on tap-vs-hold boundaries; keep T2 cases away from the knife-
+  edge timings (those live in T1 where time is simulated).
+- **Hard-fail if `.grab()` fails** rather than proceeding — a failed grab leaks injected
+  keystrokes into the runner's (or developer's) real session.
 
-A test-case generator enumerates `action × key(s) × (timing profile)` from the EditModel's
-known-action set, emitting `(config fragment, input scenario, expected/golden)` triples — so
-adding a new typed action automatically expands coverage. Property-based input (randomized but
-seeded — note `Math.random` is unavailable in our workflow scripts, but Rust test code has
-`rand`) explores tap-vs-hold boundary timing, overlapping holds, chord windows, oneshot expiry.
+### 8.4 Sequencing & maintenance
 
-### 8.4 The virtual test keyboard (T2) — concrete shape
-
-Pytest (or a Rust integration test) that: builds keyd from the pinned source with a temp
-`CONFIG_DIR`/`SOCKET_PATH`; writes the generated config there; launches `./bin/keyd`; creates a
-uinput device via `python-evdev` `UInput`; **`.grab()`s keyd's output device so events don't
-leak into the real session**; injects a scenario; reads back; asserts. Gated behind a marker
-(`@pytest.mark.e2e`) and a CI job that is `--privileged` with `uinput` loaded on the host. Kept
-to a representative smoke set — it's the ground truth that the kernel/uinput/real-timing path
-agrees with T1, not the bulk coverage.
-
-### 8.5 CI integration & maintenance
-
-- T0/T1/T3 run on every push (no privilege → standard GitHub runners). T2 is a separate
-  nightly/pre-release privileged job.
-- **Pin keyd's source** (submodule or vendored at a known SHA) so `test-io` and behavior are
-  reproducible; bump deliberately and re-review goldens on bump (a keyd behavior change *should*
-  turn T1 red — that's the canary working).
-- Respect the repo's hand-formatting rule: no `cargo fmt --check` gate (per project policy).
-- This protocol's T0/T1 layers should land **before** much editor code (test-first for the
-  serializer), since the serializer's correctness is the foundation everything else trusts.
+- T0/T1/T1b/T3 run every push (no privilege). T2 is separate and opt-in.
+- **Freeze the EditModel + serializer interface before writing their tests** (§6 E0) — test-first
+  applies to *behavior* once the *interface* exists, not before.
+- **Pin keyd's source** (submodule or vendored at a known SHA); a keyd behavior change turning
+  T1b red is the canary working; a *build* break is a planned port (§8 coupling caveat).
+- Pin T0's `keyd check` to the same vendored keyd, or document the version skew between the
+  installed `keyd check` and the pinned `test-io`.
+- Respect the repo's hand-formatting rule: no `cargo fmt --check` gate.
 
 ---
 
 ## 9. Decision log
 
-_(Append decisions here as critic reviews resolve the OPEN/PROPOSED items.)_
-
-- 2026-06-05 — Doc created from the E0 spike findings. Nothing finalized yet.
+- **2026-06-05 — v1 drafted** from the E0 spike. Nothing finalized.
+- **2026-06-05 — critic review #1** (4 adversarial reviewers, verified against keyd source).
+  Resolutions folded into v2:
+  - **Security model corrected.** "Refuse `command()`" is insufficient (`macro()` is also
+    root-equivalent; keyd's socket has no caller auth; `keyd check` is syntax-only; same-uid
+    channels re-grant root). **Dropped the live `keyd bind` channel; single transient pkexec
+    apply tool with no caller paths, byte-level grammar-aware scan, dead-man's-switch revert held
+    by the root tool; panic sequence is the primary failsafe.** (§5.2–§5.4)
+  - **Round-trip pulled into the MVP.** Verbatim preservation of unmodeled constructs + a
+    `serialize(parse(file)) == file` gate replace v1's header-based "app-owned, hand-authored is
+    view-only" scoping, which served almost no real users. (§4, §5.1)
+  - **One keyd-faithful parser** drives viewer + editor; `Raw` bindings render as their RHS.
+    (§5.1)
+  - **Two live viewer bugs found and fixed** outside this doc (`[layer:mods]`/`[a+b]` headers;
+    inline `#`). (§3.1)
+  - **Preview is visual, not applied** (§5.6).
+  - **Testing reframed honestly:** hand-authored intent oracle is the correctness spine; the
+    generated tier is a regression canary, not correctness; dropped "thousands of cases"; keyd is
+    **MIT** (no GPL problem) with an attribution obligation; T2 needs a self-hosted runner and is
+    opt-in; fixed the test-before-interface sequencing cycle. (§8)
+  - **Dropped the "VIA/Vial moment" framing** — honestly positioned as a GUI for `/etc/keyd`.
+  - Roadmap ordering unchanged: Phase 6 stays where it is (owner's call — the cost-based argument
+    to do tray/hotkey first doesn't outweigh this being the project's defining ambition).

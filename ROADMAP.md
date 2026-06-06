@@ -412,14 +412,16 @@ Each phase ships standalone value. Build order is fixed; later phases assume ear
 - **v1.2 (next):** system-tray resident process; KDE global-shortcut to summon/dismiss
   (pairs with the new compact mode → pinned overlay); Flatpak (optional, layer-only).
 
-### Phase 6 — Edit mode  *(the VIA/Vial moment — visual config authoring)*
-Turn keyd-viz from a read-only visualizer into a visual keyd config **editor**: detect any
-keyboard (even with no config), create a starter config, set bindings visually, preview them
-live via `keyd bind`, and apply safely (validate with `keyd check`, back up, apply-with-
-auto-revert). The two cruxes are lossless round-tripping and a privileged-but-safe write/reload
-path; the MVP sidesteps both via app-owned configs + draft-then-install. **Full design in
-[`docs/edit-mode-design.md`](docs/edit-mode-design.md)** (phases E0–E3, security analysis, open
-questions) — in review, no code yet.
+### Phase 6 — Edit mode  *(visual config authoring — a GUI for `/etc/keyd`)*
+Turn keyd-viz from a read-only visualizer into a visual keyd config **editor**: open any real
+config, change a binding visually, see it on the board, and save it back without losing
+anything. The two cruxes are lossless round-tripping (solved by carrying unmodeled constructs
+verbatim + a `serialize(parse(f)) == f` gate, in the MVP) and a privileged-but-safe write path
+(a single transient pkexec apply tool — no live socket channel — with a byte-level safety scan
+and a dead-man's-switch revert; the panic sequence is the primary failsafe). MVP persists via
+draft-then-install before the one-click apply lands. **Full design in
+[`docs/edit-mode-design.md`](docs/edit-mode-design.md)** (DRAFT v2, phases E0–E3, security
+analysis, testing protocol, decision log) — in review, no code yet.
 
 **Value checkpoints:** after P0–1 the tool already beats today's. P3 is the cheap headline.
 P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd GUI editor).
