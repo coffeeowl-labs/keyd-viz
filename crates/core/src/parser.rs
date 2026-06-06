@@ -38,9 +38,10 @@ pub fn parse_text(text: &str) -> Config {
     let mut section: Option<String> = None;
 
     for raw in text.lines() {
-        // keyd has full-line comments only: strip from the first '#'.
-        let line = raw.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
+        // keyd (ini.c) treats '#' as a comment only when it is the first
+        // non-space character of a line; a '#' inside a value is literal.
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
             continue;
         }
 
@@ -109,14 +110,16 @@ fn parse_main_binding(cfg: &mut Config, key: &str, val: &str) {
     }
 }
 
-/// `[name]` → `Some("name")` (word chars only), else `None`.
+/// `[name]` → the layer name. keyd (ini.c) treats any line that begins with
+/// `[` and ends with `]` as a section header, with no charset restriction. A
+/// layer's modifier/type qualifier (`[nav:C]`, `[main:layout]`) selects the
+/// base layer, so we merge those bindings into the part before the first `:`;
+/// composite names (`[a+b]`) are kept verbatim. Returns `None` only when the
+/// brackets are missing or the resolved name is empty.
 fn section_header(line: &str) -> Option<&str> {
     let inner = line.strip_prefix('[')?.strip_suffix(']')?;
-    if !inner.is_empty() && inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        Some(inner)
-    } else {
-        None
-    }
+    let name = inner.split(':').next().unwrap_or(inner).trim();
+    (!name.is_empty()).then_some(name)
 }
 
 /// Split `key = value` on the first `=`, trimming both sides. `None` if no `=`.

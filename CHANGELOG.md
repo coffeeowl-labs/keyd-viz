@@ -19,6 +19,16 @@ All notable changes to keyd-viz are documented here. The format is based on
 - The **pin** and **compact** controls are now icon buttons, each with two states (pin /
   pin-off; compact / expand), tinting green when active.
 
+### Fixed
+
+- **Modifier/composite layer headers now parse.** `[layer:mods]` (e.g. `[nav:C]`) and
+  composite `[a+b]` sections were rejected by the config parser, so their bindings were
+  silently attributed to the previous section (or dropped). `[layer:mods]` now merges into
+  its base layer and `[a+b]` is its own layer, matching keyd's grammar.
+- **`#` inside a value is no longer treated as a comment.** keyd only treats `#` as a comment
+  at the start of a line; the parser was stripping from the first `#` anywhere, truncating any
+  binding whose value contained one.
+
 ## [1.1.0] - 2026-06-05
 
 ### Added

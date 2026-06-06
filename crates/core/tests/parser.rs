@@ -80,6 +80,33 @@ fn empty_layer_section_registered() {
     assert!(cfg.layer("sym").is_some());
 }
 
+#[test]
+fn inline_hash_is_literal_not_a_comment() {
+    // keyd only treats '#' as a comment at line start; a '#' in a value stays.
+    let cfg = parse_text("[main]\n3 = #\n");
+    assert_eq!(cfg.remaps, vec![("3".to_string(), "#".to_string())]);
+}
+
+#[test]
+fn modifier_qualified_layer_merges_into_base() {
+    // `[nav:C]` is the nav layer's Control-held bindings — they belong to nav,
+    // not to whatever section preceded it.
+    let cfg = parse_text("[nav]\nh = left\n[nav:C]\nh = home\n");
+    let nav = cfg.layer("nav").expect("nav layer");
+    assert_eq!(nav.keys.len(), 2);
+    assert!(cfg.layer("nav:C").is_none());
+}
+
+#[test]
+fn composite_layer_header_parsed() {
+    // `[a+b]` is a real (composite) layer name; bindings must not leak into the
+    // previous section.
+    let cfg = parse_text("[main]\nx = y\n[fn+nav]\nq = w\n");
+    let composite = cfg.layer("fn+nav").expect("composite layer");
+    assert_eq!(composite.get("q"), Some("w"));
+    assert_eq!(cfg.remaps, vec![("x".to_string(), "y".to_string())]);
+}
+
 // -------------------------------------------------------------------- prettify
 #[test]
 fn prettify_cases() {
