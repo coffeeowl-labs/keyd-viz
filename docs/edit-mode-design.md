@@ -6,7 +6,9 @@
 > unsafe) and moved lossless round-trip from a deferred phase into the MVP; the 06-06 pass added
 > the competitive research (§10), the north-star UX vision (§9), and per-phase acceptance
 > criteria (§6). Decisions marked **PROPOSED** are not final; **OPEN** marks unresolved
-> questions; **DECIDED** marks settled ones.
+> questions; **DECIDED** marks settled ones. **Review #2 (2026-06-06) resolved all E0-blocking
+> OPEN items** — round-trip representation, `include` policy, multi-keyboard/backup, AppImage
+> apply, and the test-oracle sizing are now DECIDED; E0 is unblocked.
 >
 > **What this feature is:** a GUI front-end for authoring and editing `/etc/keyd/*.conf` —
 > point at a key, pick what it does, see it on the board, save it back safely. It is *not*
@@ -137,24 +139,39 @@ The editor works on an **edit model** in which each binding is either:
   render as their RHS text** (what the viewer already does today) — never as a generic
   "advanced" placeholder, which would make the board less informative than the current viewer.
 
-Preservation extends to **whole unmodeled sections** (`[global]`, `[aliases]`, `include` lines)
-and to comments/ordering, carried as opaque trivia. Granularity (per-line vs per-section raw) is
-an implementation detail to settle in E0, but the contract is fixed:
+**Representation — DECIDED (review #2): per-line verbatim entries.** keyd's config grammar is
+**strictly line-oriented** — verified in `config.c`/`ini.c`: `read_line` reads to `\n`, INI
+splits only on `\n`, `include` is expanded line-by-line, and there are **no** multi-line
+constructs (no continuations, no values spanning lines, no here-docs). A line is therefore the
+natural, safe atom. The model is an ordered list of sections, each an ordered list of *entries*;
+every entry stores its **original source line verbatim** plus an optional typed overlay for the
+lines we model. Comments and blank lines are entries too. Sketch:
 
-**The round-trip gate (the core safety invariant):** before any save, the editor checks that
-`serialize(parse(file))` reproduces the on-disk file. If it doesn't — i.e. the file contains
-something the model can't reproduce — the editor **refuses to regenerate** and falls back to
-view-only for that file. This gate, not a `# Managed by keyd-viz` header, is what prevents
-silent clobbering. A header is at most a hint; the gate is the guarantee.
+```rust
+struct EditConfig { preamble: Vec<Entry>, sections: Vec<Section>, trailing_newline: bool }
+struct Section { header_raw: String, kind: SectionKind, entries: Vec<Entry> }
+struct Entry { raw: String, eol: Eol, kind: EntryKind }  // raw = the line, verbatim, sans EOL
+enum EntryKind { Blank, Comment, Binding { key, val: Option<String>, typed: Typed, dirty: bool } }
+enum Typed { Remap(..), Hold(..), Toggle(..), /* modeled actions */ Raw /* render val verbatim */ }
+```
 
-> Why this replaces v1's plan: v1 keyed fidelity off file *ownership* (a header), which silently
-> clobbers a file the moment a user hand-edits it. The round-trip diff is an honest, content-
-> based check that works for any file.
+This makes `serialize(parse(f)) == f` **true by construction**: serialize walks entries and emits
+`raw + eol` for every untouched entry, regenerating *only* the one line the user edited. No
+regeneration code runs on a pure round-trip, so fidelity never depends on serializer correctness
+for any action. `[global]`/`[aliases]`/`include`/unknown actions are **not special-cased** — they
+are ordinary entries whose `Typed` is `Raw`.
 
-**Cost note:** the serializer is small for the *modeled* actions, but real fidelity lives in the
-unmodeled sections and trivia — the earlier "~200 LOC" figure was for the easy half. Budget for
-faithfully re-emitting `[ids]` (including `*` wildcards and `-id` exclusions), `[global]`,
-`[aliases]`, and `include`.
+**The round-trip gate, reframed (review #2):** because the representation makes round-trip
+identity-by-construction, the gate (`serialize(parse(bytes)) == bytes`, run before entering edit
+mode → else view-only) is no longer what prevents clobbering of unmodeled actions (that is now
+*structural*). It is a **model-soundness self-check** that catches our own parse/serialize
+asymmetry — most importantly **line-ending fidelity**. The new parser must **not** use
+`str::lines()` (it silently eats `\r` and the final-newline distinction); it must split on `\n`,
+keep `\r`/EOL state per entry, and record whether the last line was terminated. This is the one
+construct that can silently break round-trip; everything else (`=`-named keys, duplicate keys,
+`[a+b]`/`[nav:C]` headers, weird spacing) is preserved free because untouched lines replay
+verbatim. Lines we can't confidently *re-parse* with keyd's exact `parse_kvp` semantics become
+`Typed::Raw` and **non-editable** (view-only for that line) — never clobbered.
 
 **E-later upgrade:** a full lossless CST (spans + trivia) enables *surgical* edits that preserve
 exact formatting even inside modeled sections. The edit model is designed so a CST can back it
@@ -203,10 +220,22 @@ edit model:
 - **Tokenize with keyd's own escaping rules.** keyd un-escapes `\(` `\)` etc. inside
   `command(...)`; a naive substring scan can be evaded. The scan must replicate keyd's grammar so
   obfuscated forms can't slip through.
-- **`include` policy:** for app-managed files, either refuse `include` outright, or vet the
-  transitive closure of included files on every save *and* note that the scan is meaningless if
-  an attacker can drop a file the include points at. Simplest MVP stance: refuse to persist a
-  config containing `include`.
+- **`include` policy — DECIDED (review #2): permit it; scan one level deep as an advisory
+  footgun-catcher, do NOT refuse.** Review #1's "include laundering" worry turns out to be
+  largely **circular**, verified against `config.c`: `resolve_include_path` confines includes to
+  the config's own dir (`/etc/keyd`) or the `DATA_DIR` fallback (`/usr/share/keyd`) — **both
+  root-owned** — and `exists_and_is_relative` uses `realpath` + a prefix check that neutralizes
+  `..`, symlinks, and absolute-path escapes. `include` is **one level deep** (non-recursive). So
+  an attacker cannot control included content without already having write access to a root-owned
+  dir — i.e. already root. The real residual risk is a *legitimate admin* including a file that
+  itself contains `command(`/`macro(` — a footgun, not an escalation. Therefore: MVP
+  (draft-then-install) just **round-trips `include` lines verbatim**, no scan needed; the
+  one-click apply path (E2) does a **one-level closure scan** and routes any `command(`/`macro(`
+  found in an included file to the same explicit-confirmation flow as inline ones. Match keyd's
+  non-recursion (don't build a recursive vetter — it would diverge from keyd). Document that the
+  scan reflects apply-time state only and cannot re-vet future reloads — which is fine, because
+  included content is already root-gated. Reject absolute/`..` include args with a warning
+  (keyd ignores them anyway) as belt-and-suspenders.
 - **Never fall open.** If `keyd check` is absent or the environment can't be validated, **refuse
   to persist** — do not fall back to our lossy parser as a security check.
 - The user's own machine is the trust boundary we *can't* fully close: `SO_PEERCRED` + active
@@ -229,19 +258,39 @@ So the user can never get stuck, in order of reliability:
    the unprivileged GUI cannot write `/etc/keyd`; "keep" is the action that requires working
    input, and its *absence* is safe. (`keyd check` can't catch logical lockouts like disabling
    every key, so this matters even for syntactically valid configs.)
-4. **Atomic multi-file backup/restore.** Because reload is global and one `[ids]` can be shared
-   across keyboards (§5.5), back up and restore the *set* of affected files together, so a revert
-   can't leave a half-old/half-new state that bricks a *different* keyboard.
+4. **Transactional backup/restore — DECIDED (review #2): a write-set the MVP keeps at size 1.**
+   The privileged tool takes a **list** of writes `(path, prior: Existed(bytes) | Absent)` and
+   applies/reverts them all-or-nothing, with timestamped backups (same dir-fd + `O_NOFOLLOW`
+   discipline as §5.2). **In the MVP the list has exactly one element** (open one file → change a
+   binding → write it back), because the MVP performs no multi-file write — global reload re-reads
+   every file, but only our one file's *bytes* changed, so every other keyboard re-derives
+   identically. Review #1's "atomic *set*" is the right long-term shape but is only exercised by
+   E2+ structural ops (create-config, split/move an id between files), which introduce the
+   `Absent` case (revert = **delete** the newly-created file, not restore). Designing the
+   list+`Existed|Absent` interface now is the cheap forward-compat; MVP just never passes >1.
 
-### 5.5 Detect-all-keyboards & create-config flow — **PROPOSED**
+### 5.5 Editing scope, detect-keyboards & create-config — **DECIDED (review #2)**
 
-Device enumeration is already free (`connected_devices()`). Edit Mode lists every connected
-keyboard. "Create config" for an unconfigured keyboard generates a starter `[ids]` (its
-`vendor:product`) + `[main]` as a draft. **But "no config names this id" ≠ "this device is
-unclaimed":** an existing config using `[ids] *` (wildcard) or exclusions already matches it, and
-keyd forbids the same id in two files. So before offering create, evaluate wildcard/exclusion
-matching; if a wildcard config already claims the device, offer to **edit that config** rather
-than spawn a colliding file.
+**Edit per *file*, not per *device*.** Verified in `config.c`/man: all `[ids]` in one file
+**share one state** — there is no per-device scoping inside a file. So a per-device editor would
+be a lie the moment a file lists two keyboards (changing a binding changes it for *both*).
+Therefore the edit unit is the file, with a **persistent affected-keyboards banner**:
+- one concrete id → "Editing config for <device> (`vendor:product`)";
+- multiple ids → "Changes affect N keyboards: X, Y" (connected ones emphasized — we already track
+  which matched, `main.rs`);
+- wildcard (`[ids] *`) → "Applies to ALL keyboards not claimed by another config" + list the
+  devices other configs carve out (compute via the existing cross-file ranker).
+
+**Create-config routes through a "who governs this device?" check.** Device enumeration is free
+(`connected_devices()`). keyd does **not actually forbid** a duplicate id in two files (review #2
+correction) — it resolves the clash *nondeterministically* by `readdir` order, which is worse. So
+before creating, run the existing ranker: a specific config (rank 2) beats a wildcard (rank 1),
+so if a device is already governed, offer to **edit the governing config** rather than spawn a
+colliding file. When nothing claims it, create a starter `[ids]`+`[main]` — and write **only that
+new file** (no need to add an exclusion to the wildcard config, since the new specific config
+already out-ranks it), keeping create single-file in the MVP. Also **warn on load** if two files
+contain a true same-rank duplicate id (a pre-existing user misconfiguration we shouldn't silently
+pick a side on).
 
 ### 5.6 Preview is visual, not applied — **DECIDED (review #1)**
 
@@ -311,20 +360,27 @@ from review #1.
 - **[DECIDED]** One keyd-faithful parser; round-trip-diff gate, not a header (§5.1).
 - **[DECIDED]** Revert authority lives in the privileged tool as a dead-man's switch; panic
   sequence is the primary failsafe (§5.4).
-- **[OPEN]** `Raw`/trivia granularity (per-line vs per-section) and how `[global]`/`[aliases]`/
-  `include` are carried (§5.1).
-- **[OPEN]** `include` policy: refuse outright in managed files, or vet the transitive closure
-  (§5.3).
-- **[OPEN]** Multi-keyboard: shared `[ids]`/layer state across one file — UI presentation and the
-  atomic backup set (§5.4, §5.5).
-- **[OPEN]** Distro variance for polkit packaging: the AppImage has no installer, so one-click
-  apply is likely AUR/source-install only; **AppImage users stay on draft-then-install** even
-  after E2 — state this up front, not as a footnote.
-- **[OPEN]** Test oracle for complex-timing actions and golden-review policy on keyd bumps (§8).
+- **[DECIDED]** (review #2) Round-trip representation is **per-line verbatim entries**;
+  `[global]`/`[aliases]`/`include` are ordinary `Raw` entries; round-trip is identity-by-
+  construction and the gate is a model-soundness self-check (§5.1).
+- **[DECIDED]** (review #2) `include` is **permitted**, not refused — keyd confines includes to
+  root-owned dirs, so the laundering threat is circular; one-level closure scan at apply (§5.3).
+- **[DECIDED]** (review #2) Edit **per-file** with an affected-keyboards banner; backup is a
+  transactional write-set the MVP keeps at size 1 (§5.4, §5.5).
+- **[DECIDED]** (review #2) The AppImage uses **draft-then-install permanently** — there is no
+  safe one-click apply for a pure portable AppImage (pkexec needs a root-owned tool the AppImage
+  can't place; the `pkexec sh -c` dodge is a local-root hole). One-click apply is an AUR/source
+  feature; word it as a packaging trade-off, not a missing feature. *(See decision log: the
+  pkexec-bundled-tool path is explicitly rejected so it isn't re-proposed.)*
+- **[DECIDED]** (review #2) Test oracle: ~30 hand-authored T1 cases (cap ~40), human-written
+  expected output; explicit golden-review policy on keyd bumps (§8.2).
 - **[RISK]** Version drift (`keyd check`/socket/grammar vary by version) → probe at runtime;
   security checks must **fail closed**, never fall back to the lossy parser (§5.3).
 - **[RISK]** Regression of the beloved viewer → editing is a separate, opt-in mode; the parser
   upgrade is covered by the existing + new parser tests.
+- **[RISK]** (review #2) keyd does **not** reject duplicate ids across files — it resolves them
+  nondeterministically by `readdir` order; the editor must detect and warn rather than silently
+  pick a file (§5.5).
 
 ---
 
@@ -368,7 +424,7 @@ Verified facts (keyd 2.6.0 @ `f564288`, source at `/tmp/keyd-src`):
 | **T2 E2E smoke** | a dozen anchor cases agree on a real kernel/uinput path | uinput + isolated keyd | root / uinput | **self-hosted / pre-release, opt-in** |
 | **T3 Safety/UI** | dead-man's-switch revert, backup restore, `command(`/`macro(`/`include` rejection, panel snapshots | our code; Slint demo | none | every commit |
 
-### 8.2 The oracle problem — why the hand-authored suite is the spine — **OPEN**
+### 8.2 The oracle problem — why the hand-authored suite is the spine — **DECIDED (review #2)**
 
 The trap (review #1): in a purely *generated* test, keyd is **both** the oracle and the
 system-under-test. If our serializer emits a wrong-but-valid config (say it swaps `overloadt`'s
@@ -386,6 +442,32 @@ two timing args), keyd faithfully runs the wrong config, `test-io` captures a se
   most key-iteration is redundant because keyd is key-agnostic for most actions. State coverage
   as (action types × timing boundaries × structural contexts), cap key iteration to a few
   representatives, and let the generator fuzz timing boundaries — not multiply trivially.
+
+**Concrete T1 sizing (review #2), mirroring keyd's own proportions (dense on timing/state, sparse
+where keyd is key-agnostic):** target **~30 hand-authored cases, hard cap ~40**:
+- one canonical happy-path case per MVP action type (~10: remap, disable/noop, modifier, layer,
+  oneshot, toggle, overload, lettermod, chord, macro) — catches wrong-keyword / swapped-operand
+  bugs;
+- ~12–18 timing-boundary cases for the timing-sensitive actions (`overload`/`overloadt(2)`,
+  `lettermod`, `chord`, `oneshot`, `timeout`), straddling the threshold from **both sides** — this
+  is where a swapped-timing-arg bug actually surfaces; ~2–3 each, trivial actions get one;
+- ~3–5 structural-context cases (action inside a named layer, a `[layer:mods]` header, an `[a+b]`
+  chord header) — the risk there is *section* serialization, not the binding.
+- **T1 expected output is human-written, never captured from our own serializer** (that's the
+  keyd-is-both-oracle-and-SUT trap). If you can't hand-write the expected sequence, it belongs in
+  the T1b canary, not T1. T1 never grows by generation; a bug fix adds exactly one T1 case.
+
+**Golden-review policy on keyd SHA bumps (review #2)** — run T1 and T1b together; the
+discriminator is T1:
+- **T1 green + T1b red → keyd changed behavior.** The canary did its job. OK to re-baseline T1b,
+  but only after a human reads the keyd diff/changelog and writes a one-line note (in the commit /
+  decision log) of *what* changed. Also re-check keyd's LICENSE on the bump.
+- **T1 red → stop, do not re-baseline.** Human-expected output no longer holds — either a
+  correctness-relevant keyd change we must adapt to, or our serializer regressed. Investigate;
+  re-baselining T1 is a deliberate, reviewed correctness decision, never a mechanical regen.
+- **Never re-baseline both tiers in one unreviewed step** (that silently blesses whatever changed
+  — the green-but-wrong failure mode). A *build* break from the internal-symbol coupling is a
+  separate, planned port handled before goldens are even evaluated.
 
 ### 8.3 The virtual keyboard (T2) — real, but kept in its lane
 
@@ -528,3 +610,21 @@ local-first and file-based, which is our advantage.
   **per-device `[ids]`** is a moat competitors can't match; the round-trip + backup design is
   validated against how Karabiner *fails* to preserve comments. Task-level breakdown still
   deferred to post-E0.
+- **2026-06-06 — review #2** (4 investigators resolving the OPEN items, verified against keyd
+  source). All E0-blocking unknowns are now DECIDED:
+  - **Round-trip representation → per-line verbatim entries.** keyd is strictly line-oriented (no
+    multi-line constructs), so `serialize(parse(f)) == f` is identity-by-construction; the gate
+    becomes a model-soundness self-check whose one real risk is line-ending fidelity (don't use
+    `str::lines()`). `[global]`/`[aliases]`/`include` are not special-cased. (§5.1)
+  - **`include` permitted, not refused.** Verified keyd confines includes to root-owned dirs
+    (`realpath`+prefix, one level deep), so "include laundering" is circular — an advisory
+    one-level closure scan at apply replaces the blanket refusal. (§5.3)
+  - **Edit per-file + affected-keyboards banner; backup is a transactional write-set, size 1 in
+    the MVP.** keyd shares all state across a file's ids, so per-device editing would be a lie;
+    multi-file atomic sets are only needed for E2+ create/split/move. Also: keyd does **not**
+    forbid duplicate ids across files (resolves nondeterministically) — detect & warn. (§5.4, §5.5)
+  - **AppImage = draft-then-install permanently.** No safe one-click for a pure AppImage; the
+    `pkexec`-a-bundled-tool path is **rejected** (inert via ownership check, or a local-root hole
+    via interpreter+args) — recorded here so it isn't re-proposed. (§7)
+  - **Test oracle sized:** ~30 hand-authored T1 cases (cap ~40), human-written expected output;
+    concrete golden-review policy keyed on T1-vs-T1b discrimination at keyd bumps. (§8.2)
