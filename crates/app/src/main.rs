@@ -585,6 +585,17 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
+    // Always-on-top: the UI computes `pinned || compact` and calls this with the effective
+    // state. We drive the underlying winit window directly so it works regardless of the WM
+    // (KWin's titlebar pin is On-All-Desktops, not keep-above).
+    {
+        let weak = win.as_weak();
+        win.on_apply_on_top(move |on| {
+            let Some(win) = weak.upgrade() else { return };
+            set_window_on_top(&win, on);
+        });
+    }
+
     let demo = std::env::args().any(|a| a == "--demo");
     if demo {
         spawn_demo(&win);
@@ -671,6 +682,21 @@ fn file_mtime(path: &Path) -> Option<std::time::SystemTime> {
 
 /// Watch each config's file mtime on the UI thread and live-reload the board when it
 /// changes — editing your keyd `.conf` redraws the layout without a restart (layers and
+/// Set the window's always-on-top level via the underlying winit window.
+///
+/// Works on **X11/XWayland** (winit toggles `_NET_WM_STATE_ABOVE`). On **native Wayland**
+/// it is a no-op — winit's `set_window_level` is empty there because Wayland has no
+/// client-side keep-above protocol by design; always-on-top is purely the compositor's
+/// call. On Wayland, pin the window via the compositor instead (KDE: right-click the
+/// titlebar → More Actions → Keep Above Window, or a KWin window rule for class `keydviz`).
+/// Also a no-op on backends without a winit window.
+fn set_window_on_top(win: &MainWindow, on: bool) {
+    use i_slint_backend_winit::winit::window::WindowLevel;
+    use i_slint_backend_winit::WinitWindowAccessor;
+    let level = if on { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal };
+    win.window().with_winit_window(|w| w.set_window_level(level));
+}
+
 /// glow are already live; this closes the gap for the base board). Polls once a second
 /// (no extra deps, no background thread — Slint timer callbacks run on the event-loop
 /// thread, so they can hold the non-`Send` `Rc` state). Reuses [`build_sheet_data`] and

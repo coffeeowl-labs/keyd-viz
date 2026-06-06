@@ -87,6 +87,18 @@ keydviz --list                   # print the detection result and exit (no GUI)
 keydviz --demo                   # cycle layers/keys with synthetic data (no keyd needed)
 ```
 
+### Zoom, compact mode & pinning
+
+Scroll over the board (or use the `−`/`+` controls) to resize it; the window auto-fits.
+**Compact** hides all chrome for a minimal, pinnable keyboard-only window — a corner
+reminder of the active layer.
+
+The **pin** button keeps the window above other windows (compact mode also pins
+automatically). This is honored on **X11/XWayland**. On **native Wayland** there is no way
+for an app to keep *itself* on top — that's the compositor's job — so the in-app pin is a
+no-op there; use your compositor's keep-above instead (KDE: right-click the titlebar →
+*More Actions → Keep Above Window*, or a KWin window rule for window class `keydviz`).
+
 ## How keyd bindings render
 
 For each config it draws a **base board** plus **one board per layer**:

@@ -216,13 +216,14 @@ component BoardView inherits VerticalLayout {
 component IconButton inherits Rectangle {
     in property <string> text;
     in property <bool> wide: false;
+    in property <bool> active: false;   // engaged/toggled state (e.g. pin on)
     callback clicked;
     width: wide ? lbl.preferred-width + 18px : 26px;
     height: 24px;
     border-radius: 6px;
-    background: bta.has-hover ? #1b2129 : #161b22;
+    background: active ? #16341f : (bta.has-hover ? #1b2129 : #161b22);
     border-width: 1px;
-    border-color: #2a3340;
+    border-color: active ? #3ddc84 : #2a3340;
     bta := TouchArea {
         clicked => {
             root.clicked();
@@ -232,7 +233,7 @@ component IconButton inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         text: root.text;
-        color: #cfd6df;
+        color: active ? #3ddc84 : #cfd6df;
         font-size: 13px;
         font-weight: 700;
         font-family: "JetBrains Mono";
@@ -243,6 +244,7 @@ component IconButton inherits Rectangle {
 component ViewControls inherits HorizontalLayout {
     in-out property <float> zoom;
     in-out property <bool> compact;
+    in-out property <bool> pinned;
     spacing: 4px;
     alignment: end;
 
@@ -279,6 +281,18 @@ component ViewControls inherits HorizontalLayout {
         text: "+";
         clicked => {
             root.zoom = Math.min(2.4, root.zoom + 0.1);
+        }
+    }
+    // Pin = keep the window above others (always-on-top). A persistent manual toggle;
+    // compact mode also pins transiently (see MainWindow.on_top). Shown active while the
+    // window should be floating on top (manual pin OR compact). Effective on X11/XWayland;
+    // on native Wayland keep-above is compositor-only (see set_window_on_top in Rust).
+    IconButton {
+        wide: true;
+        text: "pin";
+        active: root.pinned || root.compact;
+        clicked => {
+            root.pinned = !root.pinned;
         }
     }
     IconButton {
@@ -330,6 +344,15 @@ export component MainWindow inherits Window {
     // (header, ids, layout picker) to leave a minimal, pinnable keyboard-only window.
     in-out property <float> zoom: 1.0;
     in-out property <bool> compact: false;
+    // Keep-window-above-others. `pinned` is the user's persistent toggle (the pin button);
+    // compact mode pins transiently. `on_top` is the effective state Rust applies to the
+    // window. NB: this only takes effect on X11/XWayland — native Wayland has no client-side
+    // keep-above protocol, so there it's a no-op (use the compositor's keep-above instead).
+    in-out property <bool> pinned: false;
+    property <bool> on_top: pinned || compact;
+    changed on_top => { root.apply_on_top(self.on_top); }
+    // Implemented in Rust: set the underlying window's always-on-top level.
+    callback apply_on_top(bool);
 
     ScrollView {
         body := VerticalLayout {
@@ -385,6 +408,7 @@ export component MainWindow inherits Window {
                 ViewControls {
                     zoom <=> root.zoom;
                     compact <=> root.compact;
+                    pinned <=> root.pinned;
                 }
             }
 
@@ -395,6 +419,7 @@ export component MainWindow inherits Window {
                 ViewControls {
                     zoom <=> root.zoom;
                     compact <=> root.compact;
+                    pinned <=> root.pinned;
                 }
             }
 

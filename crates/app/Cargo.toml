@@ -16,6 +16,9 @@ keydviz-core = { path = "../core" }
 # unstable-fontique-08: lets us register the bundled JetBrains Mono faces at
 # runtime so typography is identical regardless of installed system fonts.
 slint = { version = "1", features = ["unstable-fontique-08"] }
+# Direct access to the underlying winit window (WinitWindowAccessor) so we can drive
+# always-on-top ourselves — WM-independent. Must track slint's version.
+i-slint-backend-winit = "1"
 
 [build-dependencies]
 slint-build = "1"
