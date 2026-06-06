@@ -130,4 +130,8 @@ See [`ROADMAP.md`](ROADMAP.md) for the design and what's next.
 
 ## License
 
-MIT
+MIT.
+
+The bundled UI icons are derived from [Feather](https://github.com/feathericons/feather)
+(MIT) and [Lucide](https://github.com/lucide-icons/lucide) (ISC) — see
+[`crates/app/ui/icons/CREDITS.md`](crates/app/ui/icons/CREDITS.md).
