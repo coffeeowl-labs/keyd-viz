@@ -412,8 +412,17 @@ Each phase ships standalone value. Build order is fixed; later phases assume ear
 - **v1.2 (next):** system-tray resident process; KDE global-shortcut to summon/dismiss
   (pairs with the new compact mode → pinned overlay); Flatpak (optional, layer-only).
 
+### Phase 6 — Edit mode  *(the VIA/Vial moment — visual config authoring)*
+Turn keyd-viz from a read-only visualizer into a visual keyd config **editor**: detect any
+keyboard (even with no config), create a starter config, set bindings visually, preview them
+live via `keyd bind`, and apply safely (validate with `keyd check`, back up, apply-with-
+auto-revert). The two cruxes are lossless round-tripping and a privileged-but-safe write/reload
+path; the MVP sidesteps both via app-owned configs + draft-then-install. **Full design in
+[`docs/edit-mode-design.md`](docs/edit-mode-design.md)** (phases E0–E3, security analysis, open
+questions) — in review, no code yet.
+
 **Value checkpoints:** after P0–1 the tool already beats today's. P3 is the cheap headline.
-P4 is the ambitious frontier.
+P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd GUI editor).
 
 ---
 
