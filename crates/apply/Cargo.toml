@@ -1,0 +1,16 @@
+[package]
+name = "keydviz-apply"
+version = "1.2.0"
+description = "keyd-viz one-shot privileged apply tool — validates, scans, and atomically installs a keyd config with a dead-man's-switch revert."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "keydviz-apply"
+path = "src/main.rs"
+
+# libc only (openat/renameat/poll). Deliberately tiny: this is the one component
+# that runs with privilege, for the lifetime of a single pkexec invocation.
+[dependencies]
+libc = "0.2"

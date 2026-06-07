@@ -747,3 +747,109 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   device directly). Unit re-verified with `systemd-analyze verify`; needs a reinstall + restart on the
   target to confirm the daemon runs clean under the tightened seccomp. **This completes the helper's
   security hardening** — remaining work is just AUR/AppImage packaging.
+- *(Phase 6 E0 — line-faithful edit model, 2026-06-06)* First Edit Mode code, per
+  `docs/edit-mode-design.md` §5.1 (review #2's per-line-verbatim decision). **`core::edit`** —
+  `EditConfig`/`Section`/`Entry` store every source line byte-for-byte (raw + per-line EOL:
+  LF/CRLF/none — no `str::lines()`) with a typed overlay (`Typed::{Remap, Noop, Raw}`,
+  deliberately conservative; grows in E1/E2). `serialize()` replays untouched lines verbatim and
+  regenerates only edited ones, so `serialize(parse(f)) == f` is identity-by-construction; the
+  `round_trips()` gate is the model-soundness self-check the app runs before entering edit mode.
+  Grammar parity re-verified line-by-line against keyd `ini.c` @ `f564288` (`/tmp/keyd-src`):
+  `parse_kvp` exactly (leading-`=` key, trailing space/tab run off the key, valueless entries
+  kept), header-before-comment precedence (`[#x]` is a header), `[a]b]` → name `a]b`, `[foo`
+  without `]` is a *kvp entry*, verbatim special-section names (`[ids ]` ≠ `[ids]`).
+  `Section::set_binding` edits the **last** duplicate (keyd's last-wins order) and dirties one
+  line. Tests: kvp-parity table, header edge cases, examples + `/etc/keyd` corpus round-trip,
+  EOL-fidelity cases, fixed-seed fuzz (500 byte-soups), single-line-diff mutation. 57 core tests
+  green, clippy clean. **Still open in E0:** §12 parser-faithfulness fixes (paren-depth `parse_fn`,
+  modset classification, viewer-model derivation from `EditConfig`), the privileged apply-tool
+  prototype (§5.2–5.4), and the runtime keyd probe.
+- *(Phase 6 E0 — runtime probe + privileged apply-tool prototype, 2026-06-06)* The other two E0
+  legs. **`app::probe`** (`keydviz --probe`): probes the installed keyd lazily — `--version`, a
+  *proven* `keyd check` round (validates a known-good config; fail closed), `list-keys` (315
+  names on this box, feeds the E1 picker), socket path. **`crates/apply` (`keydviz-apply`)** —
+  the §5.2–§5.4 one-shot privileged tool, prototype complete: stdin protocol
+  (`apply <name> <len> [sensitive-ok]` + raw bytes; no caller paths ever), strict name
+  allow-list, byte-level safety scan as a verified **superset** of keyd's own detection
+  (substring-per-line beats arg-splitting evasion; `include` matched exactly like
+  `read_config_file` — raw byte-0, untrimmed; comments can't execute so don't flag),
+  dir-fd + `O_NOFOLLOW` + `O_EXCL`-temp + `renameat` write path (symlinks abort, rename doesn't
+  follow), `keyd check` on the exact temp bytes, timestamped `stamp.pid` backups, transactional
+  write-set (`Existed|Absent`, all-or-nothing revert, MVP passes exactly 1), and the
+  **dead-man's switch**: after write+reload the tool polls its private fd for a literal `keep`
+  line — timeout/EOF/garbage all revert and reload. Caught in testing: stdin must be **one
+  unbuffered fd-0 reader** end-to-end (std's `StdinLock` deadlocks on re-lock *and* could
+  buffer the `keep` away from the dead-man's raw poll). Verified E2E unprivileged via
+  debug-only `--dev-dir`: EOF→revert, timeout→revert, keep→kept, bad-config→`keyd check`
+  refusal with zero debris. 22 crate tests green; deps = libc only. **E0 is complete** except
+  the §12 parser-faithfulness fixes; polkit policy + packaging of the apply tool is E2.
+- *(Phase 6 E0 — §12 parser-faithfulness fixes, 2026-06-06)* The E0 punch-list, closing E0.
+  **One parser:** `parse_text` now *derives* the semantic `Config` from `EditConfig`
+  (`parser::derive`, exported) — the viewer and editor share the grammar layer and can't
+  drift, and the viewer gains keyd's exact kvp/header handling for free. **Fixed
+  divergences** (each verified against keyd 2.6.0 source): ported `parse_fn` (paren-depth +
+  backslash-skip + leading-space-only trim + empty-args-dropped + trailing-garbage-discarded)
+  so `overload(nav, macro(a, b))` keeps its nested tap; `overloadi(<tap>, <hold-desc>,
+  <timeout>)` handled with keyd's real arg order (tap FIRST; keyd rewrites lettermod into
+  exactly this shape) — layer-like hold descriptors reduce to a `Hold`, opaque ones fall back
+  to verbatim remap; modset-qualified layers (`[caps:C]` → `Layer.mods`) classify holds as
+  modifier via post-pass; general chords (`j+k = esc`) land in new `Config.combos` instead of
+  remaps keyed by the literal chord string; `EditConfig::diagnostics()` carries the two
+  *runtime-verified* validation-parity warnings (entry-before-first-section → keyd rejects the
+  whole file, exit 255 with a misleading "missing [ids]" message because `ini_parse_string(s,
+  NULL)` returns NULL; no-`[ids]` → parses clean but never matches a keyboard). **Device
+  matching is now a capability bitset** (`DeviceFlags` in keyd's `ID_*` bit space) replacing
+  `is_keyboard: bool`: single-loop faithful `config_check_match` port (exclude hits reject
+  immediately; wrong-type prefix hits keep scanning), the daemon's wildcard rule
+  (KEYBOARD && !TRACKPAD), and `app::devices` reads `B: REL=`/`B: ABS=` to populate
+  MOUSE/TRACKPAD — combo keyboard+mouse devices now match `m:`/`k:` filters like keyd does.
+  Faithful oddities pinned in tests: `k:*` is a *dead entry* (keyd's wildcard check is an
+  exact compare), and a `k:` id matches a button-bearing mouse via the KEY bit. Deferred from
+  §12 (renderer concerns, not model): composite-layer overlay rendering, `[aliases]`
+  placement resolution. Workspace: 146 tests green, clippy clean; viewer re-verified on real
+  hardware (`--list`: HHKB + laptop map unchanged). **E0 is complete.**
+- *(Phase 6 E0 — code-review fixes on the apply tool, 2026-06-07)* A 7-angle adversarial
+  review of the branch surfaced three real defects in the dead-man's-switch path — all in the
+  exact GUI-crash scenario the switch exists for — plus three robustness items. Fixed:
+  (1) **EPIPE panic bypassed the revert**: `println!("applied …")` panics when the GUI has
+  closed the pipe (Rust ignores SIGPIPE), unwinding past `await_keep` with the possibly-lockout
+  config still live. Fix is two-layered: `fdio::say()` writes protocol lines best-effort
+  (never panics, swallows EPIPE — the reader is gone, the revert matters more), and `Txn` now
+  has a **drop backstop** — any un-kept transaction reverts on every exit path including
+  panic-unwind (`keep()` consumes the txn to defuse it); pinned by a catch_unwind test.
+  (2) **Unbounded reads as root**: the request line + payload now come through
+  `fdio::FdReader`, an unbuffered raw-fd reader with a 30 s deadline (poll before every read) —
+  a stalled client gets `TimedOut`, not a wedged pkexec process. (3) **Revert failure
+  masqueraded as a generic error**: a failed revert now emits a distinct `revert-failed` line
+  (exit 4) naming the backup + the panic sequence, and deliberately does NOT reload (that
+  would re-assert the config it failed to remove); `reverted`/exit 3 is only ever printed
+  when the prior state is actually back. Also: `keyd` is invoked by **absolute path only**
+  (`/usr/bin → /usr/local/bin → /usr/sbin`, fail closed if absent — no PATH lookups in a root
+  process), `keyd_check_works` now proves the `check` subcommand by validating a known-good
+  config instead of trusting `--version`, and CI gained a `rust-apply` job (test + clippy -D
+  warnings + a release build so the dev-flag compile-out is exercised). E2E re-verified: the
+  old EOF/keep flows unchanged; the F1 reproduction (stdout reader dead at "applied") now
+  reverts cleanly; the F2 stall hits the deadline with nothing written. Deferred to E1 (low,
+  niche, all latent on real configs): keyd low-byte REL/ABS parity in devices.rs, `[ids]`
+  kvp-key vs raw-line, modset-qualifier validation/first-wins parity, collapsing the unused
+  `Typed`/`dirty` overlay until the editor consumes it.
+- *(Phase 6 E1 — edit a real config, draft-then-install, 2026-06-07)* The first
+  user-facing Edit Mode cut, in three layers. **Core editing API** (`core/edit.rs`):
+  `Section::get_binding`/`set_or_add_binding` (last-duplicate-wins lookup; in-place value
+  rewrite or append after the section's last non-blank entry, preserving the file's EOL
+  style and a missing final newline), `target_section_mut` (LAST layer-bearing section of
+  a base name, matching keyd's merge), `is_dirty`. **App session** (`app/editing.rs`):
+  `EditSession::open` runs the §5.1 gate (unreadable / round-trip-gate / keyd-rejects →
+  view-only with a reason); `config()` re-derives through the one shared parser so the
+  preview IS the viewer (§5.6); `save_draft` writes `~/.config/keyd-viz/drafts/<name>`,
+  returns copy-paste `sudo cp` + `sudo keyd reload` steps, flags a stale source file, and
+  runs `keyd check` on the draft when keyd is installed. **Slint UI**: an explicit `edit`
+  toggle (viewer untouched by default; gate refusals show a visible banner); while editing,
+  caps are click targets with selection highlight, live morphing + follow-the-keyboard
+  freeze, a section chooser picks the board, and the panel offers typed entry,
+  press-to-capture (consumes the next live key-down — note monitor reports the *emitted*
+  keysym), a common-actions chip palette, and save-draft showing verdict + diff + install
+  steps. `KeyCap` grew `phys` (the slot's config-LHS name) because `key` is the emitted
+  chord — the wrong identity to edit. The config-reload watcher exempts the file being
+  edited. Workspace: 150 tests green, clippy clean. **E1 done-when met** pending visual
+  review; the searchable palette, tap/hold editor, and one-click pkexec apply are E2.

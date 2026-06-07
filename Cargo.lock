@@ -2471,6 +2471,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "keydviz-apply"
+version = "1.2.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "keydviz-core"
 version = "1.2.0"
 dependencies = [

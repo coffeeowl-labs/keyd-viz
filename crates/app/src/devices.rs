@@ -10,6 +10,8 @@
 
 use std::path::Path;
 
+use keydviz_core::DeviceFlags;
+
 /// A connected input device, with the data we need to match it against `[ids]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputDevice {
@@ -23,6 +25,9 @@ pub struct InputDevice {
     /// A "full" keyboard (has the whole alphanumeric key set) — used to prefer
     /// real keyboards over media-key pseudo-devices when labeling.
     pub full_keyboard: bool,
+    /// The full capability set in keyd's flag space — what `[ids]` matching
+    /// actually tests (a combo keyboard+mouse carries several bits).
+    pub flags: DeviceFlags,
 }
 
 impl InputDevice {
@@ -72,6 +77,10 @@ struct Block {
     product: Option<String>,
     /// `EV_KEY` bitmap words as printed (most-significant word first).
     key_words: Option<Vec<u64>>,
+    /// Any relative axes (`B: REL=` nonzero) — a mouse to keyd.
+    has_rel: bool,
+    /// Any absolute axes (`B: ABS=` nonzero) — a trackpad/abs mouse to keyd.
+    has_abs: bool,
 }
 
 impl Block {
@@ -89,6 +98,10 @@ impl Block {
         } else if let Some(rest) = line.strip_prefix("B: KEY=") {
             self.key_words =
                 Some(rest.split_whitespace().filter_map(|w| u64::from_str_radix(w, 16).ok()).collect());
+        } else if let Some(rest) = line.strip_prefix("B: REL=") {
+            self.has_rel = bitmap_nonzero(rest);
+        } else if let Some(rest) = line.strip_prefix("B: ABS=") {
+            self.has_abs = bitmap_nonzero(rest);
         }
     }
 
@@ -98,14 +111,38 @@ impl Block {
         let words = self.key_words.unwrap_or_default();
         let full = has_all_keyboard_keys(&words);
         let media = MEDIA_KEYS.iter().any(|&k| has_key(&words, k));
+        // keyd's resolve_device_capabilities → manage_device flag translation:
+        // any key → KEY; the keyboard rule → KEYBOARD; rel|abs → MOUSE; abs →
+        // TRACKPAD. One device can carry several bits (combo keyboard+mouse).
+        let mut flags = DeviceFlags::default();
+        if words.iter().any(|&w| w != 0) {
+            flags = flags.union(DeviceFlags::KEY);
+        }
+        if full || media {
+            flags = flags.union(DeviceFlags::KEYBOARD);
+        }
+        if self.has_rel || self.has_abs {
+            flags = flags.union(DeviceFlags::MOUSE);
+        }
+        if self.has_abs {
+            flags = flags.union(DeviceFlags::TRACKPAD);
+        }
         Some(InputDevice {
             name: self.name.unwrap_or_default(),
             vendor,
             product,
             is_keyboard: full || media,
             full_keyboard: full,
+            flags,
         })
     }
+}
+
+/// True if any word of a `B: <MAP>=` bitmap line is nonzero.
+fn bitmap_nonzero(rest: &str) -> bool {
+    rest.split_whitespace()
+        .filter_map(|w| u64::from_str_radix(w, 16).ok())
+        .any(|w| w != 0)
 }
 
 /// Is keycode `code` set in the printed bitmap? Words are most-significant first,
@@ -186,5 +223,44 @@ mod tests {
         assert_eq!(devs.len(), 2);
         assert!(devs[0].is_keyboard);
         assert!(!devs[1].is_keyboard);
+    }
+
+    #[test]
+    fn capability_flags_cover_mice_and_combos() {
+        // A mouse: buttons (KEY bits set) + relative axes, no keyboard keys.
+        let text = format!(
+            "I: Bus=0003 Vendor=046d Product=c52b\n\
+             N: Name=\"Mouse\"\n\
+             B: KEY=70000 0 0 0 0\n\
+             B: REL=903\n\
+             \n\
+             I: Bus=0003 Vendor=feed Product=cafe\n\
+             N: Name=\"Combo Board\"\n\
+             B: KEY={FULL_KB_LOW}\n\
+             B: REL=3\n"
+        );
+        let devs = parse_devices(&text);
+        let mouse = &devs[0];
+        assert!(!mouse.is_keyboard);
+        assert!(mouse.flags.contains(DeviceFlags::MOUSE.union(DeviceFlags::KEY)));
+        assert!(!mouse.flags.intersects(DeviceFlags::KEYBOARD));
+        // The §12 case: one device that is both keyboard and mouse — a bool
+        // can't carry this, the flag set can.
+        let combo = &devs[1];
+        assert!(combo.is_keyboard);
+        assert!(combo.flags.contains(DeviceFlags::keyboard().union(DeviceFlags::MOUSE)));
+        assert!(!combo.flags.intersects(DeviceFlags::TRACKPAD));
+    }
+
+    #[test]
+    fn abs_axes_mark_a_trackpad() {
+        let text = "I: Bus=0003 Vendor=04f3 Product=311c\n\
+                    N: Name=\"Touchpad\"\n\
+                    B: KEY=e520 10000 0 0 0 0\n\
+                    B: ABS=260800000000003\n";
+        let devs = parse_devices(text);
+        assert!(devs[0]
+            .flags
+            .contains(DeviceFlags::MOUSE.union(DeviceFlags::TRACKPAD)));
     }
 }

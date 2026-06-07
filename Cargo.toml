@@ -2,10 +2,11 @@
 #
 # `core` is pure, dependency-free keyd logic (parser, prettifier, layouts), always
 # offline-buildable; `app` is the Slint GUI; `helper` is the broker daemon that streams
-# keyd's live state to the GUI over a sandboxed unix socket.
+# keyd's live state to the GUI over a sandboxed unix socket; `apply` is the one-shot
+# privileged tool that persists Edit Mode changes to /etc/keyd.
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/app", "crates/helper"]
+members = ["crates/core", "crates/app", "crates/helper", "crates/apply"]
 
 [workspace.package]
 edition = "2021"

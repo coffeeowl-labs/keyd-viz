@@ -6,6 +6,7 @@
 
 pub mod board;
 pub mod catalog;
+pub mod edit;
 pub mod geometry;
 pub mod ids;
 pub mod keycodes;
@@ -19,9 +20,10 @@ pub mod style;
 
 pub use board::{Badge, Board, KeyCap, KeyState, Sheet};
 pub use catalog::BoardKind;
+pub use edit::{round_trips, EditConfig};
 pub use geometry::{Geometry, Slot};
 pub use qmk::{import as import_qmk, QmkImport};
-pub use ids::{Ids, MatchKind, TypeFilter};
+pub use ids::{DeviceFlags, Ids, MatchKind};
 pub use keycodes::keycode_name;
 pub use live::{
     parse_listen_line, parse_monitor_line, ActiveLayers, KeyAction, KeyEvent, LayerEvent,
