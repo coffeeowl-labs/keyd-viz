@@ -418,6 +418,10 @@ export component MainWindow inherits Window {
     in property <string> edit_banner;        // affected-keyboards line / view-only reason
     in property <bool> capture_armed;        // next live keypress becomes the value
     in property <string> draft_info;         // after save: draft path + diff + install steps
+    // Guard against silently dropping unsaved edits: leaving edit mode (done / switch
+    // keyboard) while dirty raises a confirm bar instead of discarding immediately.
+    in-out property <bool> discard_prompt: false;
+    in-out property <int> pending_kbd: -1;   // keyboard to switch to after confirming (-1 = just leave)
     // Common actions offered as one-click chips (the categorized palette grows in E2).
     property <[string]> palette: ["esc", "tab", "backspace", "delete", "enter",
         "leftcontrol", "leftalt", "leftmeta", "leftshift", "noop"];
@@ -427,6 +431,8 @@ export component MainWindow inherits Window {
     callback apply_binding(string);          // typed / palette / captured value for the selection
     callback arm_capture();
     callback save_draft();
+    callback confirm_discard();   // discard the unsaved session and proceed (leave / switch)
+    callback cancel_discard();    // dismiss the prompt, stay in the session
 
     ScrollView {
         body := VerticalLayout {
@@ -626,6 +632,44 @@ export component MainWindow inherits Window {
                 editbody := VerticalLayout {
                     padding: 12px;
                     spacing: 8px;
+
+                    // discard guard: shown when leaving edit mode with unsaved changes,
+                    // so edits are never dropped silently (save draft first, or confirm).
+                    if root.discard_prompt: Rectangle {
+                        height: dbar.preferred-height + 12px;
+                        border-radius: 8px;
+                        background: #2a1d1d;
+                        border-width: 1px;
+                        border-color: #e5534b;
+                        dbar := HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 10px;
+                            Text {
+                                text: "\u{26a0} Unsaved changes will be lost.";
+                                color: #ff8b82;
+                                font-size: 12px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            IconButton {
+                                wide: true;
+                                text: "discard";
+                                clicked => {
+                                    root.confirm_discard();
+                                }
+                            }
+                            IconButton {
+                                wide: true;
+                                text: "keep editing";
+                                active: true;
+                                clicked => {
+                                    root.cancel_discard();
+                                }
+                            }
+                        }
+                    }
 
                     // banner: EDIT pill + which keyboards this file governs + dirty marker
                     HorizontalLayout {

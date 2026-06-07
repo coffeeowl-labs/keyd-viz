@@ -8,12 +8,17 @@
 
 use std::path::PathBuf;
 
+/// `$XDG_CONFIG_HOME`, else `$HOME/.config` — the base for keyd-viz's config dir.
+/// Shared so every per-user store (layout choices, edit-mode drafts) agrees on it.
+pub(crate) fn config_home() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+}
+
 /// `~/.config/keyd-viz/layouts.tsv` (honouring `$XDG_CONFIG_HOME`).
 fn store_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("keyd-viz").join("layouts.tsv"))
+    Some(config_home()?.join("keyd-viz").join("layouts.tsv"))
 }
 
 /// The saved layout id for a config path, if any.

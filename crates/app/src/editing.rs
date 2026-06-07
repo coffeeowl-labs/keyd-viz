@@ -98,6 +98,25 @@ impl EditSession {
         parser::derive(&self.edit)
     }
 
+    /// The editable section base-names, in file order, deduped — the exact set the
+    /// layer chooser should offer. `main` appears only when the file actually has a
+    /// base section, so the chooser can never present a chip that errors on click.
+    pub fn editable_sections(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for s in &self.edit.sections {
+            if matches!(
+                s.kind,
+                SectionKind::Main | SectionKind::Layer | SectionKind::Composite
+            ) {
+                let base = s.base_name().trim().to_string();
+                if !base.is_empty() && !out.contains(&base) {
+                    out.push(base);
+                }
+            }
+        }
+        out
+    }
+
     /// The value currently bound to `key` in `layer`'s section, if any.
     pub fn current_binding(&self, layer: &str, key: &str) -> Option<String> {
         self.edit
@@ -166,12 +185,10 @@ impl EditSession {
     }
 }
 
-/// `~/.config/keyd-viz/drafts/` (honouring `$XDG_CONFIG_HOME`), like `prefs`.
+/// `~/.config/keyd-viz/drafts/` (honouring `$XDG_CONFIG_HOME`), sharing `prefs`'
+/// XDG base so the draft store and the layout store can never disagree.
 fn drafts_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("keyd-viz").join("drafts"))
+    Some(crate::prefs::config_home()?.join("keyd-viz").join("drafts"))
 }
 
 /// `keyd check` the draft when keyd is around — early feedback, not a gate
@@ -270,6 +287,20 @@ mod tests {
         assert_eq!(s.current_binding("nav", "j").as_deref(), Some("down"));
         // No such section → a named error, not a panic or silent drop.
         assert!(s.set_binding("sym", "a", "b").unwrap_err().contains("[sym]"));
+    }
+
+    #[test]
+    fn editable_sections_are_the_real_file_sections() {
+        let td = TempDir::new("sections");
+        let s = session(&td);
+        // SRC has [ids], [main], [nav] — [ids] is not editable, the other two are.
+        assert_eq!(s.editable_sections(), vec!["main".to_string(), "nav".to_string()]);
+
+        // A config with no [main] must not advertise a "main" chip that errors on click.
+        let p = td.0.join("nomain.conf");
+        std::fs::write(&p, "[ids]\n*\n\n[nav]\nh = left\n").unwrap();
+        let s2 = EditSession::open(&p).unwrap();
+        assert_eq!(s2.editable_sections(), vec!["nav".to_string()]);
     }
 
     #[test]

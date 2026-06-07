@@ -20,7 +20,7 @@ use std::rc::Rc;
 use devices::InputDevice;
 use keydviz_core::board::{KeyCap, KeyState};
 use keydviz_core::{catalog, import_qmk, parse_file, parse_text, Config, Geometry, Ids, Sheet};
-use slint::{Brush, Color, Model, ModelRc, VecModel};
+use slint::{Brush, Color, ModelRc, VecModel};
 
 slint::include_modules!();
 
@@ -602,9 +602,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 return;
             }
             src.layout_id = id.to_string();
-            let data = build_sheet_data(src);
-            win.get_sheets().set_row_data(idx, data.clone());
-            win.set_active_sheet(data);
+            publish_sheet(&win, idx, src);
             prefs::save(&src.path.to_string_lossy(), &src.layout_id);
             render_board(&win);
         });
@@ -620,13 +618,16 @@ fn main() -> Result<(), slint::PlatformError> {
         win.on_pick_keyboard(move |idx| {
             let Some(win) = weak.upgrade() else { return };
             if session.borrow().is_some() {
-                exit_edit(&win, &srcs, &session); // an edit session is per-file; leave it first
+                // An edit session is per-file; switching keyboards leaves it. Confirm
+                // first if it's dirty, stashing the target to switch to on confirm.
+                if win.get_edit_dirty() {
+                    win.set_pending_kbd(idx);
+                    win.set_discard_prompt(true);
+                    return;
+                }
+                exit_edit(&win, &srcs, &session);
             }
-            if let Some(sheet) = win.get_sheets().row_data(idx as usize) {
-                win.set_active_index(idx);
-                win.set_active_sheet(sheet);
-                render_board(&win);
-            }
+            switch_keyboard(&win, idx);
         });
     }
 
@@ -653,7 +654,13 @@ fn main() -> Result<(), slint::PlatformError> {
         win.on_toggle_edit(move || {
             let Some(win) = weak.upgrade() else { return };
             if session.borrow().is_some() {
-                exit_edit(&win, &srcs, &session);
+                // Leaving a dirty session: confirm before discarding the preview.
+                if win.get_edit_dirty() {
+                    win.set_pending_kbd(-1);
+                    win.set_discard_prompt(true);
+                } else {
+                    exit_edit(&win, &srcs, &session);
+                }
                 return;
             }
             let idx = win.get_active_index().max(0) as usize;
@@ -668,8 +675,13 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             match editing::EditSession::open(&path) {
                 Ok(s) => {
-                    win.set_edit_layers(model(edit_layer_choices(&s.config())));
-                    win.set_edit_layer("main".into());
+                    let choices = edit_layer_choices(&s);
+                    // Default to the first real section (usually `main`, but a config
+                    // whose bindings live only in layers has none — pick what exists).
+                    let default_layer =
+                        choices.first().map(|c| c.name.clone()).unwrap_or("main".into());
+                    win.set_edit_layers(model(choices));
+                    win.set_edit_layer(default_layer);
                     win.set_selected_phys("".into());
                     win.set_edit_current("".into());
                     win.set_edit_value("".into());
@@ -777,6 +789,30 @@ fn main() -> Result<(), slint::PlatformError> {
                 Err(e) => format!("\u{26a0} draft save failed: {e}"),
             };
             win.set_draft_info(info.into());
+        });
+    }
+
+    // Discard-guard confirm: drop the unsaved session and carry out the deferred
+    // action (leave edit mode, and switch keyboards if that's what triggered it).
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        win.on_confirm_discard(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let pending = win.get_pending_kbd();
+            exit_edit(&win, &srcs, &session); // clears discard_prompt + pending_kbd
+            if pending >= 0 {
+                switch_keyboard(&win, pending);
+            }
+        });
+    }
+    {
+        let weak = win.as_weak();
+        win.on_cancel_discard(move || {
+            let Some(win) = weak.upgrade() else { return };
+            win.set_discard_prompt(false);
+            win.set_pending_kbd(-1);
         });
     }
 
@@ -899,15 +935,38 @@ fn render_board(win: &MainWindow) {
 /// whether (and what) we're editing. `Some(_)` == edit mode is on.
 type SharedSession = Rc<RefCell<Option<editing::EditSession>>>;
 
-/// The sections offered by the edit-mode chooser: `[main]` plus every layer section,
-/// in file order. `name` is the exact base name [`editing::EditSession::set_binding`]
-/// targets; the chip shows the same (file vocabulary, not display-case).
-fn edit_layer_choices(cfg: &Config) -> Vec<EditLayer> {
-    let mut out = vec![EditLayer { name: "main".into(), display: "main".into() }];
-    for l in &cfg.layers {
-        out.push(EditLayer { name: l.name.clone().into(), display: l.name.clone().into() });
+/// Rebuild sheet `idx` from its (already-mutated) source and push it into the model,
+/// refreshing the visible `active_sheet` too when `idx` is the one on screen. The
+/// shared tail of every place that changes a sheet (layout pick, edit preview, leave-
+/// edit, disk reload, device hotplug) — callers update the `SheetSrc`, then publish.
+fn publish_sheet(win: &MainWindow, idx: usize, src: &SheetSrc) {
+    use slint::Model;
+    let data = build_sheet_data(src);
+    win.get_sheets().set_row_data(idx, data.clone());
+    if win.get_active_index().max(0) as usize == idx {
+        win.set_active_sheet(data);
     }
-    out
+}
+
+/// Switch the shown board to detected keyboard `idx` (no-op if out of range).
+fn switch_keyboard(win: &MainWindow, idx: i32) {
+    use slint::Model;
+    if let Some(sheet) = win.get_sheets().row_data(idx as usize) {
+        win.set_active_index(idx);
+        win.set_active_sheet(sheet);
+        render_board(win);
+    }
+}
+
+/// The sections offered by the edit-mode chooser, straight from the file's real
+/// sections (so `[main]` only appears when it exists — no chip that errors on click).
+/// `name` is the exact base name [`editing::EditSession::set_binding`] targets; the
+/// chip shows the same (file vocabulary, not display-case).
+fn edit_layer_choices(s: &editing::EditSession) -> Vec<EditLayer> {
+    s.editable_sections()
+        .into_iter()
+        .map(|n| EditLayer { name: n.clone().into(), display: n.into() })
+        .collect()
 }
 
 /// Minimal §5.5 affected-keyboards line for the edit banner: which connected
@@ -926,7 +985,6 @@ fn affected_line(src: &SheetSrc) -> String {
 /// Leave edit mode: drop the session, clear the edit chrome, and discard the unsaved
 /// preview by re-deriving the sheet from the file on disk.
 fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &SharedSession) {
-    use slint::Model;
     let Some(s) = session.borrow_mut().take() else { return };
     win.set_edit_mode(false);
     win.set_capture_armed(false);
@@ -934,16 +992,14 @@ fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &Shar
     win.set_edit_banner("".into());
     win.set_draft_info("".into());
     win.set_edit_dirty(false);
+    win.set_discard_prompt(false);
+    win.set_pending_kbd(-1);
     let mut srcs = srcs.borrow_mut();
     if let Some((idx, src)) = srcs.iter_mut().enumerate().find(|(_, x)| x.path == s.path) {
         if let Ok(cfg) = parse_file(&src.path) {
             src.cfg = cfg;
         }
-        let data = build_sheet_data(src);
-        win.get_sheets().set_row_data(idx, data.clone());
-        if win.get_active_index().max(0) as usize == idx {
-            win.set_active_sheet(data);
-        }
+        publish_sheet(win, idx, src);
     }
     drop(srcs);
     render_board(win);
@@ -953,15 +1009,10 @@ fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &Shar
 /// source for `path` and rebuild — the same path a disk reload takes, so the preview
 /// is exactly what the viewer would show for the saved file (§5.6).
 fn refresh_preview(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, path: &Path, cfg: Config) {
-    use slint::Model;
     let mut srcs = srcs.borrow_mut();
     if let Some((idx, src)) = srcs.iter_mut().enumerate().find(|(_, x)| x.path == path) {
         src.cfg = cfg;
-        let data = build_sheet_data(src);
-        win.get_sheets().set_row_data(idx, data.clone());
-        if win.get_active_index().max(0) as usize == idx {
-            win.set_active_sheet(data);
-        }
+        publish_sheet(win, idx, src);
     }
     drop(srcs);
     render_board(win);
@@ -1023,7 +1074,6 @@ fn spawn_config_reload(
     srcs: Rc<RefCell<Vec<SheetSrc>>>,
     session: SharedSession,
 ) -> slint::Timer {
-    use slint::Model;
     let weak = win.as_weak();
     // Seed last-seen mtimes so we only reload on a *future* change, not at startup.
     let mut mtimes: Vec<Option<std::time::SystemTime>> =
@@ -1047,11 +1097,7 @@ fn spawn_config_reload(
             match parse_file(&src.path) {
                 Ok(cfg) => {
                     src.cfg = cfg;
-                    let data = build_sheet_data(src);
-                    win.get_sheets().set_row_data(idx, data.clone());
-                    if win.get_active_index().max(0) as usize == idx {
-                        win.set_active_sheet(data);
-                    }
+                    publish_sheet(&win, idx, src);
                     changed = true;
                     eprintln!("keyd-viz: reloaded {}", src.path.display());
                 }
@@ -1344,7 +1390,6 @@ fn handle_key_event(win: &MainWindow, ev: monitor::MonitorEvent) {
 /// the follow-the-keyboard map. Polling (not udev) keeps it dependency-free; a sysfs scan is
 /// cheap and hotplug is rare. Returns the timer; keep it alive for the app's life.
 fn spawn_device_watch(win: &MainWindow, srcs: Rc<RefCell<Vec<SheetSrc>>>) -> slint::Timer {
-    use slint::Model;
     let weak = win.as_weak();
     // Seed with the current match so the first tick doesn't redundantly repaint.
     let mut last: Vec<(String, i32)> = {
@@ -1367,11 +1412,7 @@ fn spawn_device_watch(win: &MainWindow, srcs: Rc<RefCell<Vec<SheetSrc>>>) -> sli
             let (ids, label) = &per_src[i];
             src.matched_ids = ids.clone();
             src.device = label.clone();
-            let data = build_sheet_data(src);
-            win.get_sheets().set_row_data(i, data.clone());
-            if win.get_active_index().max(0) as usize == i {
-                win.set_active_sheet(data);
-            }
+            publish_sheet(&win, i, src);
         }
         drop(srcs);
         let device_map: Vec<DeviceMatch> =
