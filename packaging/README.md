@@ -1,4 +1,12 @@
-# Packaging: the `keydviz-helperd` system service
+# Packaging: keyd-viz's privileged companions
+
+Two pieces, two privilege models, both installed by `install.sh` / the AUR package:
+
+- **`keydviz-helperd`** — the long-lived, *unprivileged* broker for the live view.
+- **`keydviz-apply`** + a polkit action — the one-shot, *transient-privilege* writer
+  behind Edit Mode's one-click apply.
+
+## The `keydviz-helperd` system service
 
 The broker daemon (`keydviz-helperd`) is what gives keyd-viz its "install and forget"
 live view with **no per-user permission setup**: it runs once, as a dedicated
@@ -69,6 +77,30 @@ sudo rm -f /usr/lib/systemd/system/keydviz-helperd.service \
 sudo systemctl daemon-reload
 # Optionally remove the user: sudo userdel keyd-viz
 ```
+
+## The `keydviz-apply` tool + polkit action (one-click apply)
+
+Edit Mode's one-click apply goes through `keydviz-apply`, a one-shot tool alive for
+exactly one authenticated invocation (edit-mode design §5.2–§5.4). The GUI never runs
+privileged and there is no live write channel; persistence is one discrete,
+user-authenticated action.
+
+- **Action id:** `io.github.coffeeowl-labs.keydviz.apply`
+  (`packaging/polkit/…​.policy` → `/usr/share/polkit-1/actions/`).
+- **`allow_active=auth_admin`** — a password *per apply*, deliberately not
+  `auth_admin_keep`: cached authorization would let any same-uid process run the tool
+  silently for its lifetime. Applies are rare; the prompt is the point.
+- The policy's `exec.path` annotation binds the action to **`/usr/bin/keydviz-apply`**
+  (root-owned `0755`, **not** setuid — `pkexec` carries the privilege).
+- The tool enforces its own rules regardless of caller: destination locked to
+  `/etc/keyd/<name>.conf` (strict name allow-list, no caller paths), byte-level scan
+  (`command()`/`macro()` need an explicit ack), `keyd check` on the exact bytes,
+  symlink-safe atomic write with a timestamped backup, and a **dead-man's switch** —
+  after write+reload it waits for a positive "keep" and reverts on timeout/EOF/anything
+  else. See `crates/apply`.
+
+No daemon, no socket: nothing to verify beyond the two files existing. Polkit picks up
+new action files automatically.
 
 ## Note on the dev group grant
 

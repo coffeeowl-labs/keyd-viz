@@ -6,6 +6,26 @@ All notable changes to keyd-viz are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Edit mode (visual config editing).** An explicit **edit** toggle turns the viewer
+  into an editor for the displayed config: click a key, type a binding / press the key
+  you want / pick from a palette, watch the board re-render live, then persist. The
+  editor is line-faithful — untouched lines round-trip byte-for-byte — and any file it
+  can't reproduce exactly (or that keyd would reject) stays view-only rather than risk
+  clobbering it. Persist via **save draft** (writes to `~/.config/keyd-viz/drafts/`
+  with copy-paste install steps, a diff, and a `keyd check` verdict) — works on every
+  install, including the AppImage.
+- **One-click apply with auto-revert (AUR/source installs).** *Apply to /etc/keyd…*
+  hands the edited config to `keydviz-apply`, a new one-shot privileged tool invoked
+  via polkit (`pkexec`; a password per apply, by design). It validates with
+  `keyd check`, writes atomically with a timestamped backup, reloads keyd, and then
+  arms a **dead-man's switch**: only clicking **KEEP** within the countdown makes the
+  change permanent — timeout, closing the app, or a crash automatically restores the
+  previous config and reloads. `command()`/`macro()` configs require an extra explicit
+  confirmation first. keyd's panic sequence (Backspace+Escape+Enter) remains the
+  always-available failsafe and is surfaced in the UI during the countdown.
+
 ## [1.2.0] - 2026-06-06
 
 ### Added
