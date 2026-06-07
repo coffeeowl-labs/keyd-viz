@@ -783,3 +783,28 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   debug-only `--dev-dir`: EOF→revert, timeout→revert, keep→kept, bad-config→`keyd check`
   refusal with zero debris. 22 crate tests green; deps = libc only. **E0 is complete** except
   the §12 parser-faithfulness fixes; polkit policy + packaging of the apply tool is E2.
+- *(Phase 6 E0 — §12 parser-faithfulness fixes, 2026-06-06)* The E0 punch-list, closing E0.
+  **One parser:** `parse_text` now *derives* the semantic `Config` from `EditConfig`
+  (`parser::derive`, exported) — the viewer and editor share the grammar layer and can't
+  drift, and the viewer gains keyd's exact kvp/header handling for free. **Fixed
+  divergences** (each verified against keyd 2.6.0 source): ported `parse_fn` (paren-depth +
+  backslash-skip + leading-space-only trim + empty-args-dropped + trailing-garbage-discarded)
+  so `overload(nav, macro(a, b))` keeps its nested tap; `overloadi(<tap>, <hold-desc>,
+  <timeout>)` handled with keyd's real arg order (tap FIRST; keyd rewrites lettermod into
+  exactly this shape) — layer-like hold descriptors reduce to a `Hold`, opaque ones fall back
+  to verbatim remap; modset-qualified layers (`[caps:C]` → `Layer.mods`) classify holds as
+  modifier via post-pass; general chords (`j+k = esc`) land in new `Config.combos` instead of
+  remaps keyed by the literal chord string; `EditConfig::diagnostics()` carries the two
+  *runtime-verified* validation-parity warnings (entry-before-first-section → keyd rejects the
+  whole file, exit 255 with a misleading "missing [ids]" message because `ini_parse_string(s,
+  NULL)` returns NULL; no-`[ids]` → parses clean but never matches a keyboard). **Device
+  matching is now a capability bitset** (`DeviceFlags` in keyd's `ID_*` bit space) replacing
+  `is_keyboard: bool`: single-loop faithful `config_check_match` port (exclude hits reject
+  immediately; wrong-type prefix hits keep scanning), the daemon's wildcard rule
+  (KEYBOARD && !TRACKPAD), and `app::devices` reads `B: REL=`/`B: ABS=` to populate
+  MOUSE/TRACKPAD — combo keyboard+mouse devices now match `m:`/`k:` filters like keyd does.
+  Faithful oddities pinned in tests: `k:*` is a *dead entry* (keyd's wildcard check is an
+  exact compare), and a `k:` id matches a button-bearing mouse via the KEY bit. Deferred from
+  §12 (renderer concerns, not model): composite-layer overlay rendering, `[aliases]`
+  placement resolution. Workspace: 146 tests green, clippy clean; viewer re-verified on real
+  hardware (`--list`: HHKB + laptop map unchanged). **E0 is complete.**

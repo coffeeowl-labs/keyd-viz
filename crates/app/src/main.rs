@@ -371,7 +371,7 @@ fn gather_sheets() -> Detection {
         let devid = dev.devid();
         let mut best: Option<(usize, u8)> = None;
         for (ci, ids) in matchers.iter().enumerate() {
-            let rank = ids.match_device(&devid, dev.is_keyboard).rank();
+            let rank = ids.match_device(&devid, dev.flags).rank();
             if rank > 0 && best.is_none_or(|(_, br)| rank > br) {
                 best = Some((ci, rank));
             }
@@ -440,7 +440,7 @@ fn rescan(srcs: &[SheetSrc]) -> DeviceMatching {
         let devid = dev.devid();
         let mut best: Option<(usize, u8)> = None;
         for (ci, ids) in matchers.iter().enumerate() {
-            let rank = ids.match_device(&devid, dev.is_keyboard).rank();
+            let rank = ids.match_device(&devid, dev.flags).rank();
             if rank > 0 && best.is_none_or(|(_, br)| rank > br) {
                 best = Some((ci, rank));
             }
