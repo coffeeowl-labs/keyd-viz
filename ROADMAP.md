@@ -764,3 +764,22 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   green, clippy clean. **Still open in E0:** §12 parser-faithfulness fixes (paren-depth `parse_fn`,
   modset classification, viewer-model derivation from `EditConfig`), the privileged apply-tool
   prototype (§5.2–5.4), and the runtime keyd probe.
+- *(Phase 6 E0 — runtime probe + privileged apply-tool prototype, 2026-06-06)* The other two E0
+  legs. **`app::probe`** (`keydviz --probe`): probes the installed keyd lazily — `--version`, a
+  *proven* `keyd check` round (validates a known-good config; fail closed), `list-keys` (315
+  names on this box, feeds the E1 picker), socket path. **`crates/apply` (`keydviz-apply`)** —
+  the §5.2–§5.4 one-shot privileged tool, prototype complete: stdin protocol
+  (`apply <name> <len> [sensitive-ok]` + raw bytes; no caller paths ever), strict name
+  allow-list, byte-level safety scan as a verified **superset** of keyd's own detection
+  (substring-per-line beats arg-splitting evasion; `include` matched exactly like
+  `read_config_file` — raw byte-0, untrimmed; comments can't execute so don't flag),
+  dir-fd + `O_NOFOLLOW` + `O_EXCL`-temp + `renameat` write path (symlinks abort, rename doesn't
+  follow), `keyd check` on the exact temp bytes, timestamped `stamp.pid` backups, transactional
+  write-set (`Existed|Absent`, all-or-nothing revert, MVP passes exactly 1), and the
+  **dead-man's switch**: after write+reload the tool polls its private fd for a literal `keep`
+  line — timeout/EOF/garbage all revert and reload. Caught in testing: stdin must be **one
+  unbuffered fd-0 reader** end-to-end (std's `StdinLock` deadlocks on re-lock *and* could
+  buffer the `keep` away from the dead-man's raw poll). Verified E2E unprivileged via
+  debug-only `--dev-dir`: EOF→revert, timeout→revert, keep→kept, bad-config→`keyd check`
+  refusal with zero debris. 22 crate tests green; deps = libc only. **E0 is complete** except
+  the §12 parser-faithfulness fixes; polkit policy + packaging of the apply tool is E2.
