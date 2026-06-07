@@ -5,6 +5,8 @@
 //! the config(s) governing them; with explicit path args it shows exactly those.
 
 mod devices;
+#[allow(dead_code)] // E1.2: consumed by the E1.3 UI wiring; allow goes with it
+mod editing;
 mod helper;
 mod layer;
 mod monitor;
