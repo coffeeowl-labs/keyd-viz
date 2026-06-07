@@ -240,6 +240,27 @@ impl EditConfig {
     pub fn section_mut(&mut self, name: &str) -> Option<&mut Section> {
         self.sections.iter_mut().find(|s| s.name == name)
     }
+
+    /// keyd-validation-parity diagnostics (design doc §12): conditions the model
+    /// happily represents but keyd treats specially, verified against keyd 2.6.0:
+    /// an entry before the first section header makes `ini_parse_string(s, NULL)`
+    /// return NULL — the whole file is rejected (with a misleading "missing [ids]"
+    /// message); a file with *no* `[ids]` parses fine but never matches a keyboard.
+    pub fn diagnostics(&self) -> Vec<String> {
+        let mut warns = Vec::new();
+        if self.preamble.iter().any(|e| matches!(e.kind, EntryKind::Binding { .. })) {
+            warns.push(
+                "entry before the first section header — keyd rejects this file outright"
+                    .to_string(),
+            );
+        }
+        if !self.sections.iter().any(|s| s.kind == SectionKind::Ids) {
+            warns.push(
+                "no [ids] section — keyd will never match this file to a keyboard".to_string(),
+            );
+        }
+        warns
+    }
 }
 
 /// The §5.1 round-trip gate, run before a file is opened for editing (a `false` sends
@@ -257,8 +278,9 @@ fn is_c_space(b: u8) -> bool {
 }
 
 /// Trim leading + trailing C-`isspace`, byte-wise (all space bytes are ASCII, so
-/// slicing stays on char boundaries).
-fn c_trim(s: &str) -> &str {
+/// slicing stays on char boundaries). Crate-visible: the semantic deriver needs
+/// keyd's exact trim, not `str::trim`.
+pub(crate) fn c_trim(s: &str) -> &str {
     let b = s.as_bytes();
     let start = b.iter().position(|&c| !is_c_space(c)).unwrap_or(b.len());
     let end = b.iter().rposition(|&c| !is_c_space(c)).map_or(start, |i| i + 1);

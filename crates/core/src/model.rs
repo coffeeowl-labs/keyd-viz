@@ -26,6 +26,11 @@ pub struct Hold {
 pub struct Layer {
     pub name: String,
     pub keys: Vec<(String, String)>,
+    /// The `:` modset qualifier from the section header (`[caps:C]` → `Some("C")`):
+    /// the layer behaves as those modifiers while held. `None` for plain layers and
+    /// for `:layout` sections. A hold onto a modset-qualified layer classifies as a
+    /// *modifier* hold (design doc §12).
+    pub mods: Option<String>,
 }
 
 impl Layer {
@@ -47,6 +52,11 @@ pub struct Config {
     pub holds: Vec<Hold>,
     /// Chord toggles: `(chord, target_layer)`, e.g. `("leftshift+rightshift", "game")`.
     pub chords: Vec<(String, String)>,
+    /// General chord bindings with a non-toggle action: `(chord, value)`, e.g.
+    /// `("j+k", "esc")`. keyd canonicalises chord order (`a+b` == `b+a`); entries
+    /// here keep the config's spelling. (Previously these were mis-parsed as remaps
+    /// keyed by the literal chord string — design doc §12.)
+    pub combos: Vec<(String, String)>,
     /// Plain remaps and unrecognized macros: `key -> value`.
     pub remaps: Vec<(String, String)>,
 }
