@@ -20,6 +20,21 @@ jobs:
       - run: cargo test -p keydviz-core --all-targets
       - run: cargo clippy -p keydviz-core --all-targets -- -D warnings
 
+  # The privileged apply tool is deliberately libc-only (no system deps), but it
+  # is the security-critical crate — it must never merge unbuilt or untested.
+  rust-apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p keydviz-apply --all-targets
+      - run: cargo clippy -p keydviz-apply --all-targets -- -D warnings
+      # The dev-only escape hatches (--dev-dir) must be compiled out of release.
+      - run: cargo build -p keydviz-apply --release
+
   rust-app:
     runs-on: ubuntu-latest
     steps:

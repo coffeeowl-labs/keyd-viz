@@ -808,3 +808,28 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   §12 (renderer concerns, not model): composite-layer overlay rendering, `[aliases]`
   placement resolution. Workspace: 146 tests green, clippy clean; viewer re-verified on real
   hardware (`--list`: HHKB + laptop map unchanged). **E0 is complete.**
+- *(Phase 6 E0 — code-review fixes on the apply tool, 2026-06-07)* A 7-angle adversarial
+  review of the branch surfaced three real defects in the dead-man's-switch path — all in the
+  exact GUI-crash scenario the switch exists for — plus three robustness items. Fixed:
+  (1) **EPIPE panic bypassed the revert**: `println!("applied …")` panics when the GUI has
+  closed the pipe (Rust ignores SIGPIPE), unwinding past `await_keep` with the possibly-lockout
+  config still live. Fix is two-layered: `fdio::say()` writes protocol lines best-effort
+  (never panics, swallows EPIPE — the reader is gone, the revert matters more), and `Txn` now
+  has a **drop backstop** — any un-kept transaction reverts on every exit path including
+  panic-unwind (`keep()` consumes the txn to defuse it); pinned by a catch_unwind test.
+  (2) **Unbounded reads as root**: the request line + payload now come through
+  `fdio::FdReader`, an unbuffered raw-fd reader with a 30 s deadline (poll before every read) —
+  a stalled client gets `TimedOut`, not a wedged pkexec process. (3) **Revert failure
+  masqueraded as a generic error**: a failed revert now emits a distinct `revert-failed` line
+  (exit 4) naming the backup + the panic sequence, and deliberately does NOT reload (that
+  would re-assert the config it failed to remove); `reverted`/exit 3 is only ever printed
+  when the prior state is actually back. Also: `keyd` is invoked by **absolute path only**
+  (`/usr/bin → /usr/local/bin → /usr/sbin`, fail closed if absent — no PATH lookups in a root
+  process), `keyd_check_works` now proves the `check` subcommand by validating a known-good
+  config instead of trusting `--version`, and CI gained a `rust-apply` job (test + clippy -D
+  warnings + a release build so the dev-flag compile-out is exercised). E2E re-verified: the
+  old EOF/keep flows unchanged; the F1 reproduction (stdout reader dead at "applied") now
+  reverts cleanly; the F2 stall hits the deadline with nothing written. Deferred to E1 (low,
+  niche, all latent on real configs): keyd low-byte REL/ABS parity in devices.rs, `[ids]`
+  kvp-key vs raw-line, modset-qualifier validation/first-wins parity, collapsing the unused
+  `Typed`/`dirty` overlay until the editor consumes it.

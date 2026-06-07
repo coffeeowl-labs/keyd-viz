@@ -8,7 +8,6 @@
 //! state. (`keyd check` can't catch logical lockouts — a config that disables every
 //! key is syntactically fine — which is exactly the case this switch exists for.)
 
-use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
@@ -26,8 +25,10 @@ pub enum Verdict {
 }
 
 /// Block until `keep\n` arrives on `fd`, the deadline passes, or the fd closes.
-/// Only an exact `keep` line keeps; every other outcome is a revert.
-pub fn await_keep(fd: &(impl AsRawFd + Read), timeout: Duration) -> Verdict {
+/// Only an exact `keep` line keeps; every other outcome is a revert. Reads the
+/// raw fd directly (its own poll loop owns the timing) — callers hand it any
+/// fd-bearing handle, buffered readers excluded by design.
+pub fn await_keep(fd: &impl AsRawFd, timeout: Duration) -> Verdict {
     let deadline = Instant::now() + timeout;
     let raw = fd.as_raw_fd();
     let mut buf = Vec::new();

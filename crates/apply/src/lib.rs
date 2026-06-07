@@ -30,6 +30,7 @@
 //! E2+ structural ops (create/split/move) get the right shape for free.
 
 pub mod deadman;
+pub mod fdio;
 pub mod scan;
 pub mod txn;
 

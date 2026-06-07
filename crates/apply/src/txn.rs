@@ -226,6 +226,27 @@ impl Txn<'_> {
         }
         Ok(())
     }
+
+    /// Commit: the writes stay. Consumes the transaction so the drop backstop
+    /// can't revert a kept apply.
+    pub fn keep(mut self) {
+        self.applied.clear();
+    }
+}
+
+/// Backstop: an un-kept transaction reverts on **every** exit path — early
+/// `?`-returns and panic-unwinds included. Without this, any unexpected unwind
+/// between rename+reload and the dead-man verdict (the original sin: `println!`
+/// panicking on EPIPE when the GUI died) would leave a possibly-lockout config
+/// installed with no revert. Best-effort by necessity (`Drop` can't propagate
+/// errors, and can't reload keyd — the on-disk priors are restored and the next
+/// reload or the panic sequence recovers the live state); the explicit
+/// [`Txn::revert`] in the normal paths reports errors properly and leaves this a
+/// no-op.
+impl Drop for Txn<'_> {
+    fn drop(&mut self) {
+        let _ = self.revert();
+    }
 }
 
 fn cstr(bytes: &[u8]) -> io::Result<CString> {
@@ -272,6 +293,37 @@ mod tests {
         let bak = format!(".a.conf.keydviz-bak.42.{}", std::process::id());
         assert_eq!(txn.applied[0].backup.as_deref(), Some(bak.as_str()));
         assert_eq!(std::fs::read(td.0.join(bak)).unwrap(), b"old");
+        txn.keep();
+        // keep() defuses the drop backstop: the new content survives the drop.
+        assert_eq!(std::fs::read(td.0.join("a.conf")).unwrap(), b"new");
+    }
+
+    #[test]
+    fn dropping_an_unkept_txn_reverts() {
+        // The backstop: any exit path that drops the txn without keep() — early
+        // return, panic-unwind — must restore the prior state.
+        let td = TempDir::new("dropguard");
+        std::fs::write(td.0.join("a.conf"), "old").unwrap();
+        let dir = Dir::open(&td.0).unwrap();
+
+        let txn = apply(&dir, vec![op("a.conf", "new")], 1, ok_check).unwrap();
+        assert_eq!(std::fs::read(td.0.join("a.conf")).unwrap(), b"new");
+        drop(txn);
+        assert_eq!(std::fs::read(td.0.join("a.conf")).unwrap(), b"old");
+    }
+
+    #[test]
+    fn drop_guard_fires_on_panic_unwind() {
+        let td = TempDir::new("unwind");
+        std::fs::write(td.0.join("a.conf"), "old").unwrap();
+        let dir = Dir::open(&td.0).unwrap();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _txn = apply(&dir, vec![op("a.conf", "new")], 1, ok_check).unwrap();
+            panic!("simulated EPIPE-style panic between apply and verdict");
+        }));
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(td.0.join("a.conf")).unwrap(), b"old");
     }
 
     #[test]
