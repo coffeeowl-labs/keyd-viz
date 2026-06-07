@@ -875,7 +875,7 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   process) + `exec.path` annotation; PKGBUILD/install.sh ship tool + policy; AppImage
   stays draft-then-install (decided trade-off). Also fixed in-pass: a latent pid-only
   temp-file race in `probe::check_works` that parallel tests exposed. Debug builds
-  honour `KEYDVIZ_APPLY_DEV_DIR` to run the whole flow unprivileged. Workspace: 161
+  honour `KEYDVIZ_APPLY_DEV_DIR` to run the whole flow unprivileged. Workspace: 165
   tests green, clippy clean. **Remaining for E2**: tap/hold editor, searchable palette +
   `list-keys` picker, layers/chords/`[global]`, orphan warnings, create-config flow,
   one-level include closure scan (deferred, design §5.3).
