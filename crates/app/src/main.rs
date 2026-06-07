@@ -9,6 +9,7 @@ mod helper;
 mod layer;
 mod monitor;
 mod prefs;
+mod probe;
 mod tray;
 
 use std::cell::RefCell;
@@ -512,6 +513,13 @@ fn toggle_window(win: &MainWindow) {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    // `--probe`: print what the installed keyd can do for Edit Mode and exit (no
+    // GUI). Diagnostic for the version-dependent capabilities (edit-mode design §6).
+    if std::env::args().any(|a| a == "--probe") {
+        println!("{}", probe::KeydProbe::run().summary());
+        return Ok(());
+    }
+
     let det = match flag_value("--qmk-info") {
         Some(info) => match qmk_detection(&info) {
             Ok(d) => d,
