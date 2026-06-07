@@ -1,6 +1,6 @@
 # Maintainer: coffeeowl-labs <noreply@coffeeowl-labs>
 pkgname=keyd-viz
-pkgver=1.1.0
+pkgver=1.2.0
 pkgrel=1
 pkgdesc="The visual face of keyd: a native GUI of your keyboard layout with live layers and keypress glow"
 arch=('x86_64')

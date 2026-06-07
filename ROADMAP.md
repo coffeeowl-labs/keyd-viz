@@ -1,11 +1,11 @@
 # keyd-viz — Roadmap & Design Record
 
-> **Status:** v1.1.0 shipped (2026-06-05) — Phases 0–4 complete. v1.1.0 was a UI/UX
-> polish release (zoom, compact mode, live hotplug + id highlight, header redesign,
-> fast-tap glow fix). The **tray-resident process is the v1.2 headline** — the tray
-> (StatusNotifierItem) has landed on `main` (held for the v1.2 bundle). The originally
-> paired **global hotkey was dropped** (Wayland can't grab one and it can't reliably
-> raise; see `docs/tray-shortcut-design.md`).
+> **Status:** v1.2.0 shipped (2026-06-06) — Phases 0–5 complete. v1.1.0 was a UI/UX
+> polish release; **v1.2.0 adds the system-tray resident process** (StatusNotifierItem:
+> tray icon, minimize-to-tray, Show/Hide/Quit, active-layer tooltip), bundled with the
+> previously-held pin/icon-button/parser fixes. The originally-paired **global hotkey was
+> dropped** (Wayland can't grab one and it can't reliably raise; see
+> `docs/tray-shortcut-design.md`). **Next up: Phase 6 — edit mode** (`docs/edit-mode-design.md`).
 > **Purpose of this document:** the single durable source of truth for this project's
 > direction, decisions, rationale, and the verified technical facts behind them. It is
 > written to survive context loss — if you are picking this up cold, read this top to
@@ -366,7 +366,7 @@ Clean separation so each piece is independently testable and the privileged surf
 Each phase ships standalone value. Build order is fixed; later phases assume earlier ones.
 
 > **Phases 0–4 shipped in v1.0 (2026-06-04).** Phase 5 is split: distribution + live
-> config reload landed in v1.0; the tray-resident process is v1.2 (landed on `main`); the
+> config reload landed in v1.0; the tray-resident process shipped in v1.2.0; the
 > originally-paired global-hotkey summon was dropped (Wayland limits — see Phase 5 / the
 > tray design note).
 
@@ -413,9 +413,10 @@ Each phase ships standalone value. Build order is fixed; later phases assume ear
 - **v1.1.0 (shipped 2026-06-05):** UI/UX polish — board zoom (scroll + controls), compact
   pinnable mode, auto-fit window, live keyboard hotplug tracking + connected-id highlight,
   chooser-first header redesign, and the fast tap-hold glow fix.
-- **v1.2 (in progress):** system-tray resident process (StatusNotifierItem via `ksni` —
-  landed on `main`, held for the v1.2 bundle): tray icon + Show/Hide + Quit, tooltip shows
-  the active layer; pairs with the compact mode → pinned overlay. The originally-paired
+- **v1.2.0 (shipped 2026-06-06):** system-tray resident process (StatusNotifierItem via
+  `ksni`): tray icon + Show/Hide + Quit, minimize-to-tray (close hides to the tray),
+  tooltip shows the active layer; pairs with the compact mode → pinned overlay. Bundled the
+  previously-held pin (X11)/icon-button/parser viewer-bug fixes. The originally-paired
   **global shortcut was dropped** (Wayland can't grab a hotkey and the portal can't raise;
   rationale in `docs/tray-shortcut-design.md`). Flatpak still optional, layer-only.
 

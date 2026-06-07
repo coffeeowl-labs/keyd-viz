@@ -2461,7 +2461,7 @@ dependencies = [
 
 [[package]]
 name = "keydviz"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "i-slint-backend-winit",
  "keydviz-core",
@@ -2472,7 +2472,7 @@ dependencies = [
 
 [[package]]
 name = "keydviz-core"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2480,7 +2480,7 @@ dependencies = [
 
 [[package]]
 name = "keydviz-helper"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "keydviz-core",
  "libc",

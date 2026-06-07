@@ -1,6 +1,6 @@
 [package]
 name = "keydviz-helper"
-version = "1.1.0"
+version = "1.2.0"
 description = "keyd-viz brokering daemon — re-exposes keyd's layer/keypress streams to the unprivileged GUI over a locked-down unix socket."
 edition.workspace = true
 license.workspace = true
