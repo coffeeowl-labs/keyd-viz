@@ -4,6 +4,8 @@
 //! renders it with Slint. By default it detects connected keyboards and shows only
 //! the config(s) governing them; with explicit path args it shows exactly those.
 
+#[allow(dead_code)] // consumed by the apply UI wiring (E2 step 3) — drop with it
+mod applying;
 mod devices;
 mod editing;
 mod helper;
