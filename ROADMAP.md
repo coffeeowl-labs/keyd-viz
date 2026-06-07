@@ -747,3 +747,20 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   device directly). Unit re-verified with `systemd-analyze verify`; needs a reinstall + restart on the
   target to confirm the daemon runs clean under the tightened seccomp. **This completes the helper's
   security hardening** — remaining work is just AUR/AppImage packaging.
+- *(Phase 6 E0 — line-faithful edit model, 2026-06-06)* First Edit Mode code, per
+  `docs/edit-mode-design.md` §5.1 (review #2's per-line-verbatim decision). **`core::edit`** —
+  `EditConfig`/`Section`/`Entry` store every source line byte-for-byte (raw + per-line EOL:
+  LF/CRLF/none — no `str::lines()`) with a typed overlay (`Typed::{Remap, Noop, Raw}`,
+  deliberately conservative; grows in E1/E2). `serialize()` replays untouched lines verbatim and
+  regenerates only edited ones, so `serialize(parse(f)) == f` is identity-by-construction; the
+  `round_trips()` gate is the model-soundness self-check the app runs before entering edit mode.
+  Grammar parity re-verified line-by-line against keyd `ini.c` @ `f564288` (`/tmp/keyd-src`):
+  `parse_kvp` exactly (leading-`=` key, trailing space/tab run off the key, valueless entries
+  kept), header-before-comment precedence (`[#x]` is a header), `[a]b]` → name `a]b`, `[foo`
+  without `]` is a *kvp entry*, verbatim special-section names (`[ids ]` ≠ `[ids]`).
+  `Section::set_binding` edits the **last** duplicate (keyd's last-wins order) and dirties one
+  line. Tests: kvp-parity table, header edge cases, examples + `/etc/keyd` corpus round-trip,
+  EOL-fidelity cases, fixed-seed fuzz (500 byte-soups), single-line-diff mutation. 57 core tests
+  green, clippy clean. **Still open in E0:** §12 parser-faithfulness fixes (paren-depth `parse_fn`,
+  modset classification, viewer-model derivation from `EditConfig`), the privileged apply-tool
+  prototype (§5.2–5.4), and the runtime keyd probe.
