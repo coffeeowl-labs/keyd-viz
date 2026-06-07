@@ -833,3 +833,23 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   niche, all latent on real configs): keyd low-byte REL/ABS parity in devices.rs, `[ids]`
   kvp-key vs raw-line, modset-qualifier validation/first-wins parity, collapsing the unused
   `Typed`/`dirty` overlay until the editor consumes it.
+- *(Phase 6 E1 — edit a real config, draft-then-install, 2026-06-07)* The first
+  user-facing Edit Mode cut, in three layers. **Core editing API** (`core/edit.rs`):
+  `Section::get_binding`/`set_or_add_binding` (last-duplicate-wins lookup; in-place value
+  rewrite or append after the section's last non-blank entry, preserving the file's EOL
+  style and a missing final newline), `target_section_mut` (LAST layer-bearing section of
+  a base name, matching keyd's merge), `is_dirty`. **App session** (`app/editing.rs`):
+  `EditSession::open` runs the §5.1 gate (unreadable / round-trip-gate / keyd-rejects →
+  view-only with a reason); `config()` re-derives through the one shared parser so the
+  preview IS the viewer (§5.6); `save_draft` writes `~/.config/keyd-viz/drafts/<name>`,
+  returns copy-paste `sudo cp` + `sudo keyd reload` steps, flags a stale source file, and
+  runs `keyd check` on the draft when keyd is installed. **Slint UI**: an explicit `edit`
+  toggle (viewer untouched by default; gate refusals show a visible banner); while editing,
+  caps are click targets with selection highlight, live morphing + follow-the-keyboard
+  freeze, a section chooser picks the board, and the panel offers typed entry,
+  press-to-capture (consumes the next live key-down — note monitor reports the *emitted*
+  keysym), a common-actions chip palette, and save-draft showing verdict + diff + install
+  steps. `KeyCap` grew `phys` (the slot's config-LHS name) because `key` is the emitted
+  chord — the wrong identity to edit. The config-reload watcher exempts the file being
+  edited. Workspace: 150 tests green, clippy clean. **E1 done-when met** pending visual
+  review; the searchable palette, tap/hold editor, and one-click pkexec apply are E2.
