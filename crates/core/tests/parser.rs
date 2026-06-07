@@ -98,6 +98,19 @@ fn modifier_qualified_layer_merges_into_base() {
 }
 
 #[test]
+fn global_and_aliases_are_not_layers() {
+    // keyd special-cases [global] and [aliases]; they must not become boards.
+    let text = "[ids]\n*\n[global]\noverload_tap_timeout = 200\n\
+                [aliases]\ncapslock = esc\n[nav]\nh = left\n";
+    let cfg = parse_text(text);
+    assert!(cfg.layer("global").is_none(), "[global] should not be a layer");
+    assert!(cfg.layer("aliases").is_none(), "[aliases] should not be a layer");
+    // a real layer alongside them still parses
+    assert!(cfg.layer("nav").is_some());
+    assert_eq!(cfg.layer("nav").unwrap().get("h"), Some("left"));
+}
+
+#[test]
 fn composite_layer_header_parsed() {
     // `[a+b]` is a real (composite) layer name; bindings must not leak into the
     // previous section.

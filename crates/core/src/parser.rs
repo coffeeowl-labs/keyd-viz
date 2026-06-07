@@ -46,7 +46,10 @@ pub fn parse_text(text: &str) -> Config {
         }
 
         if let Some(name) = section_header(line) {
-            if name != "ids" && name != "main" {
+            // keyd special-cases `ids`, `aliases`, and `global`; every other
+            // section is a layer (`main` is our flat-bindings target). Don't
+            // register layers for the special sections.
+            if !matches!(name, "ids" | "main" | "global" | "aliases") {
                 // setdefault: register the layer so empty sections still appear.
                 ensure_layer(&mut cfg, name);
             }
@@ -58,6 +61,11 @@ pub fn parse_text(text: &str) -> Config {
             Some("ids") => {
                 cfg.ids.push(line.to_string());
             }
+            // keyd's [global] (daemon options) and [aliases] (key aliases) are
+            // not layers — skip their bodies so they don't render as bogus
+            // boards. (Resolving aliases onto physical keys is a future
+            // enhancement; for now an aliased binding just isn't placed.)
+            Some("global") | Some("aliases") => {}
             Some("main") => {
                 if let Some((key, val)) = split_kv(line) {
                     parse_main_binding(&mut cfg, key, val);

@@ -628,3 +628,50 @@ local-first and file-based, which is our advantage.
     via interpreter+args) — recorded here so it isn't re-proposed. (§7)
   - **Test oracle sized:** ~30 hand-authored T1 cases (cap ~40), human-written expected output;
     concrete golden-review policy keyed on T1-vs-T1b discrimination at keyd bumps. (§8.2)
+
+---
+
+## 12. Appendix: parser-faithfulness checklist (pre-E0 audit, 2026-06-06)
+
+A pre-E0 audit compared the current parser/supporting modules against keyd's source. Most of the
+parser proved **faithful**; this is the punch-list of real divergences for E0's parser rework,
+plus what was verified correct (so E0 doesn't re-investigate).
+
+**Already fixed and shipped (viewer):**
+- Section-header grammar — `[layer:mods]`, `[a+b]`, any `[...]` (was `[A-Za-z0-9_]` only).
+- Inline `#` is literal; `#` is a comment only at line start (matches `ini.c`).
+- `[global]`/`[aliases]` no longer render as bogus layers (keyd special-cases them in `do_parse`).
+
+**Fix during E0 (real divergences, mostly need the new line-faithful model):**
+- **Mod-vs-Layer classification** uses a hardcoded name list (`control/shift/alt/meta/altgr`),
+  not the layer's `:modset` qualifier — a custom modifier layer (`[caps:C]`) mis-renders. Capture
+  the `:`-qualifier (modset vs `layout` vs composite) on the layer and classify from it.
+- **General chords & composite layers.** Only `a+b = toggle(x)` is modeled; `a+b = <other>`
+  becomes a bogus remap keyed `"a+b"`, and `[a+b]` composite sections render as orphan layers
+  instead of overlays of their constituents. Model arbitrary-RHS chords + composite layers
+  (keyd canonicalises chord order: `a+b == b+a`).
+- **Nested/escaped action args.** `parse_fn_call` requires the value to end with `)` and splits
+  args on naive `,`, so `overload(nav, macro(a, b))` corrupts the tap. Port keyd's paren-depth +
+  backslash-aware arg parser (`parse_fn`).
+- **`overloadi`** arg semantics (both leading args are descriptors, not a layer) — niche.
+- **`parse_kvp` parity** for round-trip: keyd allows a literal `=` key and keeps valueless
+  entries; our `split_once('=')` differs. Needed for `serialize(parse(f)) == f` on odd files.
+- **Device matching is a `bool`, keyd uses a capability bitset.** `ids::match_device(devid,
+  is_keyboard)` can't represent a combo keyboard+mouse device, so `m:`/`k:` filters mismatch such
+  devices. Replace `is_keyboard: bool` with a device-flag set and match by bitwise overlap
+  (`config_check_match`). Structural — do it with the E0 model rework.
+- **`[aliases]` resolution** (now that they're no longer rendered as layers): resolve aliased key
+  names onto their physical keys so aliased bindings render in the right place.
+- **Validation parity** for edit-mode diagnostics: keyd rejects a file with no `[ids]` / a leading
+  bare assignment; surface that as a warning rather than silently parsing the remainder.
+
+**Verified correct — do NOT re-litigate in E0:**
+- `[ids]` matching: first-prefix-match-wins in file order, exclude short-circuits, `*` is a
+  keyboards-only last-resort fallback — our two-loop `ids.rs` matches `config_check_match` for all
+  realistic inputs (the audit's "exclude-ordering" and `-k:` "bugs" were false alarms).
+- `overloadt2` arg order (layer, tap, timeout); `lettermod` timings discarded without breaking
+  rendering.
+- Keycode table values; US shifted-symbol maps; keysym alias coverage (`equal`/`minus`/… ↔ `=`/
+  `-`/…); modifier shorthand. No `super`/`hyper` modifiers exist in keyd (`meta` == Super).
+- Chord-glow matching is order-independent (set membership in `resolve_glow`), despite
+  `output_chord` emitting order-dependent strings.

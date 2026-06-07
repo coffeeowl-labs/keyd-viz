@@ -28,6 +28,9 @@ All notable changes to keyd-viz are documented here. The format is based on
 - **`#` inside a value is no longer treated as a comment.** keyd only treats `#` as a comment
   at the start of a line; the parser was stripping from the first `#` anywhere, truncating any
   binding whose value contained one.
+- **`[global]` and `[aliases]` sections no longer render as bogus layers.** keyd special-cases
+  these (daemon options / key aliases); the parser was treating every non-`[ids]` section as a
+  layer, so a common `[global]` block (e.g. `overload_tap_timeout`) drew a junk board.
 
 ## [1.1.0] - 2026-06-05
 
