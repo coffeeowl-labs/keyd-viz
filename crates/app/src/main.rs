@@ -4,7 +4,6 @@
 //! renders it with Slint. By default it detects connected keyboards and shows only
 //! the config(s) governing them; with explicit path args it shows exactly those.
 
-#[allow(dead_code)] // consumed by the apply UI wiring (E2 step 3) — drop with it
 mod applying;
 mod devices;
 mod editing;
@@ -497,6 +496,22 @@ thread_local! {
     static TRAY: RefCell<Option<tray::TrayHandle>> = const { RefCell::new(None) };
 }
 
+/// One-click apply bookkeeping (E2), UI-thread only. The protocol thread can only
+/// ferry plain [`applying::ApplyEvent`]s across `invoke_from_event_loop`, so the
+/// state the event handler needs — the session to re-base on `kept`, the sheet
+/// sources to republish, the live handle for keep/revert, the countdown timer —
+/// lives in a thread-local, same shape as [`TRAY`]. Seeded once in `main`.
+struct ApplyCtx {
+    session: SharedSession,
+    srcs: Rc<RefCell<Vec<SheetSrc>>>,
+    run: RefCell<Option<applying::ApplyHandle>>,
+    timer: RefCell<Option<slint::Timer>>,
+}
+
+thread_local! {
+    static APPLY: RefCell<Option<ApplyCtx>> = const { RefCell::new(None) };
+}
+
 /// Show the window if hidden, hide it if shown — the tray's summon/dismiss. Uses Slint's
 /// own `show`/`hide`, which map/unmap the toplevel surface (so a hidden window also drops
 /// its taskbar entry — the app then lives only in the tray) and, unlike poking winit's
@@ -592,6 +607,16 @@ fn main() -> Result<(), slint::PlatformError> {
     // Edit mode (Phase 6 E1): one optional session; `Some(_)` == editing. Created here
     // so the keyboard switcher and the config-reload timer can respect it.
     let session: SharedSession = Rc::new(RefCell::new(None));
+    // One-click apply (E2): the event handler runs out of `invoke_from_event_loop`
+    // closures that can't capture these Rcs across the thread hop — park them.
+    APPLY.with(|a| {
+        *a.borrow_mut() = Some(ApplyCtx {
+            session: session.clone(),
+            srcs: srcs.clone(),
+            run: RefCell::new(None),
+            timer: RefCell::new(None),
+        });
+    });
     {
         let weak = win.as_weak();
         let srcs = srcs.clone();
@@ -620,6 +645,9 @@ fn main() -> Result<(), slint::PlatformError> {
         win.on_pick_keyboard(move |idx| {
             let Some(win) = weak.upgrade() else { return };
             if session.borrow().is_some() {
+                if refuse_if_applying(&win) {
+                    return;
+                }
                 // An edit session is per-file; switching keyboards leaves it. Confirm
                 // first if it's dirty, stashing the target to switch to on confirm.
                 if win.get_edit_dirty() {
@@ -656,6 +684,9 @@ fn main() -> Result<(), slint::PlatformError> {
         win.on_toggle_edit(move || {
             let Some(win) = weak.upgrade() else { return };
             if session.borrow().is_some() {
+                if refuse_if_applying(&win) {
+                    return;
+                }
                 // Leaving a dirty session: confirm before discarding the preview.
                 if win.get_edit_dirty() {
                     win.set_pending_kbd(-1);
@@ -682,6 +713,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     // whose bindings live only in layers has none — pick what exists).
                     let default_layer =
                         choices.first().map(|c| c.name.clone()).unwrap_or("main".into());
+                    let (apply_ok, apply_hint) = apply_gate(&s);
                     win.set_edit_layers(model(choices));
                     win.set_edit_layer(default_layer);
                     win.set_selected_phys("".into());
@@ -691,6 +723,11 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_draft_info("".into());
                     win.set_capture_armed(false);
                     win.set_edit_banner(banner.into());
+                    win.set_apply_available(apply_ok);
+                    win.set_apply_hint(apply_hint.into());
+                    win.set_apply_state("idle".into());
+                    win.set_apply_info("".into());
+                    win.set_apply_seconds_left(0);
                     *session.borrow_mut() = Some(s);
                     win.set_edit_mode(true);
                     render_board(&win); // freeze the board to the chosen section
@@ -745,6 +782,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let session = session.clone();
         win.on_apply_binding(move |value| {
             let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
             let value = value.trim().to_string();
             let layer = win.get_edit_layer().to_string();
             let phys = win.get_selected_phys().to_string();
@@ -784,6 +824,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let session = session.clone();
         win.on_save_draft(move || {
             let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
             let sb = session.borrow();
             let Some(s) = sb.as_ref() else { return };
             let info = match s.save_draft() {
@@ -815,6 +858,143 @@ fn main() -> Result<(), slint::PlatformError> {
             let Some(win) = weak.upgrade() else { return };
             win.set_discard_prompt(false);
             win.set_pending_kbd(-1);
+        });
+    }
+
+    // ---- one-click apply (Phase 6 E2: pkexec + dead-man's switch) ---------------
+
+    // Pre-flight: every free check runs before pkexec is ever spawned — size, the
+    // safety scan (command()/macro() route to an explicit confirm state), `keyd
+    // check`, staleness, and the diff the user will watch through the countdown.
+    {
+        let weak = win.as_weak();
+        let session = session.clone();
+        win.on_start_apply(move || {
+            let Some(win) = weak.upgrade() else { return };
+            if win.get_apply_state() != "idle" || !win.get_edit_dirty() {
+                return;
+            }
+            let sb = session.borrow();
+            let Some(s) = sb.as_ref() else { return };
+            let bytes = s.serialized();
+            if bytes.len() > keydviz_apply::MAX_CONFIG_BYTES {
+                win.set_apply_state("failed".into());
+                win.set_apply_info(
+                    format!(
+                        "config is {} bytes — keyd's own limit is {}",
+                        bytes.len(),
+                        keydviz_apply::MAX_CONFIG_BYTES
+                    )
+                    .into(),
+                );
+                return;
+            }
+            // The tool would refuse a broken config anyway — but only after the
+            // user paid the auth prompt. Catch it here for free. `None` (no keyd
+            // in PATH) falls through: the tool is the authoritative gate.
+            if let Some(Err(e)) = editing::keyd_check_bytes(&bytes) {
+                win.set_apply_state("failed".into());
+                win.set_apply_info(
+                    format!("keyd check rejects this config — fix it first:\n{e}").into(),
+                );
+                return;
+            }
+            // Same scan code the privileged tool runs (§5.3) — the pre-flight and
+            // the enforcement can't disagree on what needs confirmation.
+            let findings = keydviz_apply::scan::scan(bytes.as_bytes());
+            let mut info = String::new();
+            for f in &findings {
+                info.push_str(&format!("\u{26a0} {}\n", f.describe()));
+            }
+            if let Some(w) = s.stale_warning() {
+                info.push_str(&format!("\u{26a0} {w}\n"));
+            }
+            let diff = s.diff();
+            drop(sb);
+            if !diff.is_empty() {
+                if !info.is_empty() {
+                    info.push('\n');
+                }
+                info.push_str(diff.trim_end());
+            }
+            win.set_apply_info(info.into());
+            if findings.iter().any(|f| f.needs_ack()) {
+                win.set_apply_state("confirm".into());
+            } else {
+                launch_apply(&win, false);
+            }
+        });
+    }
+
+    // The explicit command()/macro() acknowledgement — only this click sets the
+    // protocol's `sensitive-ok` token (§5.3).
+    {
+        let weak = win.as_weak();
+        win.on_confirm_apply(move || {
+            let Some(win) = weak.upgrade() else { return };
+            if win.get_apply_state() == "confirm" {
+                launch_apply(&win, true);
+            }
+        });
+    }
+
+    // Universal back-out/dismiss. In `auth` we only drop our stdin and *wait*: the
+    // run isn't over until the tool (or pkexec's exit code) says how it ended —
+    // never report an outcome the privileged side hasn't confirmed.
+    {
+        let weak = win.as_weak();
+        win.on_cancel_apply(move || {
+            let Some(win) = weak.upgrade() else { return };
+            match win.get_apply_state().as_str() {
+                "confirm" | "kept" | "reverted" | "revert-failed" | "failed" => {
+                    win.set_apply_state("idle".into());
+                    win.set_apply_info("".into());
+                }
+                "auth" => {
+                    APPLY.with(|a| {
+                        if let Some(ctx) = a.borrow().as_ref() {
+                            if let Some(h) = ctx.run.borrow().as_ref() {
+                                h.revert();
+                            }
+                        }
+                    });
+                    win.set_apply_info("cancelling \u{2014} waiting for the tool to exit".into());
+                }
+                _ => {}
+            }
+        });
+    }
+
+    // The dead-man's switch, GUI half: KEEP is the only thing that persists. Sent
+    // best-effort — if the window just expired, the tool's `reverted` line wins.
+    {
+        let weak = win.as_weak();
+        win.on_keep_apply(move || {
+            let Some(win) = weak.upgrade() else { return };
+            if win.get_apply_state() == "countdown" {
+                APPLY.with(|a| {
+                    if let Some(ctx) = a.borrow().as_ref() {
+                        if let Some(h) = ctx.run.borrow().as_ref() {
+                            h.keep();
+                        }
+                    }
+                });
+            }
+        });
+    }
+    {
+        let weak = win.as_weak();
+        win.on_revert_apply(move || {
+            let Some(win) = weak.upgrade() else { return };
+            if win.get_apply_state() == "countdown" {
+                APPLY.with(|a| {
+                    if let Some(ctx) = a.borrow().as_ref() {
+                        if let Some(h) = ctx.run.borrow().as_ref() {
+                            h.revert(); // EOF → the tool reverts and reports
+                        }
+                    }
+                });
+            }
         });
     }
 
@@ -996,6 +1176,11 @@ fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &Shar
     win.set_edit_dirty(false);
     win.set_discard_prompt(false);
     win.set_pending_kbd(-1);
+    // One-click apply chrome (callers guard against exiting mid-flight).
+    win.set_apply_available(false);
+    win.set_apply_hint("".into());
+    win.set_apply_state("idle".into());
+    win.set_apply_info("".into());
     let mut srcs = srcs.borrow_mut();
     if let Some((idx, src)) = srcs.iter_mut().enumerate().find(|(_, x)| x.path == s.path) {
         if let Ok(cfg) = parse_file(&src.path) {
@@ -1041,6 +1226,213 @@ fn draft_summary(s: &editing::EditSession, saved: &editing::DraftSaved) -> Strin
     out.push_str("\ninstall:\n");
     out.push_str(&saved.install_steps);
     out
+}
+
+/// True while an apply run is in flight (confirm / auth / countdown).
+fn apply_busy(win: &MainWindow) -> bool {
+    matches!(win.get_apply_state().as_str(), "confirm" | "auth" | "countdown")
+}
+
+/// Refuse session-changing actions while an apply is in flight: a binding edit or
+/// session swap mid-countdown has no good semantics (which bytes did the user
+/// keep?), so the answer is one visible "not now" instead.
+fn refuse_if_applying(win: &MainWindow) -> bool {
+    if apply_busy(win) {
+        win.set_edit_banner("\u{26a0} apply in progress \u{2014} KEEP or revert first".into());
+        return true;
+    }
+    false
+}
+
+/// One-click availability for a session, computed once at open: pkexec + the
+/// packaged tool must exist AND the file must be `<config-dir>/<name>.conf` with
+/// an allow-listed name. The hint names the packaging trade-off only when the
+/// file *would* qualify but the tool isn't installed (AppImage / plain source
+/// build); a file outside the config dir gets no apply UI at all.
+fn apply_gate(s: &editing::EditSession) -> (bool, String) {
+    match applying::one_click() {
+        Some(inv) => (s.apply_target(inv.config_dir()).is_some(), String::new()),
+        None => {
+            let hint = if s.apply_target(Path::new("/etc/keyd")).is_some() {
+                "one-click apply needs the packaged keydviz-apply tool \
+                 (AUR/source install) \u{2014} use save draft's install steps"
+                    .to_string()
+            } else {
+                String::new()
+            };
+            (false, hint)
+        }
+    }
+}
+
+/// Spawn the apply tool (pkexec in release; the `--dev-dir` sibling binary in dev)
+/// and ferry its protocol events onto the UI thread — the same hop shape as
+/// `spawn_live`. The request bytes are written by the engine's background thread,
+/// never here on the event loop (the write can block for the auth dialog's
+/// lifetime).
+fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
+    APPLY.with(|a| {
+        let actx = a.borrow();
+        let Some(ctx) = actx.as_ref() else { return };
+        // Re-resolve instead of caching: tool/pkexec could have been (un)installed
+        // since the session opened, and the gate already vouched for the shape.
+        let Some(how) = applying::one_click() else { return };
+        let sb = ctx.session.borrow();
+        let Some(s) = sb.as_ref() else { return };
+        let Some(name) = s.apply_target(how.config_dir()) else { return };
+        let bytes = s.serialized().into_bytes();
+        drop(sb);
+        // keyd reload bounces the virtual device mid-apply; don't leave a stale
+        // capture armed across the hiccup.
+        win.set_capture_armed(false);
+        win.set_apply_state("auth".into());
+        let weak = win.as_weak();
+        let req = applying::ApplyRequest { name, bytes, sensitive_ok, how };
+        match applying::start(req, move |ev| {
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(win) = weak.upgrade() {
+                    handle_apply_event(&win, ev);
+                }
+            });
+        }) {
+            Ok(h) => *ctx.run.borrow_mut() = Some(h),
+            Err(e) => {
+                win.set_apply_state("failed".into());
+                win.set_apply_info(format!("couldn't launch the apply tool: {e}").into());
+            }
+        }
+    });
+}
+
+/// Apply protocol events, on the UI thread. Terminal events stop the countdown
+/// and release the handle; `Kept` additionally re-bases the session on the new
+/// on-disk state. The countdown timer is cosmetic — only the tool's verdict
+/// lines decide the outcome, so the timer reaching 0 changes nothing by itself.
+fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
+    use applying::ApplyEvent as E;
+    APPLY.with(|a| {
+        let actx = a.borrow();
+        let Some(ctx) = actx.as_ref() else { return };
+        let finish = |state: &str, info: Option<String>| {
+            *ctx.timer.borrow_mut() = None;
+            *ctx.run.borrow_mut() = None;
+            win.set_apply_state(state.into());
+            if let Some(info) = info {
+                win.set_apply_info(info.into());
+            }
+        };
+        match ev {
+            // Advisory echo — pre-flight already listed the findings.
+            E::Finding(_) => {}
+            E::Applied { secs } => {
+                win.set_apply_state("countdown".into());
+                win.set_apply_seconds_left(secs as i32);
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs(secs);
+                let weak = win.as_weak();
+                let t = slint::Timer::default();
+                t.start(
+                    slint::TimerMode::Repeated,
+                    std::time::Duration::from_millis(200),
+                    move || {
+                        if let Some(win) = weak.upgrade() {
+                            let left = deadline
+                                .saturating_duration_since(std::time::Instant::now());
+                            win.set_apply_seconds_left(left.as_secs() as i32);
+                        }
+                    },
+                );
+                *ctx.timer.borrow_mut() = Some(t);
+            }
+            E::Kept => {
+                let path = ctx.session.borrow().as_ref().map(|s| s.path.display().to_string());
+                finish("kept", path.map(|p| format!("{p} updated")));
+                reopen_after_kept(win, ctx);
+            }
+            E::Reverted(reason) => {
+                let why = match reason.as_str() {
+                    "TimedOut" => "no confirmation in time",
+                    "Eof" => "cancelled",
+                    other => other,
+                };
+                finish(
+                    "reverted",
+                    Some(format!(
+                        "reverted: {why} \u{2014} the previous config is back; \
+                         your edits are still staged"
+                    )),
+                );
+            }
+            // Verbatim: the tool's message names the backup file and the panic
+            // sequence — exactly what the user needs to copy.
+            E::RevertFailed(w) => finish("revert-failed", Some(w)),
+            E::Refused(r) => {
+                finish("failed", Some(format!("refused: {r} \u{2014} nothing was written")));
+            }
+            E::AuthDismissed => {
+                finish(
+                    "failed",
+                    Some("authentication cancelled \u{2014} nothing was written".to_string()),
+                );
+            }
+            E::NotAuthorized => {
+                finish(
+                    "failed",
+                    Some(
+                        "authorization unavailable (is a polkit agent running?) \
+                         \u{2014} nothing was written"
+                            .to_string(),
+                    ),
+                );
+            }
+            E::Failed(m) => finish("failed", Some(m)),
+        }
+    });
+}
+
+/// After `kept`, the file on disk IS the session's bytes. Re-open rather than
+/// poke flags: `original` re-bases (truthful staleness from here on), the model
+/// is clean at the `EditConfig` level (where `dirty()` actually looks), and the
+/// §5.1 gate re-verifies that our own output round-trips. The reload watcher
+/// needs no help — its session-path exemption holds (we're still editing), and
+/// after `exit_edit` it sees one mtime bump and does a single redundant reload.
+fn reopen_after_kept(win: &MainWindow, ctx: &ApplyCtx) {
+    let Some(path) = ctx.session.borrow().as_ref().map(|s| s.path.clone()) else { return };
+    match editing::EditSession::open(&path) {
+        Ok(new_s) => {
+            // Preserve the user's place: same section, same selected key.
+            let layer = win.get_edit_layer().to_string();
+            let phys = win.get_selected_phys().to_string();
+            if !phys.is_empty() {
+                let cur = new_s.current_binding(&layer, &phys).unwrap_or_default();
+                win.set_edit_current(cur.clone().into());
+                win.set_edit_value(cur.into());
+            }
+            *ctx.session.borrow_mut() = Some(new_s);
+            win.set_edit_dirty(false);
+            // The sheet still holds the preview-derived config; re-derive from
+            // disk so viewer state and file agree (exit_edit's path, but staying
+            // in edit mode).
+            let mut srcs = ctx.srcs.borrow_mut();
+            if let Some((idx, src)) = srcs.iter_mut().enumerate().find(|(_, x)| x.path == path) {
+                if let Ok(cfg) = parse_file(&src.path) {
+                    src.cfg = cfg;
+                }
+                publish_sheet(win, idx, src);
+            }
+            drop(srcs);
+            render_board(win);
+        }
+        Err(v) => {
+            // Shouldn't happen — we wrote serialize() output, which round-trips by
+            // construction. Keep the old session rather than yank the user out of
+            // edit mode, but say so.
+            win.set_edit_banner(
+                format!("\u{26a0} session re-open after apply failed: {}", v.describe()).into(),
+            );
+        }
+    }
 }
 
 /// File mtime, or `None` if the path is missing/unreadable (so a config saved via a

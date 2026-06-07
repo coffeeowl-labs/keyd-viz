@@ -145,7 +145,6 @@ impl EditSession {
     /// The exact bytes persistence writes — the same `serialize()` behind
     /// [`Self::save_draft`] and the one-click apply payload (E2). One source of
     /// truth: what the user previewed is byte-for-byte what lands on disk.
-    #[allow(dead_code)] // consumed by the apply wiring (E2 step 3) — drop with it
     pub fn serialized(&self) -> String {
         self.edit.serialize()
     }
@@ -154,7 +153,6 @@ impl EditSession {
     /// apply tool's allow-list accepts — the only shape one-click apply will
     /// touch (the tool re-derives the destination from the name; it never takes
     /// a path). Anything else stays draft-then-install.
-    #[allow(dead_code)] // consumed by the apply wiring (E2 step 3) — drop with it
     pub fn apply_target(&self, dir: &Path) -> Option<String> {
         if self.path.parent() != Some(dir) {
             return None;
@@ -232,7 +230,6 @@ fn keyd_check_draft(path: &Path) -> Option<Result<(), String>> {
 /// written to a temp file for the check, removed after. Like the draft check
 /// this is early UX feedback, never the security gate: the privileged tool
 /// re-runs `keyd check` on the exact bytes it writes (§5.3, fail closed there).
-#[allow(dead_code)] // consumed by the apply wiring (E2 step 3) — drop with it
 pub fn keyd_check_bytes(bytes: &str) -> Option<Result<(), String>> {
     // pid + sequence, like probe::check_works: concurrent callers (parallel
     // tests) must never share a temp file.

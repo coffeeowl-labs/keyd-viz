@@ -434,6 +434,24 @@ export component MainWindow inherits Window {
     callback confirm_discard();   // discard the unsaved session and proceed (leave / switch)
     callback cancel_discard();    // dismiss the prompt, stay in the session
 
+    // ---- one-click apply (Phase 6 E2: pkexec + dead-man's switch) ----
+    // Gated by Rust at session open: the file must be `/etc/keyd/<name>.conf`
+    // (apply-tool name allow-list) AND pkexec + the packaged tool must exist.
+    in property <bool> apply_available: false;
+    in property <string> apply_hint;         // why one-click is absent ("" = no hint row)
+    // idle | confirm | auth | countdown | kept | reverted | revert-failed | failed.
+    // Only KEEP persists a change; every other exit from `countdown` reverts.
+    in property <string> apply_state: "idle";
+    in property <int> apply_seconds_left;    // dead-man window remaining (countdown)
+    in property <string> apply_info;         // findings / staleness / diff / outcome detail
+    property <bool> apply_in_flight: root.apply_state == "confirm"
+        || root.apply_state == "auth" || root.apply_state == "countdown";
+    callback start_apply();    // pre-flight; → confirm (sensitive) or straight to auth
+    callback confirm_apply();  // explicit command()/macro() acknowledgement
+    callback cancel_apply();   // leave confirm / cancel auth / dismiss a terminal state
+    callback keep_apply();     // the keyboard works — persist (the only keeping path)
+    callback revert_apply();   // back out during the countdown
+
     ScrollView {
         body := VerticalLayout {
             padding: root.compact ? 8px : 22px;
@@ -841,17 +859,34 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // save: write the draft and show the copy-paste install steps
+                    // save: write the draft and show the copy-paste install steps;
+                    // apply: the one-click pkexec path when this install supports it.
                     HorizontalLayout {
                         spacing: 8px;
                         alignment: start;
                         IconButton {
                             wide: true;
                             text: "save draft";
-                            active: root.edit_dirty;
+                            active: root.edit_dirty && !root.apply_in_flight;
                             clicked => {
                                 root.save_draft();
                             }
+                        }
+                        if root.apply_available: IconButton {
+                            wide: true;
+                            text: "apply to /etc/keyd\u{2026}";
+                            active: root.edit_dirty && root.apply_state == "idle";
+                            clicked => {
+                                if (root.apply_state == "idle") {
+                                    root.start_apply();
+                                }
+                            }
+                        }
+                        if root.apply_hint != "": Text {
+                            text: root.apply_hint;
+                            color: #4a525e;
+                            font-size: 11px;
+                            vertical-alignment: center;
                         }
                     }
                     if root.draft_info != "": Rectangle {
@@ -869,6 +904,169 @@ export component MainWindow inherits Window {
                             read-only: true;
                             wrap: word-wrap;
                             text: root.draft_info;
+                            color: #cfd6df;
+                            font-size: 12px;
+                            font-family: "JetBrains Mono";
+                        }
+                    }
+
+                    // ---- one-click apply flow (E2) ----
+                    // confirm: the scan found command()/macro() — they run with root
+                    // effect / inject keystrokes, so they need an unmistakable opt-in.
+                    if root.apply_state == "confirm": Rectangle {
+                        height: cbar.preferred-height + 12px;
+                        border-radius: 8px;
+                        background: #2a1d1d;
+                        border-width: 1px;
+                        border-color: #e5534b;
+                        cbar := HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 10px;
+                            Text {
+                                text: "\u{26a0} This config contains command()/macro() \u{2014} command() runs as root on a keypress. Apply anyway?";
+                                color: #ff8b82;
+                                font-size: 12px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                            }
+                            IconButton {
+                                wide: true;
+                                text: "cancel";
+                                active: true;
+                                clicked => {
+                                    root.cancel_apply();
+                                }
+                            }
+                            IconButton {
+                                wide: true;
+                                text: "apply anyway";
+                                clicked => {
+                                    root.confirm_apply();
+                                }
+                            }
+                        }
+                    }
+
+                    // auth: pkexec's agent owns the password dialog; we just wait.
+                    if root.apply_state == "auth": HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+                        Text {
+                            text: "waiting for authentication\u{2026}";
+                            color: #f0b429;
+                            font-size: 12px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                        IconButton {
+                            wide: true;
+                            text: "cancel";
+                            clicked => {
+                                root.cancel_apply();
+                            }
+                        }
+                    }
+
+                    // countdown: the change is LIVE and the dead-man window is open.
+                    // KEEP is deliberately mouse-driven — confirming must not require
+                    // the keyboard under test.
+                    if root.apply_state == "countdown": Rectangle {
+                        height: kbar.preferred-height + 16px;
+                        border-radius: 8px;
+                        background: #122117;
+                        border-width: 1px;
+                        border-color: #3ddc84;
+                        kbar := VerticalLayout {
+                            padding: 8px;
+                            spacing: 6px;
+                            HorizontalLayout {
+                                spacing: 10px;
+                                alignment: start;
+                                IconButton {
+                                    wide: true;
+                                    text: "KEEP \u{2014} keyboard works (\{root.apply_seconds_left}s)";
+                                    active: true;
+                                    clicked => {
+                                        root.keep_apply();
+                                    }
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "revert";
+                                    clicked => {
+                                        root.revert_apply();
+                                    }
+                                }
+                            }
+                            Text {
+                                text: "\u{26a0} keyboard dead? Backspace+Escape+Enter restarts keyd";
+                                color: #f0b429;
+                                font-size: 12px;
+                                font-weight: 700;
+                            }
+                            Text {
+                                text: "anything but KEEP reverts \u{2014} timeout, closing, or hiding the window included";
+                                color: #7d8694;
+                                font-size: 11px;
+                            }
+                        }
+                    }
+
+                    // terminal states: one bar, state-colored, dismissed explicitly.
+                    if root.apply_state == "kept" || root.apply_state == "reverted"
+                        || root.apply_state == "revert-failed" || root.apply_state == "failed": Rectangle {
+                        height: tbar.preferred-height + 12px;
+                        border-radius: 8px;
+                        background: root.apply_state == "kept" ? #122117
+                            : (root.apply_state == "reverted" ? #241d10 : #2a1d1d);
+                        border-width: 1px;
+                        border-color: root.apply_state == "kept" ? #3ddc84
+                            : (root.apply_state == "reverted" ? #f0b429 : #e5534b);
+                        tbar := HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 10px;
+                            Text {
+                                text: root.apply_state == "kept" ? "\u{2713} applied and kept"
+                                    : (root.apply_state == "reverted" ? "\u{21a9} reverted \u{2014} your edits are still here"
+                                    : (root.apply_state == "revert-failed" ? "\u{26a0} REVERT FAILED \u{2014} see details below" : "\u{26a0} apply did not run"));
+                                color: root.apply_state == "kept" ? #3ddc84
+                                    : (root.apply_state == "reverted" ? #f0b429 : #ff8b82);
+                                font-size: 12px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            IconButton {
+                                wide: true;
+                                text: "dismiss";
+                                clicked => {
+                                    root.cancel_apply();
+                                }
+                            }
+                        }
+                    }
+
+                    // shared detail box for the apply flow: findings + staleness +
+                    // diff while deciding/counting down, outcome detail afterwards.
+                    // Selectable (read-only TextInput) — revert-failed instructions
+                    // must be copy-pasteable.
+                    if root.apply_state != "idle" && root.apply_info != "": Rectangle {
+                        background: #11151c;
+                        border-color: #2a3340;
+                        border-width: 1px;
+                        border-radius: 8px;
+                        height: ainfo.preferred-height + 16px;
+                        ainfo := TextInput {
+                            x: 8px;
+                            y: 8px;
+                            width: parent.width - 16px;
+                            read-only: true;
+                            wrap: word-wrap;
+                            text: root.apply_info;
                             color: #cfd6df;
                             font-size: 12px;
                             font-family: "JetBrains Mono";
