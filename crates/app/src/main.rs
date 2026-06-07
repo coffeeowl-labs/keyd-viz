@@ -725,9 +725,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_edit_banner(banner.into());
                     win.set_apply_available(apply_ok);
                     win.set_apply_hint(apply_hint.into());
-                    win.set_apply_state("idle".into());
-                    win.set_apply_info("".into());
-                    win.set_apply_seconds_left(0);
+                    reset_apply_ui(&win);
                     *session.borrow_mut() = Some(s);
                     win.set_edit_mode(true);
                     render_board(&win); // freeze the board to the chosen section
@@ -951,13 +949,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_apply_info("".into());
                 }
                 "auth" => {
-                    APPLY.with(|a| {
-                        if let Some(ctx) = a.borrow().as_ref() {
-                            if let Some(h) = ctx.run.borrow().as_ref() {
-                                h.revert();
-                            }
-                        }
-                    });
+                    with_apply_run(|h| h.revert());
                     win.set_apply_info("cancelling \u{2014} waiting for the tool to exit".into());
                 }
                 _ => {}
@@ -972,13 +964,7 @@ fn main() -> Result<(), slint::PlatformError> {
         win.on_keep_apply(move || {
             let Some(win) = weak.upgrade() else { return };
             if win.get_apply_state() == "countdown" {
-                APPLY.with(|a| {
-                    if let Some(ctx) = a.borrow().as_ref() {
-                        if let Some(h) = ctx.run.borrow().as_ref() {
-                            h.keep();
-                        }
-                    }
-                });
+                with_apply_run(|h| h.keep());
             }
         });
     }
@@ -987,13 +973,7 @@ fn main() -> Result<(), slint::PlatformError> {
         win.on_revert_apply(move || {
             let Some(win) = weak.upgrade() else { return };
             if win.get_apply_state() == "countdown" {
-                APPLY.with(|a| {
-                    if let Some(ctx) = a.borrow().as_ref() {
-                        if let Some(h) = ctx.run.borrow().as_ref() {
-                            h.revert(); // EOF → the tool reverts and reports
-                        }
-                    }
-                });
+                with_apply_run(|h| h.revert()); // EOF → the tool reverts and reports
             }
         });
     }
@@ -1044,8 +1024,20 @@ fn main() -> Result<(), slint::PlatformError> {
         // loop until explicitly quit rather than until the last window closes. Without a
         // tray there'd be no way to bring the window back or quit, so we keep the default
         // close-to-quit behavior (win.run()).
-        win.window()
-            .on_close_requested(|| slint::CloseRequestResponse::HideWindow);
+        let weak = win.as_weak();
+        win.window().on_close_requested(move || {
+            // Hiding mid-apply would strand a live change with no visible countdown
+            // and no KEEP button, persisted until the tool's timeout. Revert it now
+            // so "hiding the window reverts" (what the countdown UI promises) is
+            // literally true — the unprivileged GUI hiding can't itself send EOF.
+            if let Some(win) = weak.upgrade() {
+                if apply_busy(&win) {
+                    teardown_apply();
+                    reset_apply_ui(&win);
+                }
+            }
+            slint::CloseRequestResponse::HideWindow
+        });
         win.show()?;
         slint::run_event_loop_until_quit()
     } else {
@@ -1168,6 +1160,12 @@ fn affected_line(src: &SheetSrc) -> String {
 /// preview by re-deriving the sheet from the file on disk.
 fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &SharedSession) {
     let Some(s) = session.borrow_mut().take() else { return };
+    // Unconditionally tear down any in-flight apply, so leaving edit mode is safe
+    // even on a path that didn't pre-check (the discard-guard's confirm reaches
+    // here mid-flight): drop our stdin → the tool sees EOF and reverts, and stop
+    // the cosmetic countdown timer. Reverting a live change the user is walking
+    // away from is the correct outcome (nothing persists without KEEP).
+    teardown_apply();
     win.set_edit_mode(false);
     win.set_capture_armed(false);
     win.set_selected_phys("".into());
@@ -1176,11 +1174,9 @@ fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &Shar
     win.set_edit_dirty(false);
     win.set_discard_prompt(false);
     win.set_pending_kbd(-1);
-    // One-click apply chrome (callers guard against exiting mid-flight).
     win.set_apply_available(false);
     win.set_apply_hint("".into());
-    win.set_apply_state("idle".into());
-    win.set_apply_info("".into());
+    reset_apply_ui(win);
     let mut srcs = srcs.borrow_mut();
     if let Some((idx, src)) = srcs.iter_mut().enumerate().find(|(_, x)| x.path == s.path) {
         if let Ok(cfg) = parse_file(&src.path) {
@@ -1233,6 +1229,42 @@ fn apply_busy(win: &MainWindow) -> bool {
     matches!(win.get_apply_state().as_str(), "confirm" | "auth" | "countdown")
 }
 
+/// Run `f` against the live apply handle if there is one — the single place that
+/// knows how the handle is parked (KEEP / revert / cancel all go through here, so
+/// the access shape lives in one spot instead of three copies).
+fn with_apply_run(f: impl FnOnce(&applying::ApplyHandle)) {
+    APPLY.with(|a| {
+        if let Some(ctx) = a.borrow().as_ref() {
+            if let Some(h) = ctx.run.borrow().as_ref() {
+                f(h);
+            }
+        }
+    });
+}
+
+/// Reset every apply_* window property to its idle baseline. Called both when a
+/// session opens and when it closes so a new apply property can't be cleared in
+/// one place and forgotten in the other (the bug this consolidates: `apply_state`
+/// and `apply_seconds_left` were reset in different subsets of those two paths).
+fn reset_apply_ui(win: &MainWindow) {
+    win.set_apply_state("idle".into());
+    win.set_apply_info("".into());
+    win.set_apply_seconds_left(0);
+}
+
+/// Tear down a live apply run: revert it (drop stdin → the tool sees EOF and
+/// restores the prior config) and stop the countdown timer. Idempotent — a no-op
+/// when nothing is in flight, so any exit path can call it unconditionally.
+fn teardown_apply() {
+    with_apply_run(|h| h.revert());
+    APPLY.with(|a| {
+        if let Some(ctx) = a.borrow().as_ref() {
+            *ctx.timer.borrow_mut() = None;
+            *ctx.run.borrow_mut() = None;
+        }
+    });
+}
+
 /// Refuse session-changing actions while an apply is in flight: a binding edit or
 /// session swap mid-countdown has no good semantics (which bytes did the user
 /// keep?), so the answer is one visible "not now" instead.
@@ -1253,7 +1285,7 @@ fn apply_gate(s: &editing::EditSession) -> (bool, String) {
     match applying::one_click() {
         Some(inv) => (s.apply_target(inv.config_dir()).is_some(), String::new()),
         None => {
-            let hint = if s.apply_target(Path::new("/etc/keyd")).is_some() {
+            let hint = if s.apply_target(applying::prod_config_dir()).is_some() {
                 "one-click apply needs the packaged keydviz-apply tool \
                  (AUR/source install) \u{2014} use save draft's install steps"
                     .to_string()
@@ -1275,11 +1307,26 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
         let actx = a.borrow();
         let Some(ctx) = actx.as_ref() else { return };
         // Re-resolve instead of caching: tool/pkexec could have been (un)installed
-        // since the session opened, and the gate already vouched for the shape.
-        let Some(how) = applying::one_click() else { return };
+        // since the session opened. On the None paths surface a visible failure
+        // rather than a dead button — the most likely cause is the tool being
+        // removed mid-session, which the user should be told about.
+        let Some(how) = applying::one_click() else {
+            win.set_apply_state("failed".into());
+            win.set_apply_info(
+                "one-click apply is no longer available (keydviz-apply or pkexec \
+                 missing) \u{2014} use save draft instead"
+                    .into(),
+            );
+            return;
+        };
         let sb = ctx.session.borrow();
         let Some(s) = sb.as_ref() else { return };
-        let Some(name) = s.apply_target(how.config_dir()) else { return };
+        let Some(name) = s.apply_target(how.config_dir()) else {
+            drop(sb);
+            win.set_apply_state("failed".into());
+            win.set_apply_info("this config is no longer a one-click apply target".into());
+            return;
+        };
         let bytes = s.serialized().into_bytes();
         drop(sb);
         // keyd reload bounces the virtual device mid-apply; don't leave a stale

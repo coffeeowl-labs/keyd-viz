@@ -28,13 +28,25 @@ use std::sync::{Arc, Mutex};
 /// on the privileged boundary.
 const PKEXEC: &str = "/usr/bin/pkexec";
 
-/// Root-owned locations the packaged apply tool installs to (AUR: /usr/bin;
-/// source `install.sh`: /usr/bin; /usr/local/bin for hand installs).
-const APPLY_PATHS: [&str; 2] = ["/usr/bin/keydviz-apply", "/usr/local/bin/keydviz-apply"];
+/// The packaged apply tool. This MUST be the exact path the polkit policy's
+/// `org.freedesktop.policykit.exec.path` annotation binds (see
+/// `packaging/polkit/…`): pkexec'ing any other path falls through to polkit's
+/// generic exec action, silently losing our deliberately-chosen `auth_admin`
+/// default (a hand-install elsewhere therefore stays draft-then-install — it has
+/// no matching action anyway). The AUR package and `install.sh` both install here.
+const APPLY_TOOL: &str = "/usr/bin/keydviz-apply";
 
 /// Dead-man window we ask for. The tool clamps to 5–120; 30 gives time to
 /// physically try the keyboard without leaving a wedged session broken for long.
 pub const TIMEOUT_SECS: u64 = 30;
+
+/// The directory the privileged tool writes to (it derives `<dir>/<name>.conf`
+/// from the name; the GUI never passes a path). The one source of this constant —
+/// the gate, the production `config_dir()`, and the "tool not installed" hint all
+/// read it so they can't drift.
+pub fn prod_config_dir() -> &'static Path {
+    Path::new("/etc/keyd")
+}
 
 /// How an apply run reaches the tool.
 pub enum Invocation {
@@ -52,7 +64,7 @@ impl Invocation {
     /// the gate `EditSession::apply_target` checks against.
     pub fn config_dir(&self) -> &Path {
         match self {
-            Invocation::Pkexec { .. } => Path::new("/etc/keyd"),
+            Invocation::Pkexec { .. } => prod_config_dir(),
             Invocation::Dev { dir, .. } => dir,
         }
     }
@@ -72,8 +84,8 @@ pub fn one_click() -> Option<Invocation> {
                 .then(|| Invocation::Dev { tool, dir: PathBuf::from(dir) });
         }
     }
-    let tool = APPLY_PATHS.iter().map(PathBuf::from).find(|p| p.exists())?;
-    Path::new(PKEXEC).exists().then_some(Invocation::Pkexec { tool })
+    let tool = PathBuf::from(APPLY_TOOL);
+    (tool.exists() && Path::new(PKEXEC).exists()).then_some(Invocation::Pkexec { tool })
 }
 
 /// One protocol (or process-level) event, delivered in order on the caller's
@@ -191,7 +203,9 @@ pub struct ApplyHandle {
 impl ApplyHandle {
     /// The user confirmed the keyboard works: send `keep`. Best-effort — the
     /// window may have just expired and the pipe closed (EPIPE); the authoritative
-    /// outcome is whichever terminal event the tool emits.
+    /// outcome is whichever terminal event the tool emits. Only ever called in the
+    /// `countdown` state, by which point the writer thread has long finished the
+    /// request and released the lock, so this never contends.
     pub fn keep(&self) {
         if let Ok(mut g) = self.stdin.lock() {
             if let Some(w) = g.as_mut() {
@@ -203,8 +217,17 @@ impl ApplyHandle {
 
     /// The user backed out (or the UI is shutting down): drop our end of stdin.
     /// The tool sees EOF and reverts — the same path an outright GUI crash takes.
+    ///
+    /// `try_lock`, never `lock`: this is called from the UI thread, and during the
+    /// `auth` state the writer thread can be *blocked inside the request write*
+    /// holding the lock (a near-`MAX_CONFIG_BYTES` payload fills the pipe while
+    /// pkexec's dialog stalls the reader). Blocking here would freeze the whole
+    /// event loop until the dialog resolves. If the lock is held we skip closing
+    /// stdin — the tool hasn't received the config yet (still pre-auth), and once
+    /// the write completes the run proceeds to its normal countdown where revert
+    /// works again; nothing persists without an explicit KEEP regardless.
     pub fn revert(&self) {
-        if let Ok(mut g) = self.stdin.lock() {
+        if let Ok(mut g) = self.stdin.try_lock() {
             *g = None;
         }
     }
@@ -246,21 +269,18 @@ pub fn start(
         // Request write happens HERE, not before spawn returns: during the auth
         // dialog nobody reads the pipe, and header+payload can exceed the pipe
         // buffer — this write may block until pkexec authenticates (or dies).
-        let ok = {
-            let mut g = stdin.lock().expect("apply stdin lock");
+        // The result is intentionally ignored: a failed write isn't terminal by
+        // itself (pkexec may have refused before exec, or revert() already nulled
+        // stdin — the tool then sees EOF), so we fall through to the pump and let
+        // EOF + wait()'s exit code classify the outcome.
+        if let Ok(mut g) = stdin.lock() {
             if let Some(w) = g.as_mut() {
-                w.write_all(request_header(&req.name, req.bytes.len(), req.sensitive_ok).as_bytes())
+                let _ = w
+                    .write_all(request_header(&req.name, req.bytes.len(), req.sensitive_ok).as_bytes())
                     .and_then(|()| w.write_all(&req.bytes))
-                    .and_then(|()| w.flush())
-                    .is_ok()
-            } else {
-                false // revert() already ran — the tool will see EOF and bail
+                    .and_then(|()| w.flush());
             }
-        };
-        // A failed write isn't terminal by itself (pkexec may have refused before
-        // exec — the exit code tells that story); fall through to the pump either
-        // way and let EOF + wait() classify it.
-        let _ = ok;
+        }
 
         let saw_verdict = pump(BufReader::new(stdout), &on_event);
         match child.wait() {
