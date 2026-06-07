@@ -19,6 +19,9 @@ slint = { version = "1", features = ["unstable-fontique-08"] }
 # Direct access to the underlying winit window (WinitWindowAccessor) so we can drive
 # always-on-top ourselves — WM-independent. Must track slint's version.
 i-slint-backend-winit = "1"
+# Tray icon via StatusNotifierItem over D-Bus (no GTK, no tokio). The `blocking`
+# feature needs an executor backend; async-io avoids pulling in tokio.
+ksni = { version = "0.3.4", default-features = false, features = ["blocking", "async-io"] }
 
 [build-dependencies]
 slint-build = "1"

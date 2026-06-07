@@ -1,12 +1,21 @@
-# v1.2 — Tray icon + global shortcut (design note)
+# v1.2 — Tray icon (design note)
 
-> **Status:** research done 2026-06-06, code not started. Environment-specific facts were
-> **verified live** on the dev machine (KDE Plasma 6.6.5, Wayland, Arch). Crate versions are
-> current as of 2026-06 — re-check on implementation.
+> **Status:** tray **shipped** (in `crates/app/src/tray.rs`, wired into `main.rs`); see the
+> CHANGELOG `[Unreleased]` entry. The **global hotkey was dropped** (rationale below). The
+> global-shortcut section is kept as a research record, not a plan. Environment-specific facts
+> were **verified live** on the dev machine (KDE Plasma 6.6.5, Wayland, Arch). Crate versions
+> are current as of 2026-06.
 
-**Goal:** keyd-viz lives in the system tray; a global hotkey (and the tray icon) summon/dismiss
-the window — pairing with the compact pinnable overlay shipped in v1.1. The tray tooltip/icon can
-reflect the active keyboard layer.
+**Goal (shipped):** keyd-viz lives in the system tray; clicking the icon (or its Show/Hide menu
+item) summons/dismisses the window — pairing with the compact pinnable overlay shipped in v1.1.
+The tray tooltip reflects the active keyboard layer.
+
+**Why hotkey dropped (user decision 2026-06-06):** on Wayland an app can't grab a global hotkey —
+KDE registers the *action* but typically leaves it **unassigned** until the user binds it in System
+Settings, and even then `Activated` carries no activation token so it often can't raise the window.
+That's patchy backend support plus a "user must go bind a key" friction step, for a path strictly
+weaker than the tray (which *can* focus, via the env token). Not worth a second code path. The tray
+alone delivers the summon/dismiss feature portably.
 
 ---
 
@@ -55,7 +64,12 @@ legitimately allows raise — so **tray-summon can focus the window**, unlike a 
 
 ---
 
-## Global shortcut — DECIDED: XDG GlobalShortcuts portal via `ashpd`
+## Global shortcut — DROPPED (research record only; see "Why hotkey dropped" above)
+
+> The design below was the planned approach before the hotkey was cut. Kept so a future
+> revisit doesn't re-research it from scratch.
+
+### Approach that *would* have been used: XDG GlobalShortcuts portal via `ashpd`
 
 **Crate:** `ashpd = { version = "0.13", features = ["global_shortcuts"] }` (latest 0.13.11; the
 `global_shortcuts` module is feature-gated). `zbus 5.x` only if we ever drop to raw DBus.
@@ -92,30 +106,28 @@ back to `request_user_attention` (taskbar flash). **Don't promise raise-to-front
 
 ---
 
-## Implementation plan & files
+## As shipped (tray only)
 
-Build **tray first** (more self-contained, and it's the path that can actually focus), then the
-global shortcut.
+- `crates/app/Cargo.toml` — `ksni = { version = "0.3.4", default-features = false, features =
+  ["blocking", "async-io"] }`. The `blocking` feature alone won't compile — it needs an executor;
+  `async-io` provides one without pulling in tokio.
+- `crates/app/src/tray.rs` — the `ksni::Tray` impl (id/icon/title/tool_tip/activate/menu) with
+  Show-Hide + Quit items; callbacks hop to the UI via `slint::Weak::upgrade_in_event_loop`. Layer→
+  tooltip updates run on a dedicated forwarder thread fed by an `mpsc` channel (because
+  `Handle::update` blocks on D-Bus I/O and must not stall the UI hot path); the forwarder coalesces
+  bursts and applies only the latest layer.
+- `crates/app/src/main.rs` — `toggle_window(&MainWindow)` (UI thread) does
+  `with_winit_window(|w| is_visible? set_visible(false) : set_visible(true) + request_user_attention)`;
+  `tray::spawn(&win)` is called after setup and the handle is held in a UI-thread `thread_local!` so
+  `render_board` can push the active layer at the existing `set_active_layer` site.
+- Window show/hide is reliable via winit `set_visible`; raise is best-effort (winit 0.30 has no API
+  to consume the `XDG_ACTIVATION_TOKEN` the tray click supplies, so we fall back to the attention
+  flash).
 
-- `crates/app/Cargo.toml` — add `ksni` (blocking) and `ashpd` (global_shortcuts) + a minimal tokio
-  for the portal thread.
-- `crates/app/src/tray.rs` (new) — the `ksni::Tray` impl (id/icon/title/tool_tip/activate/menu);
-  Show-Hide + Quit menu items; callbacks → `invoke_from_event_loop`.
-- `crates/app/src/hotkey.rs` (new) — the ashpd portal session on a dedicated runtime thread;
-  `Activated` → `invoke_from_event_loop(toggle)`.
-- `crates/app/src/main.rs` — spawn both in `main()` after `MainWindow::new()`, keep handles alive;
-  a shared `toggle_window(token: Option<String>)` UI-thread fn using
-  `win.window().with_winit_window(|w| { is_visible? set_visible(false) : set_visible(true) +
-  request_user_attention })`; push layer changes to the tray at the existing `set_active_layer` site.
-- Window show/hide is reliable via winit `set_visible`; raise is best-effort per the above.
-
-## Open decisions for implementation
-- Given the hotkey can't reliably raise (no token yet), is the global shortcut still worth shipping
-  in v1.2, or lead with tray-only (which *can* focus) and add the shortcut as a follow-up? (Leaning:
-  ship both — the shortcut still toggles usefully, and it's future-proofed for when the portal gains
-  tokens.)
-- Tray icon artwork (bundle a pixmap vs. theme `input-keyboard`).
-- Does the global-shortcut UX need an in-app "assign a hotkey in System Settings" hint card?
+## Possible follow-ups (not in v1.2)
+- Tray icon artwork (bundle an ARGB32 pixmap vs. the current theme `input-keyboard`).
+- Revisit the global shortcut if/when the GlobalShortcuts portal starts delivering activation
+  tokens (so it could actually raise) — until then the tray is the strictly better path.
 
 ## Verified-correct facts (don't re-research)
 - Portal GlobalShortcuts v1 live (xdg-desktop-portal-kde 6.6.5, KWin 6.6.5); ashpd 0.13.11 has the

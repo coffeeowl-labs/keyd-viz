@@ -2,8 +2,10 @@
 
 > **Status:** v1.1.0 shipped (2026-06-05) — Phases 0–4 complete. v1.1.0 was a UI/UX
 > polish release (zoom, compact mode, live hotplug + id highlight, header redesign,
-> fast-tap glow fix). The tray-resident process + KDE global-hotkey summon are now the
-> **v1.2** headline (still in planning).
+> fast-tap glow fix). The **tray-resident process is the v1.2 headline** — the tray
+> (StatusNotifierItem) has landed on `main` (held for the v1.2 bundle). The originally
+> paired **global hotkey was dropped** (Wayland can't grab one and it can't reliably
+> raise; see `docs/tray-shortcut-design.md`).
 > **Purpose of this document:** the single durable source of truth for this project's
 > direction, decisions, rationale, and the verified technical facts behind them. It is
 > written to survive context loss — if you are picking this up cold, read this top to
@@ -328,7 +330,7 @@ Clean separation so each piece is independently testable and the privileged surf
 │  app  (Slint UI, UNPRIVILEGED)                               │
 │   - cheatsheet board renderer (ports current look)          │
 │   - layer tabs / boards, live highlight overlays            │
-│   - tray + global-shortcut summon (Phase 5)                  │
+│   - tray summon (Phase 5; global-shortcut dropped)          │
 │   - connects to helper's user socket for live events        │
 └───────────────▲─────────────────────────────────────────────┘
                 │ narrow, one-directional event IPC (events out only)
@@ -364,7 +366,9 @@ Clean separation so each piece is independently testable and the privileged surf
 Each phase ships standalone value. Build order is fixed; later phases assume earlier ones.
 
 > **Phases 0–4 shipped in v1.0 (2026-06-04).** Phase 5 is split: distribution + live
-> config reload landed in v1.0; the tray-resident process and global-hotkey summon are v1.1.
+> config reload landed in v1.0; the tray-resident process is v1.2 (landed on `main`); the
+> originally-paired global-hotkey summon was dropped (Wayland limits — see Phase 5 / the
+> tray design note).
 
 ### Phase 0 — Foundation & visual parity  *(no privilege)*  ← FIRST MILESTONE
 1. Rust workspace: `core` (pure logic) + `app` (Slint UI). No helper yet.
@@ -409,8 +413,11 @@ Each phase ships standalone value. Build order is fixed; later phases assume ear
 - **v1.1.0 (shipped 2026-06-05):** UI/UX polish — board zoom (scroll + controls), compact
   pinnable mode, auto-fit window, live keyboard hotplug tracking + connected-id highlight,
   chooser-first header redesign, and the fast tap-hold glow fix.
-- **v1.2 (next):** system-tray resident process; KDE global-shortcut to summon/dismiss
-  (pairs with the new compact mode → pinned overlay); Flatpak (optional, layer-only).
+- **v1.2 (in progress):** system-tray resident process (StatusNotifierItem via `ksni` —
+  landed on `main`, held for the v1.2 bundle): tray icon + Show/Hide + Quit, tooltip shows
+  the active layer; pairs with the compact mode → pinned overlay. The originally-paired
+  **global shortcut was dropped** (Wayland can't grab a hotkey and the portal can't raise;
+  rationale in `docs/tray-shortcut-design.md`). Flatpak still optional, layer-only.
 
 ### Phase 6 — Edit mode  *(visual config authoring — a GUI for `/etc/keyd`)*
 Turn keyd-viz from a read-only visualizer into a visual keyd config **editor**: open any real

@@ -8,6 +8,13 @@ All notable changes to keyd-viz are documented here. The format is based on
 
 ### Added
 
+- **System tray.** keyd-viz now lives in the system tray (StatusNotifierItem over
+  D-Bus, so it works on KDE and any desktop with a StatusNotifier host — X11 or
+  Wayland). Left-click the icon (or its *Show / hide* menu item) to summon or dismiss
+  the window; *Quit* exits. The tooltip shows the active keyd layer. Where no tray host
+  exists (e.g. vanilla GNOME without an AppIndicator extension) the icon is simply
+  absent and the app runs normally. Window show/hide is reliable everywhere; raise-to-
+  front on Wayland is best-effort (it needs a compositor activation token).
 - **Pin (always-on-top).** A pin toggle in the view controls keeps the window above other
   windows; compact mode pins automatically. Honored on X11/XWayland. On native Wayland a
   client can't keep itself on top (no such protocol — it's the compositor's job), so the

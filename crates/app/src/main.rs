@@ -9,6 +9,7 @@ mod helper;
 mod layer;
 mod monitor;
 mod prefs;
+mod tray;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -484,6 +485,32 @@ fn register_fonts() {
     }
 }
 
+// The tray handle, held on the UI thread. The tray is a process singleton and
+// `render_board` (always on the UI thread) pushes the active layer into its tooltip, so a
+// thread-local avoids threading the handle through every render call site.
+thread_local! {
+    static TRAY: RefCell<Option<tray::TrayHandle>> = const { RefCell::new(None) };
+}
+
+/// Show the window if hidden, hide it if shown — the tray's summon/dismiss. On show we
+/// also request user attention (taskbar flash) as a focus hint. Window show/hide is
+/// reliable everywhere via winit `set_visible`; the raise-to-front on Wayland is
+/// best-effort (it needs an xdg-activation token the compositor mints — a tray click
+/// supplies one, but winit has no API to consume it yet, so we fall back to the attention
+/// flash). No-op on backends without a winit window.
+fn toggle_window(win: &MainWindow) {
+    use i_slint_backend_winit::winit::window::UserAttentionType;
+    use i_slint_backend_winit::WinitWindowAccessor;
+    win.window().with_winit_window(|w| {
+        if w.is_visible().unwrap_or(true) {
+            w.set_visible(false);
+        } else {
+            w.set_visible(true);
+            w.request_user_attention(Some(UserAttentionType::Informational));
+        }
+    });
+}
+
 fn main() -> Result<(), slint::PlatformError> {
     let det = match flag_value("--qmk-info") {
         Some(info) => match qmk_detection(&info) {
@@ -628,6 +655,11 @@ fn main() -> Result<(), slint::PlatformError> {
     // binding so the timer outlives setup and fires for the app's whole life.
     let _reload_timer = spawn_config_reload(&win, srcs.clone());
 
+    // Resident system-tray icon to summon/dismiss the window. Absent (with a warning) on
+    // systems without a StatusNotifier host; the app runs normally either way. Held on the
+    // UI thread so `render_board` can push the active layer into its tooltip.
+    TRAY.with(|t| *t.borrow_mut() = tray::spawn(&win));
+
     win.run()
 }
 
@@ -655,6 +687,11 @@ fn render_board(win: &MainWindow) {
         }
     }
     win.set_active_layer(title.clone());
+    TRAY.with(|t| {
+        if let Some(h) = t.borrow().as_ref() {
+            h.set_layer(&title);
+        }
+    });
 
     let chosen = boards
         .iter()
