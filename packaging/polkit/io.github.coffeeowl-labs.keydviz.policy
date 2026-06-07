@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<!--
+  One-click apply for keyd-viz Edit Mode (edit-mode design §5.2).
+
+  This action is a security artifact, reviewed as such:
+  - allow_active is auth_admin — a password per apply, deliberately NOT
+    auth_admin_keep: cached authorization would let ANY same-uid process run
+    `pkexec keydviz-apply` silently for its lifetime, which is exactly the
+    "silent root-write primitive" the design forbids. Applies are rare (once
+    per editing session), so there is no auth-fatigue pressure.
+  - The exec.path annotation binds the action to the packaged binary; the GUI
+    invokes pkexec with that absolute path so this action (with this message
+    and these defaults) governs, not polkit's generic exec action.
+  - The tool itself remains the enforcement layer regardless of who calls it:
+    strict name allow-list, /etc/keyd only, byte-level safety scan, keyd check
+    on the exact bytes, dead-man's-switch revert (crates/apply).
+-->
+<policyconfig>
+  <vendor>keyd-viz</vendor>
+  <vendor_url>https://github.com/coffeeowl-labs/keyd-viz</vendor_url>
+  <action id="io.github.coffeeowl-labs.keydviz.apply">
+    <description>Apply a keyd keyboard configuration change</description>
+    <message>Authentication is required to update the keyd keyboard configuration (writes one file under /etc/keyd, with automatic revert unless confirmed)</message>
+    <icon_name>keyd-viz</icon_name>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/keydviz-apply</annotate>
+  </action>
+</policyconfig>

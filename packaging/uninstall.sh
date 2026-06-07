@@ -30,7 +30,9 @@ echo "==> removing files"
 $SUDO rm -f /usr/lib/systemd/system/keydviz-helperd.service \
 	/etc/systemd/system/keydviz-helperd.service.d/keypresses.conf \
 	/usr/lib/sysusers.d/keyd-viz.conf \
-	/usr/bin/keydviz-helperd
+	/usr/bin/keydviz-helperd \
+	/usr/bin/keydviz-apply \
+	/usr/share/polkit-1/actions/io.github.coffeeowl-labs.keydviz.policy
 $SUDO rmdir /etc/systemd/system/keydviz-helperd.service.d 2>/dev/null || true
 $SUDO systemctl daemon-reload
 

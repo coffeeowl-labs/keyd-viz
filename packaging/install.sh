@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 #
-# Install (or update) the keydviz-helperd system service — the zero-permission broker
-# that streams keyd's layers (and optionally keypresses) to the keyd-viz GUI.
+# Install (or update) keyd-viz's privileged companions:
+#  - keydviz-helperd — the zero-permission broker that streams keyd's layers
+#    (and optionally keypresses) to the keyd-viz GUI
+#  - keydviz-apply + its polkit action — the one-shot pkexec tool behind Edit
+#    Mode's one-click apply (root-owned 0755, NOT setuid; pkexec carries the
+#    privilege and the policy's exec.path binds to /usr/bin/keydviz-apply)
 #
 # Run as a NORMAL user (not root): it builds as you and uses sudo only for the
 # privileged install steps. Re-running it cleanly updates an existing install.
@@ -15,6 +19,8 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$REPO/target/release/keydviz-helperd"
+APPLY_BIN="$REPO/target/release/keydviz-apply"
+POLICY="$REPO/packaging/polkit/io.github.coffeeowl-labs.keydviz.policy"
 KEYS=0
 BUILD=1
 for a in "$@"; do
@@ -36,16 +42,23 @@ SUDO=""
 [ "$(id -u)" -ne 0 ] && SUDO="sudo"
 
 if [ "$BUILD" -eq 1 ]; then
-	echo "==> building keydviz-helperd (release)"
-	cargo build --release --manifest-path "$REPO/Cargo.toml" -p keydviz-helper
+	echo "==> building keydviz-helperd + keydviz-apply (release)"
+	cargo build --release --manifest-path "$REPO/Cargo.toml" -p keydviz-helper -p keydviz-apply
 fi
-[ -x "$BIN" ] || {
-	echo "install.sh: missing $BIN — build it first (drop --no-build)" >&2
-	exit 1
-}
+for b in "$BIN" "$APPLY_BIN"; do
+	[ -x "$b" ] || {
+		echo "install.sh: missing $b — build it first (drop --no-build)" >&2
+		exit 1
+	}
+done
 
 echo "==> installing binary -> /usr/bin/keydviz-helperd"
 $SUDO install -Dm755 "$BIN" /usr/bin/keydviz-helperd
+
+echo "==> installing one-click apply tool -> /usr/bin/keydviz-apply (+ polkit action)"
+$SUDO install -Dm755 "$APPLY_BIN" /usr/bin/keydviz-apply
+$SUDO install -Dm644 "$POLICY" \
+	/usr/share/polkit-1/actions/io.github.coffeeowl-labs.keydviz.policy
 
 echo "==> creating system user 'keyd-viz' (sysusers)"
 $SUDO install -Dm644 "$REPO/packaging/sysusers.d/keyd-viz.conf" /usr/lib/sysusers.d/keyd-viz.conf
