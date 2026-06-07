@@ -13,7 +13,7 @@ install="$pkgname.install"
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 # On each version bump: re-run `updpkgsums` then `makepkg --printsrcinfo > .SRCINFO`
 # (after the matching GitHub release tag exists, so the tarball is downloadable).
-sha256sums=('0e5c9b125dce783af64357f574bd909c9cbe206494a036e1a8880c1a4771266b')
+sha256sums=('72f1442a62cce4dc35f3c919f1db512ce361cb0c6895d85e44198528db04a59f')
 
 prepare() {
 	cd "$pkgname-$pkgver"

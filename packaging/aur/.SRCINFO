@@ -17,6 +17,6 @@ pkgbase = keyd-viz
 	options = !lto
 	options = !debug
 	source = keyd-viz-1.2.0.tar.gz::https://github.com/coffeeowl-labs/keyd-viz/archive/refs/tags/v1.2.0.tar.gz
-	sha256sums = 0e5c9b125dce783af64357f574bd909c9cbe206494a036e1a8880c1a4771266b
+	sha256sums = 72f1442a62cce4dc35f3c919f1db512ce361cb0c6895d85e44198528db04a59f
 
 pkgname = keyd-viz
