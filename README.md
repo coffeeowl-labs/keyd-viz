@@ -48,8 +48,8 @@ run it. Without the broker (below) the GUI reads keyd directly, which needs memb
 
 ### AUR (Arch) — full experience
 
-A [`PKGBUILD`](packaging/aur/) installs the GUI, the broker service, a desktop entry, and the
-icon. Once it's published to the AUR:
+Available on the [AUR](https://aur.archlinux.org/packages/keyd-viz) — the
+[`PKGBUILD`](packaging/aur/) installs the GUI, the broker service, a desktop entry, and the icon:
 
 ```sh
 paru -S keyd-viz
