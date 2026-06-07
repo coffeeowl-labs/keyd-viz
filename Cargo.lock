@@ -2464,6 +2464,7 @@ name = "keydviz"
 version = "1.2.0"
 dependencies = [
  "i-slint-backend-winit",
+ "keydviz-apply",
  "keydviz-core",
  "ksni",
  "slint",

@@ -13,6 +13,10 @@ path = "src/main.rs"
 
 [dependencies]
 keydviz-core = { path = "../core" }
+# The dep-free lib half of the apply tool (scan + name validation + size cap):
+# pre-flight checks in the GUI use the *same code* the privileged tool enforces,
+# so they can never disagree on what needs confirmation.
+keydviz-apply = { path = "../apply" }
 # unstable-fontique-08: lets us register the bundled JetBrains Mono faces at
 # runtime so typography is identical regardless of installed system fonts.
 slint = { version = "1", features = ["unstable-fontique-08"] }

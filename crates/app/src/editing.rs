@@ -142,6 +142,40 @@ impl EditSession {
         line_diff(&self.original, &self.edit.serialize())
     }
 
+    /// The exact bytes persistence writes — the same `serialize()` behind
+    /// [`Self::save_draft`] and the one-click apply payload (E2). One source of
+    /// truth: what the user previewed is byte-for-byte what lands on disk.
+    #[allow(dead_code)] // consumed by the apply wiring (E2 step 3) — drop with it
+    pub fn serialized(&self) -> String {
+        self.edit.serialize()
+    }
+
+    /// `Some(name)` iff this session edits `<dir>/<name>.conf` with a name the
+    /// apply tool's allow-list accepts — the only shape one-click apply will
+    /// touch (the tool re-derives the destination from the name; it never takes
+    /// a path). Anything else stays draft-then-install.
+    #[allow(dead_code)] // consumed by the apply wiring (E2 step 3) — drop with it
+    pub fn apply_target(&self, dir: &Path) -> Option<String> {
+        if self.path.parent() != Some(dir) {
+            return None;
+        }
+        let name = self.path.file_name()?.to_str()?.strip_suffix(".conf")?;
+        keydviz_apply::valid_name(name).then(|| name.to_string())
+    }
+
+    /// Warn when the real file moved under us since open — persisting would
+    /// overwrite those external edits. Shared by draft save and apply pre-flight.
+    pub fn stale_warning(&self) -> Option<String> {
+        match std::fs::read_to_string(&self.path) {
+            Ok(now) if now != self.original => Some(format!(
+                "{} changed on disk since this session opened — review the diff \
+                 before installing",
+                self.path.display()
+            )),
+            _ => None,
+        }
+    }
+
     /// Write the draft and return the install steps (§4 draft-then-install).
     pub fn save_draft(&self) -> io::Result<DraftSaved> {
         let dir = drafts_dir()
@@ -160,16 +194,7 @@ impl EditSession {
         let draft_path = dir.join(&name);
         let bytes = self.edit.serialize();
         std::fs::write(&draft_path, &bytes)?;
-
-        // Staleness: warn when the real file moved under us since open.
-        let stale_warning = match std::fs::read_to_string(&self.path) {
-            Ok(now) if now != self.original => Some(format!(
-                "{} changed on disk since this session opened — review the diff \
-                 before installing",
-                self.path.display()
-            )),
-            _ => None,
-        };
+        let stale_warning = self.stale_warning();
 
         let install_steps = format!(
             "sudo cp {} {}\nsudo keyd reload",
@@ -201,6 +226,26 @@ fn keyd_check_draft(path: &Path) -> Option<Result<(), String>> {
         let detail = String::from_utf8_lossy(&out.stdout);
         Err(detail.trim().replace('\n', " | "))
     })
+}
+
+/// `keyd check` a candidate body that exists only in memory (apply pre-flight) —
+/// written to a temp file for the check, removed after. Like the draft check
+/// this is early UX feedback, never the security gate: the privileged tool
+/// re-runs `keyd check` on the exact bytes it writes (§5.3, fail closed there).
+#[allow(dead_code)] // consumed by the apply wiring (E2 step 3) — drop with it
+pub fn keyd_check_bytes(bytes: &str) -> Option<Result<(), String>> {
+    // pid + sequence, like probe::check_works: concurrent callers (parallel
+    // tests) must never share a temp file.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir()
+        .join(format!("keyd-viz-preflight-{}-{seq}.conf", std::process::id()));
+    if std::fs::write(&path, bytes).is_err() {
+        return None;
+    }
+    let verdict = keyd_check_draft(&path);
+    let _ = std::fs::remove_file(&path);
+    verdict
 }
 
 /// Single-quote a path for copy-paste shell steps.
@@ -349,5 +394,64 @@ mod tests {
     fn shell_quote_only_when_needed() {
         assert_eq!(shell_quote("/etc/keyd/hhkb.conf"), "/etc/keyd/hhkb.conf");
         assert_eq!(shell_quote("/tmp/my dir/x.conf"), "'/tmp/my dir/x.conf'");
+    }
+
+    #[test]
+    fn serialized_is_the_draft_body() {
+        let td = TempDir::new("serialized");
+        let mut s = session(&td);
+        s.set_binding("main", "capslock", "noop").unwrap();
+        let saved = s.save_draft_to(&td.0.join("drafts")).unwrap();
+        let body = std::fs::read_to_string(&saved.draft_path).unwrap();
+        // What apply would send is byte-for-byte what the draft wrote.
+        assert_eq!(s.serialized(), body);
+    }
+
+    #[test]
+    fn apply_target_only_matches_dir_and_valid_names() {
+        let td = TempDir::new("target");
+        let s = session(&td); // edits <td>/test.conf
+        assert_eq!(s.apply_target(&td.0).as_deref(), Some("test"));
+        // Wrong dir → not a one-click candidate.
+        assert_eq!(s.apply_target(Path::new("/etc/keyd")), None);
+
+        // A name the apply tool's allow-list rejects (dots) never qualifies,
+        // even in the right dir.
+        let p = td.0.join("my.board.conf");
+        std::fs::write(&p, SRC).unwrap();
+        let s2 = EditSession::open(&p).unwrap();
+        assert_eq!(s2.apply_target(&td.0), None);
+
+        // No .conf suffix → keyd wouldn't load it; not a target either.
+        let p3 = td.0.join("noext");
+        std::fs::write(&p3, SRC).unwrap();
+        let s3 = EditSession::open(&p3).unwrap();
+        assert_eq!(s3.apply_target(&td.0), None);
+    }
+
+    #[test]
+    fn stale_warning_matches_save_draft() {
+        let td = TempDir::new("stale2");
+        let mut s = session(&td);
+        s.set_binding("main", "capslock", "noop").unwrap();
+        assert!(s.stale_warning().is_none());
+        std::fs::write(td.0.join("test.conf"), "[ids]\n*\n[main]\na = b\n").unwrap();
+        assert!(s.stale_warning().is_some());
+    }
+
+    #[test]
+    fn keyd_check_bytes_mirrors_environment() {
+        // Hermetic like probe.rs: with keyd installed both verdicts are real;
+        // without keyd both are None — never a false "valid".
+        let good = keyd_check_bytes("[ids]\n*\n[main]\n");
+        let bad = keyd_check_bytes("[ids]\n*\n[main]\ncapslock = bogus_action(\n");
+        match (good, bad) {
+            (Some(g), Some(b)) => {
+                assert_eq!(g, Ok(()));
+                assert!(b.is_err());
+            }
+            (None, None) => {} // no keyd in PATH
+            other => panic!("inconsistent keyd availability: {other:?}"),
+        }
     }
 }
