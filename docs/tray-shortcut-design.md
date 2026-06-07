@@ -116,13 +116,18 @@ back to `request_user_attention` (taskbar flash). **Don't promise raise-to-front
   tooltip updates run on a dedicated forwarder thread fed by an `mpsc` channel (because
   `Handle::update` blocks on D-Bus I/O and must not stall the UI hot path); the forwarder coalesces
   bursts and applies only the latest layer.
-- `crates/app/src/main.rs` — `toggle_window(&MainWindow)` (UI thread) does
-  `with_winit_window(|w| is_visible? set_visible(false) : set_visible(true) + request_user_attention)`;
-  `tray::spawn(&win)` is called after setup and the handle is held in a UI-thread `thread_local!` so
-  `render_board` can push the active layer at the existing `set_active_layer` site.
-- Window show/hide is reliable via winit `set_visible`; raise is best-effort (winit 0.30 has no API
-  to consume the `XDG_ACTIVATION_TOKEN` the tray click supplies, so we fall back to the attention
-  flash).
+- `crates/app/src/main.rs` — `toggle_window(&MainWindow)` (UI thread) uses **Slint's own**
+  `win.is_visible()? win.hide() : win.show()` (+ `request_user_attention` on show). **Do NOT** poke
+  winit `set_visible` under Slint — it's a no-op on the Wayland backend (this was the first-cut bug:
+  the menu/click did nothing). `tray::spawn(&win)` is called after setup and the handle is held in a
+  UI-thread `thread_local!` so `render_board` can push the active layer at the existing
+  `set_active_layer` site.
+- **Minimize-to-tray:** when a tray exists, `win.window().on_close_requested(|| HideWindow)` makes the
+  close button hide instead of quit, and the app runs via `slint::run_event_loop_until_quit()` (not
+  `win.run()`, which would quit when the last window closes). The only exit is the tray's *Quit* item
+  (`quit_event_loop`). Without a tray, keep `win.run()` so close still quits (else no way back/out).
+- Window show/hide (`hide`/`show`) is reliable; raise is best-effort (winit 0.30 has no API to consume
+  the `XDG_ACTIVATION_TOKEN` the tray click supplies, so we fall back to the attention flash).
 
 ## Possible follow-ups (not in v1.2)
 - Tray icon artwork (bundle an ARGB32 pixmap vs. the current theme `input-keyboard`).

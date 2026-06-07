@@ -492,23 +492,23 @@ thread_local! {
     static TRAY: RefCell<Option<tray::TrayHandle>> = const { RefCell::new(None) };
 }
 
-/// Show the window if hidden, hide it if shown — the tray's summon/dismiss. On show we
-/// also request user attention (taskbar flash) as a focus hint. Window show/hide is
-/// reliable everywhere via winit `set_visible`; the raise-to-front on Wayland is
-/// best-effort (it needs an xdg-activation token the compositor mints — a tray click
-/// supplies one, but winit has no API to consume it yet, so we fall back to the attention
-/// flash). No-op on backends without a winit window.
+/// Show the window if hidden, hide it if shown — the tray's summon/dismiss. Uses Slint's
+/// own `show`/`hide`, which map/unmap the toplevel surface (so a hidden window also drops
+/// its taskbar entry — the app then lives only in the tray) and, unlike poking winit's
+/// `set_visible` underneath Slint, actually take effect on the Wayland backend. On show we
+/// request user attention (taskbar flash) as a focus hint; a true raise-to-front on
+/// Wayland needs an xdg-activation token winit can't yet consume, so that part is
+/// best-effort.
 fn toggle_window(win: &MainWindow) {
     use i_slint_backend_winit::winit::window::UserAttentionType;
     use i_slint_backend_winit::WinitWindowAccessor;
-    win.window().with_winit_window(|w| {
-        if w.is_visible().unwrap_or(true) {
-            w.set_visible(false);
-        } else {
-            w.set_visible(true);
-            w.request_user_attention(Some(UserAttentionType::Informational));
-        }
-    });
+    if win.window().is_visible() {
+        let _ = win.hide();
+    } else {
+        let _ = win.show();
+        win.window()
+            .with_winit_window(|w| w.request_user_attention(Some(UserAttentionType::Informational)));
+    }
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -658,9 +658,24 @@ fn main() -> Result<(), slint::PlatformError> {
     // Resident system-tray icon to summon/dismiss the window. Absent (with a warning) on
     // systems without a StatusNotifier host; the app runs normally either way. Held on the
     // UI thread so `render_board` can push the active layer into its tooltip.
-    TRAY.with(|t| *t.borrow_mut() = tray::spawn(&win));
+    let tray = tray::spawn(&win);
+    let has_tray = tray.is_some();
+    TRAY.with(|t| *t.borrow_mut() = tray);
 
-    win.run()
+    if has_tray {
+        // With a tray, the window's close button hides to the tray instead of quitting —
+        // the app keeps running windowless and is resurrected by clicking the tray icon.
+        // The only way out is the tray's Quit item (-> quit_event_loop), so we run the
+        // loop until explicitly quit rather than until the last window closes. Without a
+        // tray there'd be no way to bring the window back or quit, so we keep the default
+        // close-to-quit behavior (win.run()).
+        win.window()
+            .on_close_requested(|| slint::CloseRequestResponse::HideWindow);
+        win.show()?;
+        slint::run_event_loop_until_quit()
+    } else {
+        win.run()
+    }
 }
 
 /// Rebuild the single displayed board from the live state held in window properties:
