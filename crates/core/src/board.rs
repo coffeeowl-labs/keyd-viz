@@ -48,6 +48,10 @@ pub struct KeyCap {
     /// The keyd key name for this physical position (e.g. `a`, `space`, `leftshift`).
     /// Lets a live keypress from `keyd monitor` (same name namespace) light up the cap.
     pub key: String,
+    /// The slot's physical key name verbatim (the config LHS vocabulary) — what an edit
+    /// to this cap binds. Distinct from `key`, which is the *emitted* chord (post-remap)
+    /// and gets rewritten for glow matching. Empty for decorative/unmapped slots.
+    pub phys: String,
     /// Primary label shown on the cap.
     pub label: String,
     /// `true` => render as a large emphasized glyph (remap/override/momentary mod).
@@ -131,6 +135,7 @@ fn cap_at(slot: &Slot, key: &str) -> KeyCap {
             let c = canonical(key);
             if is_primary_keysym(c) { c.to_string() } else { String::new() }
         },
+        phys: key.to_string(),
         label: String::new(),
         emphasized: false,
         ghost: String::new(),

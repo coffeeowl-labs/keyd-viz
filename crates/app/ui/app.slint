@@ -2,7 +2,7 @@
 // Data structs below mirror keydviz_core's Sheet/Board/KeyCap model; main.rs
 // fills them in. Visual tokens (colors, sizes) match the original CSS.
 
-import { ScrollView } from "std-widgets.slint";
+import { ScrollView, LineEdit } from "std-widgets.slint";
 
 export struct KeyCapData {
     // geometry in key units (absolute, from the top-left of the board)
@@ -14,6 +14,7 @@ export struct KeyCapData {
     rx: float,
     ry: float,
     key: string,             // keyd key name (for live keypress matching)
+    phys: string,            // physical slot key name (config LHS) — what an edit binds
     label: string,
     emphasized: bool,        // large bold glyph (remap/override/momentary mod)
     ghost: string,           // faint top-right normal legend
@@ -77,6 +78,11 @@ component KeyCapView inherits Rectangle {
     in property <KeyCapData> data;
     // zoom multiplier (1.0 = native 51px pitch); threaded down from BoardView.
     in property <float> scale: 1.0;
+    // edit mode: caps become clickable targets; `selected` highlights the one being
+    // edited. Both off in the plain viewer, which stays pixel- and behavior-identical.
+    in property <bool> editing: false;
+    in property <bool> selected: false;
+    callback clicked;
 
     // grid pitch = unit (46px) + gap (5px); a w-wide cap spans w cells minus one gap.
     x: data.x * 51px * scale;
@@ -84,10 +90,21 @@ component KeyCapView inherits Rectangle {
     width: (data.width * 46px + (data.width - 1) * 5px) * scale;
     height: (data.height * 46px + (data.height - 1) * 5px) * scale;
     border-radius: 7px * scale;
-    // pressed (live keypress) glows brightest; else dim/hold/normal tints.
-    background: data.pressed ? #26405f : (data.state == 1 ? #161b22 : #1b2129);
-    border-width: (data.pressed || data.state == 2) ? 2px : 1px;
-    border-color: data.pressed ? #7cc4ff : (data.state == 2 ? data.accent : #2a3340);
+    // selection (edit mode) outranks the live glow; else pressed > dim/hold/normal.
+    background: selected ? #3a2f14 : (data.pressed ? #26405f : (data.state == 1 ? #161b22 : #1b2129));
+    border-width: (selected || data.pressed || data.state == 2) ? 2px : 1px;
+    border-color: selected ? #f0b429 : (data.pressed ? #7cc4ff : (data.state == 2 ? data.accent : #2a3340));
+
+    // Click-to-select, edit mode only. Decorative slots (no key name) aren't targets.
+    // The TouchArea is disabled in the viewer so hover/click behavior there is unchanged;
+    // scroll-to-zoom still works while editing because unhandled wheel events propagate
+    // to the board's TouchArea.
+    if root.editing && data.phys != "": TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
     // raised "lip" approximating the CSS thick bottom border.
     drop-shadow-offset-y: 2px * scale;
     drop-shadow-blur: 0px;
@@ -162,6 +179,11 @@ component BoardView inherits VerticalLayout {
     // live layer state, threaded down from the window
     in property <string> active_layer;
     in property <bool> live;
+    // edit mode, threaded down to the caps: which physical key is selected, and a
+    // click callback back up to the window.
+    in property <bool> editing: false;
+    in property <string> selected_phys;
+    callback key_clicked(string);
     // zoom multiplier for the whole board (1.0 = native size). Scroll over the panel
     // adjusts it; the window auto-fits to the scaled extent.
     in-out property <float> zoom: 1.0;
@@ -206,6 +228,11 @@ component BoardView inherits VerticalLayout {
                 for key in data.keys: KeyCapView {
                     data: key;
                     scale: root.zoom;
+                    editing: root.editing;
+                    selected: root.editing && key.phys != "" && key.phys == root.selected_phys;
+                    clicked => {
+                        root.key_clicked(key.phys);
+                    }
                 }
             }
         }
@@ -321,6 +348,13 @@ component ViewControls inherits HorizontalLayout {
     }
 }
 
+// One editable section offered by the edit-mode layer chooser: `name` is the exact
+// section base name in the file ("main" = base), `display` is what the chip shows.
+export struct EditLayer {
+    name: string,
+    display: string,
+}
+
 // ---- main window --------------------------------------------------------------
 export component MainWindow inherits Window {
     title: "keyd-viz";
@@ -370,6 +404,29 @@ export component MainWindow inherits Window {
     changed on_top => { root.apply_on_top(self.on_top); }
     // Implemented in Rust: set the underlying window's always-on-top level.
     callback apply_on_top(bool);
+
+    // ---- edit mode (Phase 6 E1: draft-then-install) ----
+    // Editing is an explicit, opt-in mode; in the plain viewer everything below is
+    // inert and nothing edit-related is rendered.
+    in-out property <bool> edit_mode: false;
+    in property <[EditLayer]> edit_layers;   // sections offered while editing
+    in property <string> edit_layer;         // exact section name being edited ("main" = base)
+    in property <string> selected_phys;      // physical key picked on the board ("" = none)
+    in property <string> edit_current;       // the selection's current binding (display only)
+    in-out property <string> edit_value;     // the value field (Rust seeds it on selection)
+    in property <bool> edit_dirty;           // session has unsaved changes
+    in property <string> edit_banner;        // affected-keyboards line / view-only reason
+    in property <bool> capture_armed;        // next live keypress becomes the value
+    in property <string> draft_info;         // after save: draft path + diff + install steps
+    // Common actions offered as one-click chips (the categorized palette grows in E2).
+    property <[string]> palette: ["esc", "tab", "backspace", "delete", "enter",
+        "leftcontrol", "leftalt", "leftmeta", "leftshift", "noop"];
+    callback toggle_edit();
+    callback select_key(string);
+    callback pick_edit_layer(string);
+    callback apply_binding(string);          // typed / palette / captured value for the selection
+    callback arm_capture();
+    callback save_draft();
 
     ScrollView {
         body := VerticalLayout {
@@ -422,10 +479,24 @@ export component MainWindow inherits Window {
                     vertical-alignment: center;
                 }
 
-                ViewControls {
-                    zoom <=> root.zoom;
-                    compact <=> root.compact;
-                    pinned <=> root.pinned;
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: end;
+                    // Edit-mode toggle (Phase 6 E1). The viewer is the default; "done"
+                    // leaves edit mode (the session's unsaved preview is discarded).
+                    IconButton {
+                        wide: true;
+                        text: root.edit_mode ? "done" : "edit";
+                        active: root.edit_mode;
+                        clicked => {
+                            root.toggle_edit();
+                        }
+                    }
+                    ViewControls {
+                        zoom <=> root.zoom;
+                        compact <=> root.compact;
+                        pinned <=> root.pinned;
+                    }
                 }
             }
 
@@ -537,12 +608,242 @@ export component MainWindow inherits Window {
                 }
             }
 
+            // why edit mode refused to engage (round-trip gate / keyd-rejects / QMK) —
+            // shown in the viewer, since the edit panel never opened to show it.
+            if !root.edit_mode && !root.compact && root.edit_banner != "": Text {
+                text: "\u{26a0} \{root.edit_banner}";
+                color: #f0b429;
+                font-size: 12px;
+            }
+
+            // ---- edit panel (edit mode only; the viewer never renders any of this) ----
+            if root.edit_mode && !root.compact: Rectangle {
+                background: #0c0f14;
+                border-color: #f0b429;
+                border-width: 1px;
+                border-radius: 12px;
+                height: editbody.preferred-height;
+                editbody := VerticalLayout {
+                    padding: 12px;
+                    spacing: 8px;
+
+                    // banner: EDIT pill + which keyboards this file governs + dirty marker
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Rectangle {
+                            width: edp.preferred-width + 12px;
+                            height: edp.preferred-height + 5px;
+                            border-radius: 5px;
+                            background: #f0b429;
+                            edp := Text {
+                                x: 6px;
+                                y: 2px;
+                                text: "EDIT";
+                                color: #11151c;
+                                font-size: 11px;
+                                font-weight: 700;
+                            }
+                        }
+                        Text {
+                            text: root.edit_banner;
+                            color: #7d8694;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                        if root.edit_dirty: Text {
+                            text: "\u{25cf} unsaved";
+                            color: #f0b429;
+                            font-size: 12px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // section chooser: which file section the edit lands in. Picking one
+                    // also shows that layer's board (live morphing is frozen while editing).
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Text {
+                            text: "section";
+                            color: #7d8694;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                        for lay in root.edit_layers: Rectangle {
+                            property <bool> sel: lay.name == root.edit_layer;
+                            width: elt.preferred-width + 16px;
+                            height: elt.preferred-height + 8px;
+                            border-radius: 7px;
+                            background: sel ? #f0b429 : (elta.has-hover ? #1b2129 : #161b22);
+                            border-width: 1px;
+                            border-color: sel ? #f0b429 : #2a3340;
+                            elta := TouchArea {
+                                clicked => {
+                                    root.pick_edit_layer(lay.name);
+                                }
+                            }
+                            elt := Text {
+                                x: 8px;
+                                y: 4px;
+                                text: lay.display;
+                                color: sel ? #11151c : #cfd6df;
+                                font-size: 12px;
+                                font-weight: sel ? 700 : 400;
+                                font-family: "JetBrains Mono";
+                            }
+                        }
+                    }
+
+                    // selection row: the picked key, its current binding, and the new value
+                    if root.selected_phys == "": Text {
+                        text: "click a key on the board to edit its binding";
+                        color: #7d8694;
+                        font-size: 12px;
+                    }
+                    if root.selected_phys != "": HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Rectangle {
+                            width: selk.preferred-width + 14px;
+                            height: 28px;
+                            border-radius: 6px;
+                            background: #3a2f14;
+                            border-width: 1px;
+                            border-color: #f0b429;
+                            selk := Text {
+                                x: 7px;
+                                y: (parent.height - self.height) / 2;
+                                text: root.selected_phys;
+                                color: #f0b429;
+                                font-size: 13px;
+                                font-weight: 700;
+                                font-family: "JetBrains Mono";
+                            }
+                        }
+                        Text {
+                            text: root.edit_current == "" ? "(unbound)" : "= \{root.edit_current}";
+                            color: #cfd6df;
+                            font-size: 13px;
+                            font-family: "JetBrains Mono";
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "\u{2192}";
+                            color: #7d8694;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+                        LineEdit {
+                            width: 220px;
+                            height: 28px;
+                            font-size: 13px;
+                            placeholder-text: "new binding (e.g. esc)";
+                            text <=> root.edit_value;
+                            accepted(t) => {
+                                root.apply_binding(t);
+                            }
+                        }
+                        IconButton {
+                            wide: true;
+                            text: "set";
+                            clicked => {
+                                root.apply_binding(root.edit_value);
+                            }
+                        }
+                        // press-to-capture: the next live keypress becomes the value.
+                        // Needs the keypress stream; greyed-out hint when it's absent.
+                        if root.keys_connected: IconButton {
+                            wide: true;
+                            text: root.capture_armed ? "press a key\u{2026}" : "capture";
+                            active: root.capture_armed;
+                            clicked => {
+                                root.arm_capture();
+                            }
+                        }
+                        if !root.keys_connected: Text {
+                            text: "(no live key stream to capture from)";
+                            color: #4a525e;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // quick palette: one-click common actions for the selected key
+                    if root.selected_phys != "": HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        for act in root.palette: Rectangle {
+                            width: pal.preferred-width + 14px;
+                            height: pal.preferred-height + 7px;
+                            border-radius: 6px;
+                            background: palta.has-hover ? #1b2129 : #161b22;
+                            border-width: 1px;
+                            border-color: #2a3340;
+                            palta := TouchArea {
+                                clicked => {
+                                    root.apply_binding(act);
+                                }
+                            }
+                            pal := Text {
+                                x: 7px;
+                                y: 3px;
+                                text: act;
+                                color: #cfd6df;
+                                font-size: 11px;
+                                font-family: "JetBrains Mono";
+                            }
+                        }
+                    }
+
+                    // save: write the draft and show the copy-paste install steps
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        IconButton {
+                            wide: true;
+                            text: "save draft";
+                            active: root.edit_dirty;
+                            clicked => {
+                                root.save_draft();
+                            }
+                        }
+                    }
+                    if root.draft_info != "": Rectangle {
+                        background: #11151c;
+                        border-color: #2a3340;
+                        border-width: 1px;
+                        border-radius: 8px;
+                        height: dinfo.preferred-height + 16px;
+                        // read-only TextInput (not Text) so the install steps are
+                        // selectable / copy-pasteable straight from the panel.
+                        dinfo := TextInput {
+                            x: 8px;
+                            y: 8px;
+                            width: parent.width - 16px;
+                            read-only: true;
+                            wrap: word-wrap;
+                            text: root.draft_info;
+                            color: #cfd6df;
+                            font-size: 12px;
+                            font-family: "JetBrains Mono";
+                        }
+                    }
+                }
+            }
+
             // The active keyboard's one morphing board (swapped by the keyd listen stream
-            // as layers change).
+            // as layers change; frozen to the chosen section while editing).
             BoardView {
                 data: root.active_board;
                 active_layer: root.active_layer;
-                live: root.live_connected;
+                live: root.live_connected && !root.edit_mode;
+                editing: root.edit_mode;
+                selected_phys: root.selected_phys;
+                key_clicked(phys) => {
+                    root.select_key(phys);
+                }
                 zoom <=> root.zoom;
             }
         }
