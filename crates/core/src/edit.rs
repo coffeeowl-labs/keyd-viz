@@ -126,6 +126,68 @@ impl Section {
         self.name.split_once(':').map(|(_, q)| q)
     }
 
+    /// The current value bound to `key` in this section (last duplicate wins,
+    /// like keyd's sequential application).
+    pub fn get_binding(&self, key: &str) -> Option<&str> {
+        self.entries.iter().rev().find_map(|e| match &e.kind {
+            EntryKind::Binding { key: k, val, .. } if k == key => val.as_deref(),
+            _ => None,
+        })
+    }
+
+    /// Set `key = value` in this section: rewrite the last existing binding for
+    /// `key`, or append a new line when none exists. The append lands after the
+    /// last non-blank entry (so a trailing blank-line separator stays at the
+    /// section's end) in the file's own line-ending style.
+    pub fn set_or_add_binding(&mut self, key: &str, new_val: &str) {
+        if !self.set_binding(key, new_val) {
+            self.push_binding(key, new_val);
+        }
+    }
+
+    /// Append a fresh `key = value` binding line to this section.
+    fn push_binding(&mut self, key: &str, new_val: &str) {
+        // The file's line style, inferred from the section header.
+        let style = match self.header.eol {
+            Eol::None => Eol::Lf,
+            e => e,
+        };
+        let at = self
+            .entries
+            .iter()
+            .rposition(|e| !matches!(e.kind, EntryKind::Blank))
+            .map_or(0, |i| i + 1);
+        let mut eol = style;
+        if at == self.entries.len() {
+            // Appending at the very end: inherit the terminal entry's (or, for an
+            // empty section, the header's) EOL state so a file without a final
+            // newline stays that way — the prior last line gains a newline, the
+            // new last line takes over the `None`.
+            let prev_eol = match self.entries.last_mut() {
+                Some(prev) => &mut prev.eol,
+                None => &mut self.header.eol,
+            };
+            if *prev_eol == Eol::None {
+                *prev_eol = style;
+                eol = Eol::None;
+            }
+        }
+        let typed = classify(self.kind, Some(new_val));
+        self.entries.insert(
+            at,
+            Entry {
+                raw: format!("{key} = {new_val}"),
+                eol,
+                kind: EntryKind::Binding {
+                    key: key.to_string(),
+                    val: Some(new_val.to_string()),
+                    typed,
+                    dirty: true,
+                },
+            },
+        );
+    }
+
     /// Replace the value of the **last** binding for `key` (keyd applies entries in
     /// order, so the last assignment wins) and regenerate that one line as
     /// `key = value`. Every other line in the file is untouched. Returns `false` if
@@ -239,6 +301,25 @@ impl EditConfig {
     /// Mutable [`Self::section`].
     pub fn section_mut(&mut self, name: &str) -> Option<&mut Section> {
         self.sections.iter_mut().find(|s| s.name == name)
+    }
+
+    /// The section a board edit targets: the **last** layer-bearing section whose
+    /// base name is `layer` (`"main"` for the base board). Last, because keyd
+    /// merges duplicate sections in order and an appended line must out-rank every
+    /// earlier assignment. `None` when the config has no such section (the GUI
+    /// treats those caps as not-editable in E1; creating sections is E2).
+    pub fn target_section_mut(&mut self, layer: &str) -> Option<&mut Section> {
+        self.sections.iter_mut().rev().find(|s| {
+            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
+                && s.base_name().trim() == layer
+        })
+    }
+
+    /// True once any binding line was edited or added this session.
+    pub fn is_dirty(&self) -> bool {
+        let dirty = |e: &Entry| matches!(e.kind, EntryKind::Binding { dirty: true, .. });
+        self.preamble.iter().any(dirty)
+            || self.sections.iter().any(|s| s.entries.iter().any(dirty))
     }
 
     /// keyd-validation-parity diagnostics (design doc §12): conditions the model
@@ -489,5 +570,60 @@ mod tests {
         let mut cfg = EditConfig::parse(src);
         assert!(!cfg.section_mut("main").unwrap().set_binding("q", "x"));
         assert_eq!(cfg.serialize(), src);
+    }
+
+    #[test]
+    fn add_binding_lands_before_trailing_blank_separator() {
+        // The blank line separating sections must stay at the section's end.
+        let src = "[main]\na = b\n\n[nav]\nh = left\n";
+        let mut cfg = EditConfig::parse(src);
+        cfg.target_section_mut("main").unwrap().set_or_add_binding("q", "esc");
+        assert_eq!(cfg.serialize(), "[main]\na = b\nq = esc\n\n[nav]\nh = left\n");
+    }
+
+    #[test]
+    fn add_binding_preserves_missing_final_newline() {
+        let mut cfg = EditConfig::parse("[main]\na = b");
+        cfg.target_section_mut("main").unwrap().set_or_add_binding("q", "esc");
+        // The old last line gains its newline; the new last line takes the None.
+        assert_eq!(cfg.serialize(), "[main]\na = b\nq = esc");
+    }
+
+    #[test]
+    fn add_binding_to_empty_section_and_crlf_style() {
+        let mut cfg = EditConfig::parse("[main]\r\n");
+        cfg.target_section_mut("main").unwrap().set_or_add_binding("a", "b");
+        assert_eq!(cfg.serialize(), "[main]\r\na = b\r\n");
+    }
+
+    #[test]
+    fn target_section_picks_the_last_duplicate() {
+        // keyd merges duplicate sections in order; an appended line must land in
+        // the LAST one so it out-ranks every earlier assignment.
+        let src = "[nav]\nh = left\n[nav:C]\nj = down\n";
+        let mut cfg = EditConfig::parse(src);
+        cfg.target_section_mut("nav").unwrap().set_or_add_binding("k", "up");
+        assert_eq!(cfg.serialize(), "[nav]\nh = left\n[nav:C]\nj = down\nk = up\n");
+        // [ids]/[global] are never edit targets.
+        assert!(cfg.target_section_mut("ids").is_none());
+        assert!(cfg.target_section_mut("missing").is_none());
+    }
+
+    #[test]
+    fn get_binding_last_duplicate_wins() {
+        let cfg = EditConfig::parse("[main]\na = x\na = y\n");
+        assert_eq!(cfg.sections[0].get_binding("a"), Some("y"));
+        assert_eq!(cfg.sections[0].get_binding("q"), None);
+    }
+
+    #[test]
+    fn dirty_tracks_edits_and_adds() {
+        let mut cfg = EditConfig::parse("[main]\na = b\n");
+        assert!(!cfg.is_dirty());
+        cfg.target_section_mut("main").unwrap().set_or_add_binding("a", "c");
+        assert!(cfg.is_dirty());
+        let mut cfg = EditConfig::parse("[main]\n");
+        cfg.target_section_mut("main").unwrap().set_or_add_binding("q", "esc");
+        assert!(cfg.is_dirty());
     }
 }
