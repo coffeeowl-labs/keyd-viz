@@ -1037,9 +1037,11 @@ export component MainWindow inherits Window {
                             font-size: 13px;
                             placeholder-text: "name (e.g. symbols)";
                             text <=> root.new_layer_name;
-                            init => {
-                                self.focus();
-                            }
+                            // NOTE: no `init => self.focus()` here — unlike the key
+                            // picker (which floats outside the ScrollView), this field
+                            // lives inside the body ScrollView, and self-focusing makes
+                            // the ScrollView scroll-to-visible mid-layout → Slint
+                            // "Recursion detected" panic. The user clicks to focus.
                             accepted(t) => {
                                 root.create_layer(t);
                             }
