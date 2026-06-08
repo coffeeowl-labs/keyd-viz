@@ -853,3 +853,29 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   chord — the wrong identity to edit. The config-reload watcher exempts the file being
   edited. Workspace: 150 tests green, clippy clean. **E1 done-when met** pending visual
   review; the searchable palette, tap/hold editor, and one-click pkexec apply are E2.
+- *(Phase 6 E2 — one-click apply, 2026-06-07)* First E2 slice: the E0 apply tool is now
+  wired end-to-end. **Session accessors** (`serialized()`, `apply_target(dir)` — only
+  `<dir>/<name>.conf` with an allow-listed name ever qualifies, `stale_warning()` shared
+  with draft save, `keyd_check_bytes`); the app depends on keydviz-apply's dep-free lib
+  half so GUI pre-flight and privileged enforcement run the *same* scan code. **Protocol
+  engine** (`app::applying`): pkexec by absolute path (matches the policy's `exec.path`),
+  typed events, junk-tolerant line parser that stops at the first terminal verdict,
+  126/127 pkexec exit mapping (only when no verdict line was seen), and an `ApplyHandle`
+  whose `revert()` just drops stdin — cancel and crash are the same EOF-revert path. The
+  request write lives on the background thread (64 KiB payload vs 64 KiB pipe while the
+  auth dialog blocks the reader). **UI**: pre-flight (size, scan→red confirm bar for
+  `command()`/`macro()`, `keyd check`, staleness, diff) all before pkexec is spawned;
+  auth → countdown with a mouse-driven KEEP button (the keyboard under test must not be
+  required), cosmetic 200 ms timer — only tool verdicts decide outcomes; `kept` re-OPENS
+  the session (truthful staleness re-base + the §5.1 gate re-checks our own output);
+  `reverted` keeps edits staged; `revert-failed` is loud and verbatim; session-changing
+  actions refused mid-flight. **Packaging**: polkit action `io.github.coffeeowl-labs.
+  keydviz.apply` with `allow_active=auth_admin` (deliberately not `auth_admin_keep` —
+  cached auth would be a time-boxed silent root-write primitive for any same-uid
+  process) + `exec.path` annotation; PKGBUILD/install.sh ship tool + policy; AppImage
+  stays draft-then-install (decided trade-off). Also fixed in-pass: a latent pid-only
+  temp-file race in `probe::check_works` that parallel tests exposed. Debug builds
+  honour `KEYDVIZ_APPLY_DEV_DIR` to run the whole flow unprivileged. Workspace: 165
+  tests green, clippy clean. **Remaining for E2**: tap/hold editor, searchable palette +
+  `list-keys` picker, layers/chords/`[global]`, orphan warnings, create-config flow,
+  one-level include closure scan (deferred, design §5.3).

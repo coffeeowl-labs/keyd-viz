@@ -67,7 +67,12 @@ fn version() -> Option<String> {
 /// v2.6.0: exit 0 on valid, 255 on invalid). Any failure — keyd missing, no `check`
 /// subcommand, tempfile trouble — reads as "unavailable", never as "fine".
 fn check_works() -> bool {
-    let path = std::env::temp_dir().join(format!("keyd-viz-probe-{}.conf", std::process::id()));
+    // pid + sequence: concurrent probes in one process (parallel tests) must not
+    // share a temp file — one's cleanup would race the other's `keyd check` read.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir()
+        .join(format!("keyd-viz-probe-{}-{seq}.conf", std::process::id()));
     let ok = std::fs::write(&path, KNOWN_GOOD).is_ok()
         && Command::new("keyd")
             .arg("check")

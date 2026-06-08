@@ -116,6 +116,37 @@ For each config it draws a **base board** plus **one board per layer**:
 Physical layouts come from a curated catalog (pick one in-app), or import a board from QMK with
 `--qmk-info <info.json>`.
 
+## Edit mode
+
+The **edit** toggle turns the viewer into a visual config editor: click a key on the board,
+type a new binding (or press the key you want, or pick from the palette), watch the board
+re-render, then persist. Files the editor can't reproduce byte-for-byte stay view-only —
+it never risks clobbering what it doesn't fully understand.
+
+Two ways to persist:
+
+- **Save draft** (works everywhere): writes the edited config to
+  `~/.config/keyd-viz/drafts/` and shows copy-paste install steps (`sudo cp …` +
+  `sudo keyd reload`), with the diff and a `keyd check` verdict.
+- **One-click apply** (AUR/source installs): the **apply to /etc/keyd…** button hands the
+  config to `keydviz-apply`, a one-shot privileged tool, via polkit (`pkexec` — expect a
+  password prompt each time, by design). The tool validates with `keyd check`, writes
+  atomically with a timestamped backup, reloads keyd, and then **counts down**:
+
+  > **Only clicking KEEP makes the change permanent.** Timeout, closing the app, hiding
+  > the window, a crash — anything but KEEP — automatically restores the previous config
+  > and reloads. The KEEP button is mouse-driven on purpose: confirming must not require
+  > the keyboard you just rebound.
+
+  Configs containing `command()` (runs as root on a keypress) or `macro()` need an extra
+  explicit confirmation before the password prompt.
+
+  If a keyboard ever ends up unusable anyway, keyd's panic sequence —
+  **Backspace+Escape+Enter** — terminates keyd and restores the raw keyboard.
+
+The AppImage can't ship a safe `pkexec` tool (it can't place a root-owned binary), so it
+uses draft-then-install permanently — a packaging trade-off, not a missing feature.
+
 ## Development
 
 ```sh
