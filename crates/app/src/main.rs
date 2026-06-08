@@ -720,6 +720,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         choices.first().map(|c| c.name.clone()).unwrap_or("main".into());
                     let (apply_ok, apply_hint) = apply_gate(&s);
                     win.set_edit_layers(model(choices));
+                    win.set_hold_layers(model(hold_layer_choices(&s)));
                     win.set_edit_layer(default_layer);
                     win.set_selected_phys("".into());
                     win.set_edit_current("".into());
@@ -751,6 +752,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let Some(s) = sb.as_ref() else { return };
             let layer = win.get_edit_layer().to_string();
             let cur = s.current_binding(&layer, &phys).unwrap_or_default();
+            seed_tap_hold(&win, s, &layer, &phys);
             win.set_selected_phys(phys);
             win.set_edit_current(cur.clone().into());
             win.set_edit_value(cur.into());
@@ -769,6 +771,7 @@ fn main() -> Result<(), slint::PlatformError> {
             if !phys.is_empty() {
                 if let Some(s) = session.borrow().as_ref() {
                     let cur = s.current_binding(&name, &phys).unwrap_or_default();
+                    seed_tap_hold(&win, s, &name, &phys);
                     win.set_edit_current(cur.clone().into());
                     win.set_edit_value(cur.into());
                 }
@@ -836,6 +839,51 @@ fn main() -> Result<(), slint::PlatformError> {
                     drop(sb);
                     win.set_edit_current("".into());
                     win.set_edit_value("".into());
+                    win.set_edit_dirty(dirty);
+                    win.set_capture_armed(false);
+                    refresh_preview(&win, &srcs, &path, cfg);
+                }
+                Err(e) => win.set_edit_banner(format!("\u{26a0} {e}").into()),
+            }
+        });
+    }
+
+    // Make the selection a dual-function (tap/hold) key — VIA's Mod-Tap / Layer-Tap.
+    // Hold target + tap come from the th_* slots; the composer (TapHold) preserves an
+    // existing key's function + timeouts and emits canonical overload(...) for new ones.
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        win.on_apply_tap_hold(move || {
+            let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
+            let layer = win.get_edit_layer().to_string();
+            let phys = win.get_selected_phys().to_string();
+            let target = win.get_th_hold().trim().to_string();
+            if phys.is_empty() || target.is_empty() {
+                return;
+            }
+            // Momentary → no tap; otherwise the tap field (defaulting to the key
+            // itself when left blank, matching keyd's overload(layer) short form).
+            let tap = if win.get_th_hold_only() {
+                None
+            } else {
+                let t = win.get_th_tap().trim().to_string();
+                Some(if t.is_empty() { phys.clone() } else { t })
+            };
+            let mut sb = session.borrow_mut();
+            let Some(s) = sb.as_mut() else { return };
+            match s.set_tap_hold(&layer, &phys, &target, tap) {
+                Ok(()) => {
+                    let cur = s.current_binding(&layer, &phys).unwrap_or_default();
+                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    seed_tap_hold(&win, s, &layer, &phys);
+                    drop(sb);
+                    win.set_edit_current(cur.clone().into());
+                    win.set_edit_value(cur.into());
                     win.set_edit_dirty(dirty);
                     win.set_capture_armed(false);
                     refresh_preview(&win, &srcs, &path, cfg);
@@ -1154,6 +1202,37 @@ fn edit_layer_choices(s: &editing::EditSession) -> Vec<EditLayer> {
         .into_iter()
         .map(|n| EditLayer { name: n.clone().into(), display: n.into() })
         .collect()
+}
+
+/// Layers offered as tap/hold "when held" targets: every editable section except
+/// the base — you hold *into* a layer, never onto the base board itself.
+fn hold_layer_choices(s: &editing::EditSession) -> Vec<slint::SharedString> {
+    s.editable_sections()
+        .into_iter()
+        .filter(|n| n != "main")
+        .map(Into::into)
+        .collect()
+}
+
+/// Pre-fill the tap/hold slots for the selected key: decompose its current binding
+/// into hold-target + tap when it is a tap/hold, otherwise default the tap to the
+/// physical key (a sensible start for a new dual-function key) and leave the hold
+/// target unset until the user picks one.
+fn seed_tap_hold(win: &MainWindow, s: &editing::EditSession, layer: &str, phys: &str) {
+    match s.current_tap_hold(layer, phys) {
+        Some(th) => {
+            win.set_selected_is_tap_hold(true);
+            win.set_th_hold(th.target.into());
+            win.set_th_hold_only(th.tap.is_none());
+            win.set_th_tap(th.tap.unwrap_or_default().into());
+        }
+        None => {
+            win.set_selected_is_tap_hold(false);
+            win.set_th_hold("".into());
+            win.set_th_hold_only(false);
+            win.set_th_tap(phys.into());
+        }
+    }
 }
 
 /// Minimal §5.5 affected-keyboards line for the edit banner: which connected
