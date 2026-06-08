@@ -533,39 +533,84 @@ fn is_create_candidate(dev: &InputDevice) -> bool {
         && !dev.flags.intersects(DeviceFlags::MOUSE)
 }
 
-/// Connected keyboards eligible for a fresh config, deduped by `vendor:product`
-/// (one keyboard exposes several event nodes). See [`CreateCandidate`] and
-/// [`is_create_candidate`].
-fn create_candidates(config_dir: &Path) -> Vec<CreateCandidate> {
+/// Result of scanning connected keyboards for the create dialog.
+struct CreateScan {
+    /// Unclaimed / wildcard-only keyboards offered as fresh-config targets.
+    candidates: Vec<CreateCandidate>,
+    /// Display names of connected keyboards *already* governed by a specific config
+    /// (deduped by `vendor:product`). Surfaced as an explainer so the user understands
+    /// why their existing keyboards aren't candidates — they edit those configs instead.
+    already_configured: Vec<String>,
+}
+
+/// Scan connected keyboards: split them into create candidates (best `[ids]` match is
+/// None or Wildcard, *and* a real physical keyboard per [`is_create_candidate`]) and the
+/// names of those already governed by a specific config. Both are deduped by
+/// `vendor:product` (one keyboard exposes several event nodes); the governed name prefers
+/// a full-keyboard node over a media-only sibling. See [`CreateCandidate`].
+fn create_scan(config_dir: &Path) -> CreateScan {
     let configs = parse_configs(&conf_files_in(config_dir));
     let matchers: Vec<Ids> = configs.iter().map(|(_, c)| Ids::parse(&c.ids)).collect();
-    let mut out: Vec<CreateCandidate> = Vec::new();
+    let mut candidates: Vec<CreateCandidate> = Vec::new();
+    // (devid, display name, whether the recorded name came from a full-keyboard node).
+    let mut governed: Vec<(String, String, bool)> = Vec::new();
     for dev in devices::connected_devices() {
-        if !is_create_candidate(&dev) {
-            continue;
-        }
         let devid = dev.devid();
-        if out.iter().any(|c| c.devid == devid) {
-            continue;
-        }
         let best = matchers
             .iter()
             .map(|ids| ids.match_device(&devid, dev.flags))
             .max_by_key(|m| m.rank())
             .unwrap_or(MatchKind::None);
         if best == MatchKind::Explicit {
-            continue; // already governed — edit that config instead
+            // Already governed → not a candidate; record it for the explainer (any
+            // keyd-recognised keyboard, since the laptop's combo node fails the stricter
+            // candidate filter but is still a keyboard the user has configured).
+            if dev.is_keyboard {
+                let name = if dev.name.is_empty() { devid.clone() } else { dev.name.clone() };
+                match governed.iter_mut().find(|(d, _, _)| *d == devid) {
+                    Some(e) if dev.full_keyboard && !e.2 => {
+                        e.1 = name;
+                        e.2 = true;
+                    }
+                    Some(_) => {}
+                    None => governed.push((devid, name, dev.full_keyboard)),
+                }
+            }
+            continue;
+        }
+        // Unclaimed or wildcard-only: offer it only if it's a real physical keyboard.
+        if !is_create_candidate(&dev) || candidates.iter().any(|c| c.devid == devid) {
+            continue;
         }
         let label =
             if dev.name.is_empty() { devid.clone() } else { format!("{} ({devid})", dev.name) };
-        out.push(CreateCandidate {
+        candidates.push(CreateCandidate {
             name: dev.name.clone(),
             label,
             suggested: sanitize_config_name(&dev.name),
             devid,
         });
     }
-    out
+    CreateScan {
+        candidates,
+        already_configured: governed.into_iter().map(|(_, name, _)| name).collect(),
+    }
+}
+
+/// The "already configured" explainer for the create dialog, or `""` when none of the
+/// connected keyboards are governed by a specific config. Capped so a busy machine
+/// doesn't produce an unreadably long line.
+fn governed_line(names: &[String]) -> String {
+    if names.is_empty() {
+        return String::new();
+    }
+    let shown = names.len().min(4);
+    let more = names.len() - shown;
+    let tail = if more > 0 { format!(" (+{more} more)") } else { String::new() };
+    format!(
+        "Already configured \u{2014} edit from the chooser above: {}{tail}",
+        names[..shown].join(", ")
+    )
 }
 
 /// Turn a free-form device name into a config name the apply tool's allow-list
@@ -873,12 +918,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = win.as_weak();
         win.on_begin_create(move || {
             let Some(win) = weak.upgrade() else { return };
-            let cands = create_candidates(&create_config_dir());
-            let (sel_id, sel_name) = match cands.first() {
+            let scan = create_scan(&create_config_dir());
+            let (sel_id, sel_name) = match scan.candidates.first() {
                 Some(c) => (c.devid.clone(), c.suggested.clone()),
                 None => ("*".to_string(), "default".to_string()),
             };
-            let data: Vec<CreateCandidateData> = cands
+            let data: Vec<CreateCandidateData> = scan
+                .candidates
                 .iter()
                 .map(|c| CreateCandidateData {
                     label: c.label.clone().into(),
@@ -890,6 +936,7 @@ fn main() -> Result<(), slint::PlatformError> {
             win.set_create_selected_id(sel_id.into());
             win.set_create_name(sel_name.into());
             win.set_create_error("".into());
+            win.set_create_governed(governed_line(&scan.already_configured).into());
             win.set_create_open(true);
         });
     }
@@ -935,7 +982,7 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             // Look up the device name (for the board label) and build the banner.
             let device =
-                create_candidates(&dir).into_iter().find(|c| c.devid == id).map(|c| c.name);
+                create_scan(&dir).candidates.into_iter().find(|c| c.devid == id).map(|c| c.name);
             let banner = if id == "*" {
                 "new config \u{2014} applies to all keyboards not claimed by another config"
                     .to_string()
@@ -2784,6 +2831,21 @@ mod create_tests {
     fn falls_back_when_nothing_usable_survives() {
         assert_eq!(sanitize_config_name(""), "keyboard");
         assert_eq!(sanitize_config_name("!!! ###"), "keyboard");
+    }
+
+    #[test]
+    fn governed_explainer_line() {
+        use super::governed_line;
+        assert_eq!(governed_line(&[]), "");
+        let one = governed_line(&["PFU HHKB".to_string()]);
+        assert!(one.contains("edit from the chooser above"));
+        assert!(one.contains("PFU HHKB"));
+        // Capped at 4 with a "+N more" tail.
+        let many: Vec<String> = (0..6).map(|i| format!("kbd{i}")).collect();
+        let line = governed_line(&many);
+        assert!(line.contains("kbd0") && line.contains("kbd3"));
+        assert!(!line.contains("kbd4"));
+        assert!(line.contains("(+2 more)"));
     }
 
     #[test]

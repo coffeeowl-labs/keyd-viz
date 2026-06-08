@@ -622,6 +622,7 @@ export component MainWindow inherits Window {
     in-out property <string> create_selected_id: "";   // chosen [ids] entry (a vendor:product or "*")
     in-out property <string> create_name: "";           // config file name being typed (no .conf)
     in-out property <string> create_error: "";          // bad name / filename-collision reason ("" = ok)
+    in property <string> create_governed: "";           // "already configured" explainer ("" = none)
     callback begin_create();                 // open the panel: populate candidates + sensible defaults
     callback create_config(string, string);  // (ids entry, name) → create the starter + enter edit mode
 
@@ -926,6 +927,16 @@ export component MainWindow inherits Window {
                                 font-family: "JetBrains Mono";
                             }
                         }
+                    }
+
+                    // Explainer: connected keyboards already governed by a specific config
+                    // are intentionally absent from the chips above — you edit those, not
+                    // create a colliding second config (§5.5). Name them so it's not a mystery.
+                    if root.create_governed != "": Text {
+                        text: root.create_governed;
+                        color: #7d8694;
+                        font-size: 11px;
+                        wrap: word-wrap;
                     }
 
                     // name + create/cancel
