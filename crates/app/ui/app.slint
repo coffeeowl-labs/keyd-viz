@@ -549,6 +549,7 @@ export component MainWindow inherits Window {
     callback select_key(string);
     callback pick_edit_layer(string);
     callback apply_binding(string);          // typed / palette / captured value for the selection
+    callback make_transparent();             // clear the selection's binding → falls through to base
     callback arm_capture();
     callback save_draft();
     callback confirm_discard();   // discard the unsaved session and proceed (leave / switch)
@@ -903,8 +904,15 @@ export component MainWindow inherits Window {
                             }
                         }
                         Text {
-                            text: root.edit_current == "" ? "(unbound)" : "= \{root.edit_current}";
-                            color: #cfd6df;
+                            // "▽" = transparent: an unbound key inherits the base layer.
+                            // On the base layer itself there is nothing below to inherit,
+                            // so an unbound key simply emits itself (its hardware default).
+                            text: root.edit_current != ""
+                                ? "= \{root.edit_current}"
+                                : (root.edit_layer == "main" || root.edit_layer == "")
+                                    ? "\u{25bd} default (emits the key)"
+                                    : "\u{25bd} inherits base";
+                            color: root.edit_current == "" ? #7d8694 : #cfd6df;
                             font-size: 13px;
                             font-family: "JetBrains Mono";
                             vertical-alignment: center;
@@ -954,6 +962,34 @@ export component MainWindow inherits Window {
                     if root.selected_phys != "": HorizontalLayout {
                         spacing: 6px;
                         alignment: start;
+                        // "▽ transparent": clear the binding so the key inherits the
+                        // base layer (keyd's default for an unbound key). Distinct from
+                        // "noop", which disables the key entirely. Dimmed when the key is
+                        // already transparent — nothing to clear.
+                        Rectangle {
+                            width: trp.preferred-width + 14px;
+                            height: trp.preferred-height + 7px;
+                            border-radius: 6px;
+                            property <bool> already: root.edit_current == "";
+                            background: already ? #12161c : (trpta.has-hover ? #16242a : #11191d);
+                            border-width: 1px;
+                            border-color: already ? #2a3340 : #2f5d63;
+                            trpta := TouchArea {
+                                enabled: !already;
+                                mouse-cursor: already ? default : pointer;
+                                clicked => {
+                                    root.make_transparent();
+                                }
+                            }
+                            trp := Text {
+                                x: 7px;
+                                y: 3px;
+                                text: "\u{25bd} transparent";
+                                color: already ? #4a525e : #6fc3cf;
+                                font-size: 11px;
+                                font-family: "JetBrains Mono";
+                            }
+                        }
                         for act in root.palette: Rectangle {
                             width: pal.preferred-width + 14px;
                             height: pal.preferred-height + 7px;

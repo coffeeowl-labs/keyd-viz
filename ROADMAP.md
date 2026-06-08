@@ -879,3 +879,24 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   tests green, clippy clean. **Remaining for E2**: tap/hold editor, searchable palette +
   `list-keys` picker, layers/chords/`[global]`, orphan warnings, create-config flow,
   one-level include closure scan (deferred, design §5.3).
+- *(Phase 6 E2 — transparent / pass-through action, 2026-06-07)* A "▽ transparent"
+  editor action: clears a key's binding so it falls through to the base layer (keyd's
+  default for any unbound key) — VIA's ▽, the one thing the palette couldn't express
+  (distinct from `noop`, which *disables* the key). **Core** (`edit.rs`):
+  `Section::remove_binding` drops *every* assignment of the key (last-wins means one
+  leftover would keep it bound) and a new `Section.dirty` flag captures the change a
+  pure removal can't pin on any surviving entry — `is_dirty()` ORs it in;
+  `EditConfig::clear_binding` spans *all* sections merged into the board (`[nav]` +
+  `[nav:C]`), matching exactly the set `current_binding`/`derive` read, so a cleared key
+  can never still render bound. **App**: `EditSession::clear_binding`; the chip + a
+  panel marker ("▽ inherits base", or "▽ default (emits the key)" on the base layer
+  where there is nothing below to inherit), wired through `on_make_transparent` with the
+  same in-flight/session guards as `on_apply_binding`. **Critic review (3 angles, the
+  feature was previously unreviewed)** found + fixed two real issues: the change-summary
+  `line_diff` was prefix/suffix-only, so a multi-region clear (a key recurring across
+  merged sections) showed untouched section headers as removed-and-re-added in the very
+  diff the user reviews before applying → replaced with an LCS line diff (real changes
+  only); and the panel said "inherits base" even on the base layer, which has nothing to
+  inherit → wording now layer-aware. A third finding (whitespace-trimmed section names
+  like `[nav ]` over-matching) was deferred: it's a pre-existing model-wide convention,
+  internally consistent, and marginal. Workspace tests green, clippy clean.
