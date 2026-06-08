@@ -561,6 +561,18 @@ export component MainWindow inherits Window {
     in-out property <bool> th_hold_only;     // momentary: hold only, no tap action
     in-out property <string> th_feel;        // tap-vs-hold "feel": "fast" | "safe"
     callback apply_tap_hold();               // compose th_hold/th_tap into the binding
+    // ---- searchable key picker (E2): browse keyd's full key vocabulary ----
+    // A shared overlay; `picker_target` routes the pick to the binding or the tap field.
+    // Fill-only: picking sets the field, it does not apply — the user still hits "set".
+    in-out property <bool> picker_open: false;
+    in-out property <string> picker_target: "";   // "binding" | "tap"
+    in-out property <string> picker_query: "";
+    in property <[string]> picker_results;         // ranked slice (Rust holds the full list)
+    in property <int> picker_truncated: 0;         // matches dropped past the cap (0 = all shown)
+    in property <string> picker_source;            // "keyd list-keys (N)" | "built-in list"
+    callback filter_keys(string);
+    callback open_picker(string);   // arg = target ("binding" | "tap")
+    callback pick_key(string);
     callback save_draft();
     callback confirm_discard();   // discard the unsaved session and proceed (leave / switch)
     callback cancel_discard();    // dismiss the prompt, stay in the session
@@ -950,6 +962,14 @@ export component MainWindow inherits Window {
                                 root.apply_binding(root.edit_value);
                             }
                         }
+                        // browse keyd's full key vocabulary (fills the field, doesn't apply).
+                        IconButton {
+                            wide: true;
+                            text: "pick\u{2026}";
+                            clicked => {
+                                root.open_picker("binding");
+                            }
+                        }
                         // press-to-capture: the next live keypress becomes the value.
                         // Needs the keypress stream; greyed-out hint when it's absent.
                         if root.keys_connected: IconButton {
@@ -1101,6 +1121,13 @@ export component MainWindow inherits Window {
                                         ? "(hold only)"
                                         : "taps " + root.selected_phys;
                                     text <=> root.th_tap;
+                                }
+                                if !root.th_hold_only: IconButton {
+                                    wide: true;
+                                    text: "pick\u{2026}";
+                                    clicked => {
+                                        root.open_picker("tap");
+                                    }
                                 }
                                 IconButton {
                                     wide: true;
@@ -1381,6 +1408,145 @@ export component MainWindow inherits Window {
                             color: #cfd6df;
                             font-size: 12px;
                             font-family: "JetBrains Mono";
+                        }
+                    }
+                }
+
+                // ---- searchable key picker overlay (E2) ----
+                // Floats over the whole edit panel (a manually-positioned sibling of
+                // editbody, so it paints on top of the VerticalLayout flow). The dim
+                // backdrop's TouchArea is the click-outside-to-close; the card's own
+                // TouchArea swallows clicks so picking inside never closes it.
+                if root.picker_open: Rectangle {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    background: #0a0d12ee;
+                    TouchArea {
+                        clicked => {
+                            root.picker_open = false;
+                            root.picker_query = "";
+                        }
+                    }
+                    Rectangle {
+                        x: 12px;
+                        y: 12px;
+                        width: parent.width - 24px;
+                        height: parent.height - 24px;
+                        background: #11151c;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: #2f5d63;
+                        TouchArea {}   // swallow clicks inside the card (don't close)
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: "pick a key";
+                                    color: #8a93a0;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: root.picker_target == "tap" ? "\u{2192} tap" : "\u{2192} binding";
+                                    color: #6fc3cf;
+                                    font-size: 12px;
+                                    font-family: "JetBrains Mono";
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+                                IconButton {
+                                    text: "\u{2715}";
+                                    clicked => {
+                                        root.picker_open = false;
+                                        root.picker_query = "";
+                                    }
+                                }
+                            }
+                            search := LineEdit {
+                                height: 30px;
+                                font-size: 13px;
+                                placeholder-text: "search keys\u{2026}";
+                                text <=> root.picker_query;
+                                edited(t) => {
+                                    root.filter_keys(t);
+                                }
+                                // focus the field the moment the overlay appears — `init`
+                                // fires on the `if`-created element; `forward-focus` would not.
+                                init => {
+                                    self.focus();
+                                }
+                            }
+                            // common one-click keys (only with no query) — fast path above
+                            // the full scrollable list.
+                            if root.picker_query == "": Text {
+                                text: "common";
+                                color: #5a6673;
+                                font-size: 11px;
+                            }
+                            if root.picker_query == "": HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                for act in root.palette: Rectangle {
+                                    width: cpal.preferred-width + 14px;
+                                    height: cpal.preferred-height + 7px;
+                                    border-radius: 6px;
+                                    background: cpalta.has-hover ? #1b2129 : #161b22;
+                                    border-width: 1px;
+                                    border-color: #2a3340;
+                                    cpalta := TouchArea {
+                                        clicked => {
+                                            root.pick_key(act);
+                                        }
+                                    }
+                                    cpal := Text {
+                                        x: 7px;
+                                        y: 3px;
+                                        text: act;
+                                        color: #cfd6df;
+                                        font-size: 11px;
+                                        font-family: "JetBrains Mono";
+                                    }
+                                }
+                            }
+                            ScrollView {
+                                vertical-stretch: 1;
+                                VerticalLayout {
+                                    alignment: start;
+                                    spacing: 1px;
+                                    for name in root.picker_results: Rectangle {
+                                        height: 26px;
+                                        border-radius: 5px;
+                                        background: rowta.has-hover ? #1b2129 : transparent;
+                                        rowta := TouchArea {
+                                            clicked => {
+                                                root.pick_key(name);
+                                            }
+                                        }
+                                        Text {
+                                            x: 8px;
+                                            height: 100%;
+                                            text: name;
+                                            color: #cfd6df;
+                                            font-size: 12px;
+                                            font-family: "JetBrains Mono";
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                            Text {
+                                text: root.picker_truncated > 0
+                                    ? root.picker_source + " \u{00b7} +\{root.picker_truncated} more \u{2014} refine search"
+                                    : root.picker_source;
+                                color: #5a6673;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
                         }
                     }
                 }

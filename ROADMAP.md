@@ -944,3 +944,27 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   not the physical key. Deferred (documented): the pre-existing set/clear merged-section
   targeting asymmetry, and clobbering an exotic `overloadi` on edit (rare keyd-internal
   form; `keyd check` backstops the apply path). Workspace tests green, clippy clean.
+- *(Phase 6 E2 — searchable key-picker palette, 2026-06-07)* The binding-value and
+  tap fields were free-text + a hardcoded 10-chip quick-palette + press-to-capture: no
+  way to *browse* keyd's vocabulary (you had to already know it's spelled `volumeup`,
+  `kpenter`, `iso-level3-shift`). Now a shared searchable overlay, **fill-only** (picking
+  sets the field; the user still hits "set"/"set tap/hold" — keeps it non-committal and
+  lets you pick-then-tweak; the auto-applying quick-chips are unchanged). **Data**: the
+  E0 probe's `list-keys` field — built for this, previously only printed by `--probe` —
+  is cached once at startup into an `Rc<Vec<SharedString>>`, falling back to a new
+  `core::board::primary_keysyms()` (the `is_primary_keysym` oracle list, now also
+  exposed) when keyd can't answer (not installed / dev / AppImage); a footer reports
+  which source is live (`keyd list-keys (319)` vs `built-in list`). **Ranking** lives
+  Rust-side (`app::picker::rank_keys`, pure + unit-tested) — Slint has no sort/filter, so
+  the full vocab stays in Rust and only the ranked, capped (80) slice is ever pushed to
+  the UI per keystroke: case-insensitive, exact > prefix > substring, then shortest then
+  alpha, cap *after* ranking, with a `+N more` truncation hint. **UI**: an inline overlay
+  (not `PopupWindow` — focus/clipping quirks inside the edit panel's `ScrollView`) that
+  paints over the whole panel as a manually-positioned sibling of the layout flow; dim
+  backdrop `TouchArea` = click-outside-to-close, the card's own `TouchArea` swallows
+  inside-clicks; search `LineEdit` self-focuses via `init => self.focus()` (the reliable
+  idiom for an `if`-created element — `forward-focus` wouldn't re-fire); empty query
+  shows the `palette` commons as a header above the capped full list. Opening disarms
+  press-to-capture so a primed key can't fire into a pick. Workspace tests green
+  (+7 picker, +1 board), clippy clean. **Remaining for E2**: layers/chords/`[global]`,
+  orphan warnings, create-config flow, one-level include closure scan (deferred, §5.3).

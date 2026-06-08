@@ -10,6 +10,7 @@ mod editing;
 mod helper;
 mod layer;
 mod monitor;
+mod picker;
 mod prefs;
 mod probe;
 mod tray;
@@ -575,6 +576,25 @@ fn main() -> Result<(), slint::PlatformError> {
     let win = MainWindow::new()?;
     register_fonts(); // after MainWindow::new() so the platform is initialized
 
+    // Key-picker vocabulary (E2): probe the installed keyd once for its real key set;
+    // fall back to core's built-in list when keyd can't tell us (not installed, dev,
+    // AppImage). It never changes per session, so cache it Rust-side and only ever push
+    // the ranked slice into the UI (see `picker::rank_keys`).
+    let probe = probe::KeydProbe::run();
+    let picker_keys: Rc<Vec<slint::SharedString>> = Rc::new(if probe.keys.is_empty() {
+        keydviz_core::board::primary_keysyms().iter().map(|s| (*s).into()).collect()
+    } else {
+        probe.keys.iter().map(slint::SharedString::from).collect()
+    });
+    win.set_picker_source(
+        if probe.keys.is_empty() {
+            "built-in list".to_string()
+        } else {
+            format!("keyd list-keys ({})", probe.keys.len())
+        }
+        .into(),
+    );
+
     // The layout picker. Hidden for QMK-imported boards (their geometry is fixed, not
     // catalog-pickable); otherwise the full curated library.
     let any_qmk = det.srcs.iter().any(|s| s.qmk.is_some());
@@ -905,6 +925,48 @@ fn main() -> Result<(), slint::PlatformError> {
         win.on_arm_capture(move || {
             let Some(win) = weak.upgrade() else { return };
             win.set_capture_armed(!win.get_capture_armed());
+        });
+    }
+
+    // Searchable key picker (E2): browse keyd's full key vocabulary into the binding or
+    // tap field. Fill-only — picking sets the field, the user still applies. Ranking and
+    // the result cap run in `picker::rank_keys`; the full vocab stays in `picker_keys`,
+    // only the ranked slice is ever pushed to the UI.
+    {
+        let weak = win.as_weak();
+        let picker_keys = picker_keys.clone();
+        win.on_open_picker(move |target| {
+            let Some(win) = weak.upgrade() else { return };
+            win.set_picker_target(target);
+            win.set_picker_query("".into());
+            win.set_capture_armed(false); // don't let an armed capture fire into a pick
+            let (results, truncated) = picker::rank_keys(&picker_keys, "", picker::RESULT_CAP);
+            win.set_picker_results(model(results));
+            win.set_picker_truncated(truncated as i32);
+            win.set_picker_open(true);
+        });
+    }
+    {
+        let weak = win.as_weak();
+        let picker_keys = picker_keys.clone();
+        win.on_filter_keys(move |query| {
+            let Some(win) = weak.upgrade() else { return };
+            let (results, truncated) = picker::rank_keys(&picker_keys, query.as_str(), picker::RESULT_CAP);
+            win.set_picker_results(model(results));
+            win.set_picker_truncated(truncated as i32);
+        });
+    }
+    {
+        let weak = win.as_weak();
+        win.on_pick_key(move |name| {
+            let Some(win) = weak.upgrade() else { return };
+            // Route to the field the picker was opened for; never auto-apply.
+            match win.get_picker_target().as_str() {
+                "tap" => win.set_th_tap(name),
+                _ => win.set_edit_value(name),
+            }
+            win.set_picker_open(false);
+            win.set_picker_query("".into());
         });
     }
 
