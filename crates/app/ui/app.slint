@@ -926,13 +926,14 @@ export component MainWindow inherits Window {
                             }
                         }
                         Text {
-                            // "▽" = transparent: an unbound key inherits the base layer.
-                            // On the base layer itself there is nothing below to inherit,
-                            // so an unbound key simply emits itself (its hardware default).
+                            // "▽" = transparent: keyd stops remapping the key. On a
+                            // sublayer it inherits the base layer; on base there is nothing
+                            // below, so keyd just forwards the key's real (hardware) code —
+                            // not a firmware fallback, keyd simply ceases to intercept.
                             text: root.edit_current != ""
                                 ? "= \{root.edit_current}"
                                 : (root.edit_layer == "main" || root.edit_layer == "")
-                                    ? "\u{25bd} default (emits the key)"
+                                    ? "\u{25bd} no remap \u{2014} sends the real key"
                                     : "\u{25bd} inherits base";
                             color: root.edit_current == "" ? #7d8694 : #cfd6df;
                             font-size: 13px;
@@ -970,6 +971,35 @@ export component MainWindow inherits Window {
                                 root.open_picker("binding");
                             }
                         }
+                        // "▽ transparent": clear the binding so keyd stops remapping the
+                        // key — on a sublayer it inherits the base layer, on base it sends
+                        // the real key. Distinct from "noop" (which disables the key).
+                        // Dimmed when the key is already transparent — nothing to clear.
+                        Rectangle {
+                            width: trp.preferred-width + 14px;
+                            height: 24px;
+                            border-radius: 6px;
+                            property <bool> already: root.edit_current == "";
+                            background: already ? #12161c : (trpta.has-hover ? #16242a : #11191d);
+                            border-width: 1px;
+                            border-color: already ? #2a3340 : #2f5d63;
+                            trpta := TouchArea {
+                                enabled: !already;
+                                mouse-cursor: already ? default : pointer;
+                                clicked => {
+                                    root.make_transparent();
+                                }
+                            }
+                            trp := Text {
+                                x: 7px;
+                                y: (parent.height - self.height) / 2;
+                                text: "\u{25bd} transparent";
+                                color: already ? #4a525e : #6fc3cf;
+                                font-size: 12px;
+                                font-weight: 700;
+                                font-family: "JetBrains Mono";
+                            }
+                        }
                         // press-to-capture: the next live keypress becomes the value.
                         // Needs the keypress stream; greyed-out hint when it's absent.
                         if root.keys_connected: IconButton {
@@ -985,61 +1015,6 @@ export component MainWindow inherits Window {
                             color: #4a525e;
                             font-size: 11px;
                             vertical-alignment: center;
-                        }
-                    }
-
-                    // quick palette: one-click common actions for the selected key
-                    if root.selected_phys != "": HorizontalLayout {
-                        spacing: 6px;
-                        alignment: start;
-                        // "▽ transparent": clear the binding so the key inherits the
-                        // base layer (keyd's default for an unbound key). Distinct from
-                        // "noop", which disables the key entirely. Dimmed when the key is
-                        // already transparent — nothing to clear.
-                        Rectangle {
-                            width: trp.preferred-width + 14px;
-                            height: trp.preferred-height + 7px;
-                            border-radius: 6px;
-                            property <bool> already: root.edit_current == "";
-                            background: already ? #12161c : (trpta.has-hover ? #16242a : #11191d);
-                            border-width: 1px;
-                            border-color: already ? #2a3340 : #2f5d63;
-                            trpta := TouchArea {
-                                enabled: !already;
-                                mouse-cursor: already ? default : pointer;
-                                clicked => {
-                                    root.make_transparent();
-                                }
-                            }
-                            trp := Text {
-                                x: 7px;
-                                y: 3px;
-                                text: "\u{25bd} transparent";
-                                color: already ? #4a525e : #6fc3cf;
-                                font-size: 11px;
-                                font-family: "JetBrains Mono";
-                            }
-                        }
-                        for act in root.palette: Rectangle {
-                            width: pal.preferred-width + 14px;
-                            height: pal.preferred-height + 7px;
-                            border-radius: 6px;
-                            background: palta.has-hover ? #1b2129 : #161b22;
-                            border-width: 1px;
-                            border-color: #2a3340;
-                            palta := TouchArea {
-                                clicked => {
-                                    root.apply_binding(act);
-                                }
-                            }
-                            pal := Text {
-                                x: 7px;
-                                y: 3px;
-                                text: act;
-                                color: #cfd6df;
-                                font-size: 11px;
-                                font-family: "JetBrains Mono";
-                            }
                         }
                     }
 
