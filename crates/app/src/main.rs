@@ -20,7 +20,9 @@ use std::rc::Rc;
 
 use devices::InputDevice;
 use keydviz_core::board::{KeyCap, KeyState};
-use keydviz_core::{catalog, import_qmk, parse_file, parse_text, Config, Geometry, Ids, Sheet};
+use keydviz_core::{
+    catalog, import_qmk, parse_file, parse_text, Config, Geometry, Ids, Sheet, MODIFIERS,
+};
 use slint::{Brush, Color, ModelRc, VecModel};
 
 slint::include_modules!();
@@ -802,6 +804,7 @@ fn main() -> Result<(), slint::PlatformError> {
             match s.set_binding(&layer, &phys, &value) {
                 Ok(()) => {
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    seed_tap_hold(&win, s, &layer, &phys); // keep the tap/hold panel in sync
                     drop(sb);
                     win.set_edit_current(value.clone().into());
                     win.set_edit_value(value.into());
@@ -836,6 +839,7 @@ fn main() -> Result<(), slint::PlatformError> {
             match s.clear_binding(&layer, &phys) {
                 Ok(()) => {
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    seed_tap_hold(&win, s, &layer, &phys); // keep the tap/hold panel in sync
                     drop(sb);
                     win.set_edit_current("".into());
                     win.set_edit_value("".into());
@@ -1204,12 +1208,19 @@ fn edit_layer_choices(s: &editing::EditSession) -> Vec<EditLayer> {
         .collect()
 }
 
-/// Layers offered as tap/hold "when held" targets: every editable section except
-/// the base — you hold *into* a layer, never onto the base board itself.
+/// Layers offered as tap/hold "when held" targets. Excludes:
+/// - the base (`main`) — you hold *into* a layer, never onto the base board;
+/// - any layer whose name is a modifier (`[shift]` etc.) — `overload(shift, …)`
+///   always means the *modifier*, so such a layer can't be addressed by name and
+///   would otherwise duplicate the fixed modifier chip;
+/// - composite layers (`a+b`) — keyd auto-activates those from their parts; they
+///   are not valid `overload`/`layer` targets.
+///
+/// The 5 modifiers are offered separately (fixed chips in the UI).
 fn hold_layer_choices(s: &editing::EditSession) -> Vec<slint::SharedString> {
     s.editable_sections()
         .into_iter()
-        .filter(|n| n != "main")
+        .filter(|n| n != "main" && !n.contains('+') && !MODIFIERS.contains(&n.as_str()))
         .map(Into::into)
         .collect()
 }
@@ -1227,10 +1238,17 @@ fn seed_tap_hold(win: &MainWindow, s: &editing::EditSession, layer: &str, phys: 
             win.set_th_tap(th.tap.unwrap_or_default().into());
         }
         None => {
+            // Not a tap/hold yet. Default the tap to the key's current simple remap
+            // (so making `capslock = esc` dual-function keeps esc as the tap), or to
+            // the physical key when unbound / bound to something non-trivial.
+            let default_tap = match s.current_binding(layer, phys) {
+                Some(v) if !v.is_empty() && !v.contains('(') && v != "noop" => v,
+                _ => phys.to_string(),
+            };
             win.set_selected_is_tap_hold(false);
             win.set_th_hold("".into());
             win.set_th_hold_only(false);
-            win.set_th_tap(phys.into());
+            win.set_th_tap(default_tap.into());
         }
     }
 }

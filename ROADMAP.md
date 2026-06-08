@@ -900,3 +900,24 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   inherit → wording now layer-aware. A third finding (whitespace-trimmed section names
   like `[nav ]` over-matching) was deferred: it's a pre-existing model-wide convention,
   internally consistent, and marginal. Workspace tests green, clippy clean.
+- *(Phase 6 E2 — tap/hold (dual-function) editor, 2026-06-07)* keyd's signature
+  feature, the biggest edit-mode gap. Scope deliberately **VIA-shaped** (Mod-Tap /
+  Layer-Tap), not keyd's full timeout grammar: the user picks a **hold target** (a
+  layer or a modifier) and a **tap** key — no per-key ms knobs in the UI. The viewer
+  already rendered holds; this is the editor half, built in tested layers: **T1**
+  `core/taphold.rs` — `TapHold{func,target,tap,rest}` with `parse`/`serialize`/
+  `compose`; `rest` keeps timeout args *verbatim* so editing never retunes a config
+  (e.g. hhkb's `lettermod(…,150,200)`); `compose` preserves an existing key's
+  func+timeouts and emits canonical `overload(target,tap)` for new keys, `layer(target)`
+  for momentary; exotic forms (`overloadi`, opaque) return `None` and stay raw. Reuses
+  one grammar source (`parser::{parse_fn,TAPHOLD,MODS,is_mod}` → `pub(crate)`). **T2**
+  `EditSession::{current_tap_hold,set_tap_hold}`. **T3** two-slot Slint panel (layer +
+  modifier chips, tap field, "hold only" toggle) wired like `apply_binding`. **Critic
+  review (3 angles)** fixed: the hold-target list now excludes modifier-named layers
+  (the `[shift]` chip collided with the `shift` modifier — visible in hhkb.conf),
+  composite (`a+b`), and `main`; the sibling `apply_binding`/`make_transparent` handlers
+  now reseed the tap/hold slots (were going stale); and making a plain remap
+  dual-function defaults the tap to the *existing* binding (`capslock = esc` → tap esc),
+  not the physical key. Deferred (documented): the pre-existing set/clear merged-section
+  targeting asymmetry, and clobbering an exotic `overloadi` on edit (rare keyd-internal
+  form; `keyd check` backstops the apply path). Workspace tests green, clippy clean.

@@ -1094,7 +1094,11 @@ export component MainWindow inherits Window {
                                     height: 28px;
                                     font-size: 13px;
                                     enabled: !root.th_hold_only;
-                                    placeholder-text: "key (e.g. esc)";
+                                    // Blank tap falls back to the key itself; use the
+                                    // "hold only" toggle for a true no-tap (momentary) key.
+                                    placeholder-text: root.th_hold_only
+                                        ? "(hold only)"
+                                        : "taps " + root.selected_phys;
                                     text <=> root.th_tap;
                                 }
                                 IconButton {
