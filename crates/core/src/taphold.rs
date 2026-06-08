@@ -161,6 +161,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_overloadt2_single_timeout_round_trips() {
+        // The live hhkb config uses this form (permissive hold, one backstop ms).
+        let th = TapHold::parse("f", "overloadt2(nav, f, 200)").unwrap();
+        assert_eq!(th.func, "overloadt2");
+        assert_eq!(th.target, "nav");
+        assert_eq!(th.tap.as_deref(), Some("f"));
+        assert_eq!(th.serialize(), "overloadt2(nav, f, 200)");
+        // Repointing the hold keeps the form and the single 200ms backstop.
+        let edited = TapHold::compose(Some(&th), "num".into(), Some("f".into()));
+        assert_eq!(edited.serialize(), "overloadt2(num, f, 200)");
+    }
+
+    #[test]
     fn parse_momentary_layer_has_no_tap() {
         let th = TapHold::parse("capslock", "layer(nav)").unwrap();
         assert_eq!(th.func, "layer");
