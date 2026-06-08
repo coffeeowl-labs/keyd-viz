@@ -166,6 +166,34 @@ impl EditSession {
         out
     }
 
+    /// Warnings for bindings that activate a layer this config never defines —
+    /// one line per missing layer, naming where it's referenced (capped). Empty
+    /// when the config is clean; recomputed after every edit so creating the layer
+    /// (or removing the reference) clears it live. See
+    /// [`keydviz_core::edit::EditConfig::orphan_layer_refs`].
+    pub fn orphan_warnings(&self) -> Vec<String> {
+        let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+        for o in self.edit.orphan_layer_refs() {
+            let site = format!("{} in [{}]", o.key, o.section);
+            match groups.iter_mut().find(|(l, _)| *l == o.layer) {
+                Some((_, sites)) => sites.push(site),
+                None => groups.push((o.layer, vec![site])),
+            }
+        }
+        groups
+            .into_iter()
+            .map(|(layer, sites)| {
+                let shown = sites.len().min(3);
+                let more = sites.len() - shown;
+                let tail = if more > 0 { format!(" (+{more} more)") } else { String::new() };
+                format!(
+                    "\u{26a0} no [{layer}] layer \u{2014} referenced by {}{tail}",
+                    sites[..shown].join(", ")
+                )
+            })
+            .collect()
+    }
+
     /// The value currently bound to `key` in `layer`'s section, if any.
     pub fn current_binding(&self, layer: &str, key: &str) -> Option<String> {
         self.edit

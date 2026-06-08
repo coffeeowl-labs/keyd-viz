@@ -22,6 +22,22 @@ fn corpus_round_trips() {
     assert!(checked >= 2, "expected the example corpus, found {checked} file(s)");
 }
 
+/// The committed corpus is all valid keyd configs, so the orphan-layer detector must
+/// find nothing in it — the precision guard against false alarms (e.g. mistaking a
+/// modifier target or a documented `lettermod(layer, …)` comment for a missing layer).
+#[test]
+fn corpus_has_no_orphan_layer_refs() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "conf") {
+            let text = std::fs::read_to_string(&path).unwrap();
+            let orphans = EditConfig::parse(&text).orphan_layer_refs();
+            assert!(orphans.is_empty(), "false orphan(s) in {}: {orphans:?}", path.display());
+        }
+    }
+}
+
 /// This machine's live configs round-trip too, when present (skips silently on a
 /// box with no /etc/keyd — keeps CI hermetic while catching real-world files locally).
 #[test]

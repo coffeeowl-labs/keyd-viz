@@ -385,6 +385,66 @@ impl EditConfig {
         }
         warns
     }
+
+    /// Bindings that activate a layer this config never defines — keyd rejects such a
+    /// file, so the editor can flag it *before* apply (e.g. you bound `layer(symbols)`
+    /// but haven't created `[symbols]` yet, or deleted a layer something still points
+    /// at). One entry per offending binding, in file order.
+    ///
+    /// Deliberately **high-precision over high-recall**: `keyd check` is the real
+    /// gate at apply time, so a missed orphan is far cheaper than a false alarm on a
+    /// valid config. Only well-known layer activators are scanned, modifier targets
+    /// (keyd's built-in modifier layers) are never flagged, and composite `a+b`
+    /// targets are skipped (their definition rules are subtle) — see [`layer_refs`].
+    pub fn orphan_layer_refs(&self) -> Vec<OrphanRef> {
+        let is_layer = |s: &&Section| {
+            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
+        };
+        let defined: std::collections::HashSet<&str> =
+            self.sections.iter().filter(is_layer).map(|s| s.base_name().trim()).collect();
+
+        let mut out = Vec::new();
+        for s in self.sections.iter().filter(is_layer) {
+            for e in &s.entries {
+                let EntryKind::Binding { key, val: Some(val), .. } = &e.kind else { continue };
+                if let Some(layer) = layer_refs(val) {
+                    if !defined.contains(layer) {
+                        out.push(OrphanRef {
+                            section: s.base_name().trim().to_string(),
+                            key: key.clone(),
+                            layer: layer.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+/// A binding that points at an undefined layer — `key = …layer(`layer`)…` living in
+/// section `[`section`]` (base name). See [`EditConfig::orphan_layer_refs`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrphanRef {
+    pub section: String,
+    pub key: String,
+    pub layer: String,
+}
+
+/// Layer-activating functions whose sole argument is a layer name. The tap/hold family
+/// ([`crate::parser::TAPHOLD`]) also takes a layer as its *first* arg — but only when
+/// that arg isn't a modifier, which [`layer_refs`] guards.
+const LAYER_FNS: [&str; 4] = ["layer", "oneshot", "toggle", "swap"];
+
+/// The layer name a binding value activates via a well-known layer function, or `None`.
+/// Modifier targets (keyd's built-in modifier layers) and composite `a+b` targets are
+/// excluded — both are valid without a matching `[…]` section, so flagging them would
+/// be a false alarm.
+fn layer_refs(val: &str) -> Option<&str> {
+    let (name, args) = crate::parser::parse_fn(val)?;
+    let arg0 = args.first()?.trim();
+    let referenced = LAYER_FNS.contains(&name) || crate::parser::TAPHOLD.contains(&name);
+    (referenced && !crate::parser::is_mod(arg0) && !arg0.contains('+')).then_some(arg0)
 }
 
 /// The §5.1 round-trip gate, run before a file is opened for editing (a `false` sends
@@ -726,5 +786,50 @@ mod tests {
         assert!(!cfg.clear_binding("missing", "h"));
         assert_eq!(cfg.serialize(), src);
         assert!(!cfg.is_dirty());
+    }
+
+    fn orphans(src: &str) -> Vec<(String, String, String)> {
+        EditConfig::parse(src)
+            .orphan_layer_refs()
+            .into_iter()
+            .map(|o| (o.section, o.key, o.layer))
+            .collect()
+    }
+
+    #[test]
+    fn orphan_layer_reference_is_flagged() {
+        let got = orphans("[main]\ncapslock = layer(symbols)\n");
+        assert_eq!(got, vec![("main".into(), "capslock".into(), "symbols".into())]);
+    }
+
+    #[test]
+    fn defined_layer_is_not_an_orphan() {
+        // The reference resolves once the section exists — even modifier-qualified
+        // (`[nav:C]` defines base `nav`).
+        assert!(orphans("[main]\na = layer(nav)\n[nav:C]\nh = left\n").is_empty());
+        assert!(orphans("[main]\na = toggle(nav)\n[nav]\n").is_empty());
+    }
+
+    #[test]
+    fn modifier_target_is_never_an_orphan() {
+        // overload(mod, tap) / layer(mod) target keyd's built-in modifier layers —
+        // valid with no matching section.
+        assert!(orphans("[main]\na = overload(shift, esc)\n").is_empty());
+        assert!(orphans("[main]\na = oneshot(control)\n").is_empty());
+    }
+
+    #[test]
+    fn composite_and_non_layer_values_are_skipped() {
+        // a+b composite targets (subtle definition rules) and plain/non-fn values
+        // never raise a false alarm.
+        assert!(orphans("[main]\na = layer(nav+sym)\n").is_empty());
+        assert!(orphans("[main]\na = esc\nb = C-c\nc = macro(h i)\n").is_empty());
+    }
+
+    #[test]
+    fn taphold_layer_target_is_flagged_but_its_tap_is_not() {
+        // overload(LAYER, tap): only arg0 is a layer; the tap key must not be scanned.
+        let got = orphans("[main]\ncapslock = overload(nav, esc)\n");
+        assert_eq!(got, vec![("main".into(), "capslock".into(), "nav".into())]);
     }
 }

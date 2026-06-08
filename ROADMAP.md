@@ -978,3 +978,26 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   a binding, remove it". (Internal `make_transparent` callback name kept.) **Remaining
   for E2**: layers/chords/`[global]`,
   orphan warnings, create-config flow, one-level include closure scan (deferred, §5.3).
+- *(Phase 6 E2 — orphan-layer warnings, 2026-06-08)* Flag bindings that activate a layer
+  the config never defines (e.g. you bound `layer(symbols)` but haven't created
+  `[symbols]`, or deleted a layer something still points at) — keyd rejects such a file,
+  so the editor catches it *before* apply instead of waiting for the `keyd check` failure.
+  **Core** (`EditConfig::orphan_layer_refs` + the `layer_refs` extractor): scans every
+  layer-bearing section's bindings, reuses the one grammar source (`parser::{parse_fn,
+  TAPHOLD, is_mod}`), and resolves references against defined section *base* names
+  (`[nav:C]` defines `nav`). Deliberately **high-precision over high-recall** — `keyd
+  check` is the real gate, so a missed orphan is far cheaper than a false alarm on a valid
+  config: only well-known activators (`layer`/`oneshot`/`toggle`/`swap` + the tap/hold
+  family's first arg) are scanned, modifier targets (keyd's built-in modifier layers,
+  e.g. `overload(shift,esc)`) are never flagged, and composite `a+b` targets are skipped
+  (subtle definition rules). **App**: `EditSession::orphan_warnings` groups by missing
+  layer and names where it's referenced (capped); a `refresh_warnings` helper repushes
+  after open + every mutating edit, so creating the layer or dropping the reference clears
+  it live; surfaced as an amber config-level box above the section chooser (shown
+  regardless of key selection). **Tests**: 5 unit cases (flagged/defined/modifier/
+  composite/tap-arg-not-scanned) + a corpus guard asserting *zero* orphans across the
+  committed example configs (the false-positive net — catches e.g. a documented
+  `lettermod(layer, …)` comment being mistaken for a reference). Workspace green, clippy
+  clean. **Remaining for E2**: layers/chords/`[global]`, create-config flow, one-level
+  include closure scan (deferred, §5.3). *(When section-creation lands, its handler must
+  also call `refresh_warnings`.)*

@@ -753,6 +753,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_edit_banner(banner.into());
                     win.set_apply_available(apply_ok);
                     win.set_apply_hint(apply_hint.into());
+                    refresh_warnings(&win, &s);
                     reset_apply_ui(&win);
                     *session.borrow_mut() = Some(s);
                     win.set_edit_mode(true);
@@ -825,6 +826,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 Ok(()) => {
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
                     seed_tap_hold(&win, s, &layer, &phys); // keep the tap/hold panel in sync
+                    refresh_warnings(&win, s); // a binding change can add/clear an orphan
                     drop(sb);
                     win.set_edit_current(value.clone().into());
                     win.set_edit_value(value.into());
@@ -860,6 +862,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 Ok(()) => {
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
                     seed_tap_hold(&win, s, &layer, &phys); // keep the tap/hold panel in sync
+                    refresh_warnings(&win, s); // a binding change can add/clear an orphan
                     drop(sb);
                     win.set_edit_current("".into());
                     win.set_edit_value("".into());
@@ -906,6 +909,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     let cur = s.current_binding(&layer, &phys).unwrap_or_default();
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
                     seed_tap_hold(&win, s, &layer, &phys);
+                    refresh_warnings(&win, s); // a tap/hold can target a missing layer
                     drop(sb);
                     win.set_edit_current(cur.clone().into());
                     win.set_edit_value(cur.into());
@@ -1292,6 +1296,13 @@ fn hold_layer_choices(s: &editing::EditSession) -> Vec<slint::SharedString> {
 /// into hold-target + tap when it is a tap/hold, otherwise default the tap to the
 /// physical key (a sensible start for a new dual-function key) and leave the hold
 /// target unset until the user picks one.
+/// Push the session's orphan-layer warnings to the panel. Called on open and after
+/// every mutating edit, so creating a missing layer (or dropping the reference) clears
+/// the warning live.
+fn refresh_warnings(win: &MainWindow, s: &editing::EditSession) {
+    win.set_edit_warnings(s.orphan_warnings().join("\n").into());
+}
+
 fn seed_tap_hold(win: &MainWindow, s: &editing::EditSession, layer: &str, phys: &str) {
     match s.current_tap_hold(layer, phys) {
         Some(th) => {

@@ -536,6 +536,7 @@ export component MainWindow inherits Window {
     in-out property <string> edit_value;     // the value field (Rust seeds it on selection)
     in property <bool> edit_dirty;           // session has unsaved changes
     in property <string> edit_banner;        // affected-keyboards line / view-only reason
+    in property <string> edit_warnings;      // orphan-layer warnings (one per line); "" = clean
     in property <bool> capture_armed;        // next live keypress becomes the value
     in property <string> draft_info;         // after save: draft path + diff + install steps
     // Guard against silently dropping unsaved edits: leaving edit mode (done / switch
@@ -860,6 +861,27 @@ export component MainWindow inherits Window {
                             font-size: 12px;
                             font-weight: 700;
                             vertical-alignment: center;
+                        }
+                    }
+
+                    // orphan-layer warnings: bindings that activate a layer this config
+                    // never defines (keyd would reject the file). Config-level, so shown
+                    // regardless of selection; recomputed after every edit.
+                    if root.edit_warnings != "": Rectangle {
+                        background: #241d10;
+                        border-color: #f0b429;
+                        border-width: 1px;
+                        border-radius: 8px;
+                        height: owarn.preferred-height + 14px;
+                        owarn := Text {
+                            x: 9px;
+                            y: 7px;
+                            width: parent.width - 18px;
+                            text: root.edit_warnings;
+                            color: #f0b429;
+                            font-size: 12px;
+                            font-family: "JetBrains Mono";
+                            wrap: word-wrap;
                         }
                     }
 
