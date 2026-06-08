@@ -141,6 +141,37 @@ impl EditSession {
         Ok(())
     }
 
+    /// Create a new empty layer `[name]` and return its canonical (trimmed) name so
+    /// the caller can select it. `Err` names why it was rejected (empty, bad chars,
+    /// reserved special, or a duplicate base name). See
+    /// [`keydviz_core::edit::EditConfig::add_layer`].
+    pub fn add_layer(&mut self, name: &str) -> Result<String, String> {
+        self.edit.add_layer(name)?;
+        Ok(name.trim().to_string())
+    }
+
+    /// Delete the layer `base` (every section that defines it). `Err` when no such
+    /// layer exists. Bindings elsewhere that still point at it become orphans (the
+    /// warning panel surfaces them); see [`Self::references_to`] for the pre-delete
+    /// heads-up.
+    pub fn remove_layer(&mut self, base: &str) -> Result<(), String> {
+        if !self.edit.remove_layer(base) {
+            return Err(format!("this config has no [{base}] layer"));
+        }
+        Ok(())
+    }
+
+    /// Where `layer` is still referenced — `"<key> in [<section>]"` per offending
+    /// binding — so the UI can warn before a delete drops it. Empty when nothing
+    /// points at it (a clean delete).
+    pub fn references_to(&self, layer: &str) -> Vec<String> {
+        self.edit
+            .references_to(layer)
+            .into_iter()
+            .map(|(section, key)| format!("{key} in [{section}]"))
+            .collect()
+    }
+
     /// The semantic model for re-rendering the boards — same derivation the
     /// viewer uses, so the preview is exactly what the viewer would show.
     pub fn config(&self) -> Config {
@@ -514,6 +545,51 @@ mod tests {
         std::fs::write(&p, "[ids]\n*\n\n[nav]\nh = left\n").unwrap();
         let s2 = EditSession::open(&p).unwrap();
         assert_eq!(s2.editable_sections(), vec!["nav".to_string()]);
+    }
+
+    #[test]
+    fn add_layer_then_edit_it() {
+        let td = TempDir::new("addlayer");
+        let mut s = session(&td);
+        // SRC has [ids], [main], [nav]; create a fresh [sym].
+        assert_eq!(s.add_layer("sym").unwrap(), "sym");
+        assert!(s.dirty());
+        // It joins the editable chooser and accepts a binding.
+        assert!(s.editable_sections().contains(&"sym".to_string()));
+        s.set_binding("sym", "a", "b").unwrap();
+        assert_eq!(s.current_binding("sym", "a").as_deref(), Some("b"));
+        // Bad names and duplicates surface a reason, not a panic.
+        assert!(s.add_layer("sym").unwrap_err().contains("exists"));
+        assert!(s.add_layer("a b").unwrap_err().contains("letters"));
+    }
+
+    #[test]
+    fn add_layer_clears_the_orphan_warning_live() {
+        let td = TempDir::new("addlayer-orphan");
+        let p = td.0.join("test.conf");
+        std::fs::write(&p, "[ids]\n*\n[main]\ncapslock = layer(sym)\n").unwrap();
+        let mut s = EditSession::open(&p).unwrap();
+        assert_eq!(s.orphan_warnings().len(), 1);
+        s.add_layer("sym").unwrap();
+        // Defining the layer resolves the dangling reference.
+        assert!(s.orphan_warnings().is_empty());
+    }
+
+    #[test]
+    fn remove_layer_and_its_references() {
+        let td = TempDir::new("rmlayer");
+        let p = td.0.join("test.conf");
+        std::fs::write(&p, "[ids]\n*\n[main]\ncapslock = layer(nav)\n[nav]\nh = left\n").unwrap();
+        let mut s = EditSession::open(&p).unwrap();
+        // Before deleting: the heads-up names where nav is still used.
+        assert_eq!(s.references_to("nav"), vec!["capslock in [main]".to_string()]);
+        s.remove_layer("nav").unwrap();
+        assert!(s.dirty());
+        assert!(!s.editable_sections().contains(&"nav".to_string()));
+        // The now-dangling layer(nav) becomes an orphan warning (honest, not silent).
+        assert_eq!(s.orphan_warnings().len(), 1);
+        // Deleting a layer that doesn't exist is a named error.
+        assert!(s.remove_layer("nope").unwrap_err().contains("[nope]"));
     }
 
     #[test]

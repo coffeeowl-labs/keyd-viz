@@ -238,6 +238,11 @@ impl Section {
 pub struct EditConfig {
     pub preamble: Vec<Entry>,
     pub sections: Vec<Section>,
+    /// Set when a whole **section** was added or removed. Binding edits flag the
+    /// surviving entry, and a binding removal flags the owning [`Section::dirty`] —
+    /// but creating or deleting a section leaves no per-entry/per-section flag to
+    /// catch, so structural changes are recorded here and [`Self::is_dirty`] ORs it in.
+    pub dirty: bool,
 }
 
 impl EditConfig {
@@ -353,12 +358,144 @@ impl EditConfig {
         removed
     }
 
-    /// True once any binding line was edited, added, or removed this session.
-    /// Edits/adds flag the surviving entry; a removal has no entry to flag, so it
-    /// sets the owning section's `dirty` — both are ORed in here.
+    /// Create a new empty layer section `[name]` at the end of the file. `name` is a
+    /// *base* layer name (no qualifier/composite) — `Err` names why it was rejected:
+    /// empty, an illegal character, a reserved special (`ids`/`global`/`aliases`), or
+    /// a base name that already exists (a duplicate would silently merge into the
+    /// existing layer, not the fresh one the user asked for). The header lands after a
+    /// blank-line separator in the file's own line-ending style, preserving a missing
+    /// final newline. Marks the config dirty.
+    pub fn add_layer(&mut self, name: &str) -> Result<(), String> {
+        let n = name.trim();
+        if n.is_empty() {
+            return Err("layer name can't be empty".to_string());
+        }
+        if !n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+            return Err("layer name: use letters, digits, '_' or '-'".to_string());
+        }
+        if matches!(n, "ids" | "global" | "aliases") {
+            return Err(format!("[{n}] is a reserved keyd section, not a layer"));
+        }
+        if self.sections.iter().any(|s| s.base_name().trim() == n) {
+            return Err(format!("[{n}] already exists"));
+        }
+
+        let style = self.file_eol();
+        // Preserve a file that had no trailing newline: terminate the old last line
+        // (so it doesn't glue to what we append) and let the new header be the
+        // unterminated final line.
+        let missing_final = matches!(self.last_eol_mut(), Some(e) if *e == Eol::None);
+        if missing_final {
+            if let Some(e) = self.last_eol_mut() {
+                *e = style;
+            }
+        }
+        // A blank separator before the header, attached to the preceding container
+        // (blanks belong to whatever line precedes them in this model). Skipped for an
+        // otherwise-empty file (nothing to separate from) or one that already ends in a
+        // blank line (don't stack a second one).
+        let non_empty = !self.sections.is_empty() || !self.preamble.is_empty();
+        if non_empty && !self.last_is_blank() {
+            let blank = Entry { raw: String::new(), eol: style, kind: EntryKind::Blank };
+            match self.sections.last_mut() {
+                Some(s) => s.entries.push(blank),
+                None => self.preamble.push(blank),
+            }
+        }
+        let header_eol = if missing_final { Eol::None } else { style };
+        self.sections.push(Section {
+            header: Entry { raw: format!("[{n}]"), eol: header_eol, kind: EntryKind::Header },
+            name: n.to_string(),
+            kind: SectionKind::Layer,
+            entries: Vec::new(),
+            dirty: false,
+        });
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Delete a layer: drop **every** layer-bearing section whose base name is `base`
+    /// (`[nav]` *and* `[nav:C]` — they both define the "nav" layer). Composite layers
+    /// (`[nav+sym]`) are a different layer and are left alone. Surrounding blank lines
+    /// and comments are kept (we don't guess which "belonged" to the layer). Bindings
+    /// elsewhere that still point at `base` become orphans — surfaced by
+    /// [`Self::orphan_layer_refs`], not silently rewritten. Marks the config dirty.
+    /// Returns whether anything was removed.
+    pub fn remove_layer(&mut self, base: &str) -> bool {
+        let before = self.sections.len();
+        self.sections.retain(|s| {
+            !(matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
+                && s.base_name().trim() == base)
+        });
+        let removed = self.sections.len() != before;
+        self.dirty |= removed;
+        removed
+    }
+
+    /// Every binding that activates `layer` via a well-known layer function — the
+    /// inverse of [`Self::orphan_layer_refs`]. Used to warn before deleting a layer
+    /// ("N bindings still point here"). One `(section-base, key)` per offending
+    /// binding, in file order. Same precision rules as [`layer_refs`].
+    pub fn references_to(&self, layer: &str) -> Vec<(String, String)> {
+        let is_layer = |s: &&Section| {
+            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
+        };
+        let mut out = Vec::new();
+        for s in self.sections.iter().filter(is_layer) {
+            for e in &s.entries {
+                let EntryKind::Binding { key, val: Some(val), .. } = &e.kind else { continue };
+                if layer_refs(val) == Some(layer) {
+                    out.push((s.base_name().trim().to_string(), key.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    /// The file's line-ending style (`Lf`/`CrLf`), inferred from the first terminated
+    /// line; `Lf` for an empty file or one that is a single unterminated line.
+    fn file_eol(&self) -> Eol {
+        self.preamble
+            .iter()
+            .map(|e| e.eol)
+            .chain(self.sections.iter().flat_map(|s| {
+                std::iter::once(s.header.eol).chain(s.entries.iter().map(|e| e.eol))
+            }))
+            .find(|e| *e != Eol::None)
+            .unwrap_or(Eol::Lf)
+    }
+
+    /// Whether the file's last line is a blank line — so [`Self::add_layer`] doesn't
+    /// stack a second separator on a file that already ends in one. A section with no
+    /// entries ends in its (non-blank) header, so this is `false` there.
+    fn last_is_blank(&self) -> bool {
+        let last = match self.sections.last() {
+            Some(s) => s.entries.last(),
+            None => self.preamble.last(),
+        };
+        matches!(last, Some(e) if matches!(e.kind, EntryKind::Blank))
+    }
+
+    /// The EOL of the file's last line (the last entry of the last section, or its
+    /// header if empty, else the last preamble line), for trailing-newline fixups.
+    fn last_eol_mut(&mut self) -> Option<&mut Eol> {
+        if let Some(s) = self.sections.last_mut() {
+            return Some(match s.entries.last_mut() {
+                Some(e) => &mut e.eol,
+                None => &mut s.header.eol,
+            });
+        }
+        self.preamble.last_mut().map(|e| &mut e.eol)
+    }
+
+    /// True once any binding line was edited, added, or removed this session, or a
+    /// whole section was created/deleted. Edits/adds flag the surviving entry; a
+    /// binding removal sets the owning section's `dirty`; a section add/remove sets
+    /// the config-level [`Self::dirty`] — all three are ORed in here.
     pub fn is_dirty(&self) -> bool {
         let dirty = |e: &Entry| matches!(e.kind, EntryKind::Binding { dirty: true, .. });
-        self.preamble.iter().any(dirty)
+        self.dirty
+            || self.preamble.iter().any(dirty)
             || self
                 .sections
                 .iter()
@@ -831,5 +968,106 @@ mod tests {
         // overload(LAYER, tap): only arg0 is a layer; the tap key must not be scanned.
         let got = orphans("[main]\ncapslock = overload(nav, esc)\n");
         assert_eq!(got, vec![("main".into(), "capslock".into(), "nav".into())]);
+    }
+
+    // --------------------------------------------------------------- add/remove layer
+    #[test]
+    fn add_layer_appends_a_blank_then_header() {
+        let mut cfg = EditConfig::parse("[ids]\n*\n\n[main]\na = b\n");
+        cfg.add_layer("nav").unwrap();
+        // A blank separator, then the new empty section, in the file's LF style.
+        assert_eq!(cfg.serialize(), "[ids]\n*\n\n[main]\na = b\n\n[nav]\n");
+        assert!(cfg.is_dirty());
+        // It's a real editable target now (set_or_add_binding lands in it).
+        cfg.target_section_mut("nav").unwrap().set_or_add_binding("h", "left");
+        assert_eq!(cfg.serialize(), "[ids]\n*\n\n[main]\na = b\n\n[nav]\nh = left\n");
+    }
+
+    #[test]
+    fn add_layer_into_empty_file_has_no_separator() {
+        let mut cfg = EditConfig::parse("");
+        cfg.add_layer("nav").unwrap();
+        assert_eq!(cfg.serialize(), "[nav]\n");
+    }
+
+    #[test]
+    fn add_layer_does_not_stack_a_second_blank() {
+        // File already ends in a blank line: the new header reuses it, no double gap.
+        let mut cfg = EditConfig::parse("[main]\na = b\n\n");
+        cfg.add_layer("nav").unwrap();
+        assert_eq!(cfg.serialize(), "[main]\na = b\n\n[nav]\n");
+    }
+
+    #[test]
+    fn add_layer_preserves_crlf_and_missing_final_newline() {
+        // CRLF style is inferred and the missing final newline is preserved: the old
+        // last line gains its terminator, the new header becomes the unterminated tail.
+        let mut cfg = EditConfig::parse("[main]\r\na = b");
+        cfg.add_layer("nav").unwrap();
+        assert_eq!(cfg.serialize(), "[main]\r\na = b\r\n\r\n[nav]");
+    }
+
+    #[test]
+    fn add_layer_rejects_bad_names_and_duplicates() {
+        let mut cfg = EditConfig::parse("[ids]\n*\n[main]\na = b\n[nav]\n");
+        assert!(cfg.add_layer("").unwrap_err().contains("empty"));
+        assert!(cfg.add_layer("  ").unwrap_err().contains("empty"));
+        assert!(cfg.add_layer("a b").unwrap_err().contains("letters"));
+        assert!(cfg.add_layer("a:b").unwrap_err().contains("letters"));
+        assert!(cfg.add_layer("a+b").unwrap_err().contains("letters"));
+        assert!(cfg.add_layer("ids").unwrap_err().contains("reserved"));
+        assert!(cfg.add_layer("nav").unwrap_err().contains("exists"));
+        // A modifier-qualified section already defines the base, so it's a duplicate.
+        cfg.add_layer("sym").unwrap();
+        // Whitespace is trimmed before all checks.
+        assert!(cfg.add_layer("  sym  ").unwrap_err().contains("exists"));
+        // Nothing above mutated the file except the one successful `sym`.
+        assert!(cfg.section("sym").is_some());
+    }
+
+    #[test]
+    fn add_layer_base_dup_check_spans_qualified_sections() {
+        let mut cfg = EditConfig::parse("[main]\na = b\n[nav:C]\nh = left\n");
+        // [nav:C] defines base `nav`; creating `[nav]` would silently merge.
+        assert!(cfg.add_layer("nav").unwrap_err().contains("exists"));
+    }
+
+    #[test]
+    fn remove_layer_drops_all_sections_for_the_base() {
+        let src = "[ids]\n*\n\n[main]\na = layer(nav)\n\n[nav]\nh = left\n[nav:C]\nj = down\n";
+        let mut cfg = EditConfig::parse(src);
+        assert!(cfg.remove_layer("nav"));
+        // Both [nav] and [nav:C] go; the dangling layer(nav) ref is left for the
+        // orphan check to surface, not silently rewritten.
+        assert_eq!(cfg.serialize(), "[ids]\n*\n\n[main]\na = layer(nav)\n\n");
+        assert!(cfg.is_dirty());
+        assert_eq!(cfg.orphan_layer_refs().len(), 1);
+    }
+
+    #[test]
+    fn remove_layer_leaves_composites_and_missing_is_noop() {
+        let mut cfg = EditConfig::parse("[main]\na = b\n[nav+sym]\nx = y\n");
+        // base "nav" must not take the composite [nav+sym] with it.
+        assert!(!cfg.remove_layer("nav"));
+        assert!(!cfg.is_dirty());
+        assert_eq!(cfg.serialize(), "[main]\na = b\n[nav+sym]\nx = y\n");
+    }
+
+    #[test]
+    fn references_to_finds_every_activator() {
+        let src = "[main]\na = layer(nav)\nb = oneshot(nav)\nc = overload(nav, esc)\n\
+                   d = esc\n[fn]\ng = toggle(nav)\n[nav]\nh = left\n";
+        let cfg = EditConfig::parse(src);
+        let refs = cfg.references_to("nav");
+        assert_eq!(
+            refs,
+            vec![
+                ("main".into(), "a".into()),
+                ("main".into(), "b".into()),
+                ("main".into(), "c".into()),
+                ("fn".into(), "g".into()),
+            ]
+        );
+        assert!(cfg.references_to("sym").is_empty());
     }
 }

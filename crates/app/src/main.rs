@@ -750,6 +750,10 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_edit_dirty(false);
                     win.set_draft_info("".into());
                     win.set_capture_armed(false);
+                    win.set_new_layer_open(false);
+                    win.set_new_layer_name("".into());
+                    win.set_delete_prompt("".into());
+                    win.set_delete_detail("".into());
                     win.set_edit_banner(banner.into());
                     win.set_apply_available(apply_ok);
                     win.set_apply_hint(apply_hint.into());
@@ -789,6 +793,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let session = session.clone();
         win.on_pick_edit_layer(move |name| {
             let Some(win) = weak.upgrade() else { return };
+            // Changing the focused section dismisses any pending delete confirm — it
+            // named the previously-selected layer, which the user just moved off of.
+            win.set_delete_prompt("".into());
+            win.set_delete_detail("".into());
             win.set_edit_layer(name.clone());
             let phys = win.get_selected_phys().to_string();
             if !phys.is_empty() {
@@ -800,6 +808,139 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
             }
             render_board(&win);
+        });
+    }
+
+    // Create a new empty layer and select it: the section chooser, the tap/hold
+    // "when held" targets, and the orphan-warning panel all refresh, so binding a
+    // key into it (or pointing a layer() at it) works immediately.
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        win.on_create_layer(move |name| {
+            let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
+            let mut sb = session.borrow_mut();
+            let Some(s) = sb.as_mut() else { return };
+            match s.add_layer(&name) {
+                Ok(created) => {
+                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    let layers = edit_layer_choices(s);
+                    let holds = hold_layer_choices(s);
+                    refresh_warnings(&win, s); // defining a layer can clear an orphan
+                    drop(sb);
+                    win.set_edit_layers(model(layers));
+                    win.set_hold_layers(model(holds));
+                    win.set_edit_layer(created.into());
+                    win.set_selected_phys("".into());
+                    win.set_edit_current("".into());
+                    win.set_edit_value("".into());
+                    win.set_new_layer_open(false);
+                    win.set_new_layer_name("".into());
+                    win.set_edit_dirty(dirty);
+                    win.set_capture_armed(false);
+                    refresh_preview(&win, &srcs, &path, cfg); // shows the new empty board
+                }
+                Err(e) => {
+                    drop(sb);
+                    win.set_edit_banner(format!("\u{26a0} {e}").into());
+                }
+            }
+        });
+    }
+
+    // Request a layer delete → raise the confirm bar, naming any bindings that would
+    // be left dangling so the choice is informed (the actual delete is confirm-gated).
+    {
+        let weak = win.as_weak();
+        let session = session.clone();
+        win.on_delete_layer(move |name| {
+            let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
+            let sb = session.borrow();
+            let Some(s) = sb.as_ref() else { return };
+            let refs = s.references_to(&name);
+            let detail = if refs.is_empty() {
+                format!("\u{26a0} Delete [{name}]? The layer and its bindings are removed.")
+            } else {
+                let shown = refs.len().min(3);
+                let more = refs.len() - shown;
+                let tail =
+                    if more > 0 { format!(" (+{more} more)") } else { String::new() };
+                format!(
+                    "\u{26a0} Delete [{name}]? {} binding(s) still point here ({}{tail}) \
+                     \u{2014} they'll dangle until you fix them.",
+                    refs.len(),
+                    refs[..shown].join(", "),
+                )
+            };
+            drop(sb);
+            win.set_delete_detail(detail.into());
+            win.set_delete_prompt(name);
+        });
+    }
+
+    // Confirm the pending layer delete: drop the section(s), reselect a surviving
+    // layer, and refresh the chooser / hold-targets / warnings / preview.
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        win.on_confirm_delete_layer(move || {
+            let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
+            let name = win.get_delete_prompt().to_string();
+            if name.is_empty() {
+                return;
+            }
+            let mut sb = session.borrow_mut();
+            let Some(s) = sb.as_mut() else { return };
+            match s.remove_layer(&name) {
+                Ok(()) => {
+                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    let layers = edit_layer_choices(s);
+                    let holds = hold_layer_choices(s);
+                    // Reselect the first surviving section (none → "" base board).
+                    let next =
+                        layers.first().map(|c| c.name.to_string()).unwrap_or_default();
+                    refresh_warnings(&win, s); // a now-dangling ref becomes an orphan
+                    drop(sb);
+                    win.set_edit_layers(model(layers));
+                    win.set_hold_layers(model(holds));
+                    win.set_edit_layer(next.into());
+                    win.set_selected_phys("".into());
+                    win.set_edit_current("".into());
+                    win.set_edit_value("".into());
+                    win.set_edit_dirty(dirty);
+                    win.set_capture_armed(false);
+                    win.set_delete_prompt("".into());
+                    win.set_delete_detail("".into());
+                    refresh_preview(&win, &srcs, &path, cfg);
+                }
+                Err(e) => {
+                    drop(sb);
+                    win.set_delete_prompt("".into());
+                    win.set_delete_detail("".into());
+                    win.set_edit_banner(format!("\u{26a0} {e}").into());
+                }
+            }
+        });
+    }
+
+    // Dismiss the delete confirm without deleting.
+    {
+        let weak = win.as_weak();
+        win.on_cancel_delete_layer(move || {
+            let Some(win) = weak.upgrade() else { return };
+            win.set_delete_prompt("".into());
+            win.set_delete_detail("".into());
         });
     }
 
@@ -1385,6 +1526,10 @@ fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &Shar
     win.set_edit_dirty(false);
     win.set_discard_prompt(false);
     win.set_pending_kbd(-1);
+    win.set_new_layer_open(false);
+    win.set_new_layer_name("".into());
+    win.set_delete_prompt("".into());
+    win.set_delete_detail("".into());
     win.set_apply_available(false);
     win.set_apply_hint("".into());
     reset_apply_ui(win);

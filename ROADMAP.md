@@ -1001,3 +1001,28 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   clean. **Remaining for E2**: layers/chords/`[global]`, create-config flow, one-level
   include closure scan (deferred, §5.3). *(When section-creation lands, its handler must
   also call `refresh_warnings`.)*
+- *(Phase 6 E2 — layer create + delete, 2026-06-08)* Visual layer management — the
+  natural complement to the orphan-layer warnings: bind `layer(symbols)`, get the amber
+  warning, create `[symbols]` right there and it clears live. **Rename is deliberately
+  deferred** to its own slice (a useful rename must rewrite *every* reference or the layer
+  instantly orphans — a distinct, riskier chunk). **Core** (`edit.rs`): `add_layer`
+  (validates name — non-empty, `[A-Za-z0-9_-]`, not a reserved special, not a duplicate
+  *base* name so `[nav:C]` blocks `[nav]`; appends `[name]` after a blank separator in the
+  file's own EOL style, preserving CRLF and a missing final newline, and never stacking a
+  second blank), `remove_layer` (drops every section for the base — `[nav]` *and* `[nav:C]`
+  — but leaves composites `[nav+sym]`; dangling refs are surfaced as orphans, not silently
+  rewritten), and `references_to` (the inverse of `orphan_layer_refs`, for the pre-delete
+  heads-up). Whole-section add/remove isn't caught by the per-entry/per-section dirty flags,
+  so a config-level `dirty` flag is ORed into `is_dirty()`. **App** (`editing.rs`):
+  `EditSession::{add_layer, remove_layer, references_to}`. **UI**: a "+ layer" inline name
+  field and a "✕ delete" chip on the section chooser; delete is gated by a confirm bar
+  (mirrors the discard guard) that names any bindings left dangling. Each op refreshes the
+  chooser / tap-hold targets / warnings / preview and reselects sensibly; created empty
+  layers render (board built from the section header alone). **Critic review (2 angles,
+  correctness + UX)**: correctness clean; UX flagged a stale-confirm-bar contradiction
+  (create / re-pick a layer while a delete confirm was up) → fixed by hiding the
+  +layer/delete chips while the confirm is pending and clearing it on section re-pick.
+  Deleting `[main]` is intentionally allowed (keyd accepts no-`[main]` configs; the confirm
+  warns) rather than special-cased. Workspace 217 tests green, clippy clean; viewer
+  unaffected. **Remaining for E2**: layer **rename**, chords/`[global]`, create-config flow,
+  one-level include closure scan (deferred, §5.3).

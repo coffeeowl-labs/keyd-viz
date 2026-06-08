@@ -549,6 +549,15 @@ export component MainWindow inherits Window {
     callback toggle_edit();
     callback select_key(string);
     callback pick_edit_layer(string);
+    // ---- layer create / delete (E2) ----
+    in-out property <bool> new_layer_open: false;   // the inline "new layer" name field is showing
+    in-out property <string> new_layer_name: "";    // name being typed for a new layer
+    in-out property <string> delete_prompt: "";      // layer pending delete-confirm ("" = none)
+    in property <string> delete_detail: "";          // confirm-bar detail (count + dangling refs)
+    callback create_layer(string);          // create a new empty layer and select it
+    callback delete_layer(string);          // request delete of a layer → opens the confirm bar
+    callback confirm_delete_layer();        // delete the layer named in delete_prompt
+    callback cancel_delete_layer();         // dismiss the delete confirm
     callback apply_binding(string);          // typed / palette / captured value for the selection
     callback make_transparent();             // clear the selection's binding → falls through to base
     callback arm_capture();
@@ -885,8 +894,49 @@ export component MainWindow inherits Window {
                         }
                     }
 
+                    // delete-layer confirm: deleting a layer removes the section and all
+                    // its bindings (and may leave dangling references) — so it's gated by
+                    // an explicit confirm bar, like the discard guard.
+                    if root.delete_prompt != "": Rectangle {
+                        height: delbar.preferred-height + 12px;
+                        border-radius: 8px;
+                        background: #2a1d1d;
+                        border-width: 1px;
+                        border-color: #e5534b;
+                        delbar := HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 10px;
+                            Text {
+                                text: root.delete_detail;
+                                color: #ff8b82;
+                                font-size: 12px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                wrap: word-wrap;
+                            }
+                            IconButton {
+                                wide: true;
+                                text: "delete";
+                                clicked => {
+                                    root.confirm_delete_layer();
+                                }
+                            }
+                            IconButton {
+                                wide: true;
+                                text: "keep";
+                                active: true;
+                                clicked => {
+                                    root.cancel_delete_layer();
+                                }
+                            }
+                        }
+                    }
+
                     // section chooser: which file section the edit lands in. Picking one
                     // also shows that layer's board (live morphing is frozen while editing).
+                    // The "+ layer" / "delete" chips create and remove layer sections.
                     HorizontalLayout {
                         spacing: 6px;
                         alignment: start;
@@ -917,6 +967,97 @@ export component MainWindow inherits Window {
                                 font-size: 12px;
                                 font-weight: sel ? 700 : 400;
                                 font-family: "JetBrains Mono";
+                            }
+                        }
+                        // + layer: open the inline name field below the chooser. Hidden
+                        // while a delete confirm is pending (resolve that decision first).
+                        if !root.new_layer_open && root.delete_prompt == "": Rectangle {
+                            width: addl.preferred-width + 16px;
+                            height: addl.preferred-height + 8px;
+                            border-radius: 7px;
+                            background: addlta.has-hover ? #16341f : #131a14;
+                            border-width: 1px;
+                            border-color: #2f5d3a;
+                            addlta := TouchArea {
+                                clicked => {
+                                    root.new_layer_name = "";
+                                    root.new_layer_open = true;
+                                }
+                            }
+                            addl := Text {
+                                x: 8px;
+                                y: 4px;
+                                text: "+ layer";
+                                color: #3ddc84;
+                                font-size: 12px;
+                                font-weight: 700;
+                                font-family: "JetBrains Mono";
+                            }
+                        }
+                        // delete the selected layer (confirm-gated). Hidden once the
+                        // confirm bar is up, so it can't re-target a different layer.
+                        if root.edit_layer != "" && !root.new_layer_open && root.delete_prompt == "": Rectangle {
+                            width: dell.preferred-width + 16px;
+                            height: dell.preferred-height + 8px;
+                            border-radius: 7px;
+                            background: dellta.has-hover ? #2a1717 : #1a1212;
+                            border-width: 1px;
+                            border-color: #5d2f2f;
+                            dellta := TouchArea {
+                                clicked => {
+                                    root.delete_layer(root.edit_layer);
+                                }
+                            }
+                            dell := Text {
+                                x: 8px;
+                                y: 4px;
+                                text: "\u{2715} delete";
+                                color: #ff8b82;
+                                font-size: 12px;
+                                font-weight: 700;
+                                font-family: "JetBrains Mono";
+                            }
+                        }
+                    }
+
+                    // new-layer name field: shown after "+ layer"; create adds an empty
+                    // [name] section and selects it (then bind keys / point a layer() at it).
+                    if root.new_layer_open: HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Text {
+                            text: "new layer:";
+                            color: #7d8694;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                        LineEdit {
+                            width: 180px;
+                            height: 28px;
+                            font-size: 13px;
+                            placeholder-text: "name (e.g. symbols)";
+                            text <=> root.new_layer_name;
+                            init => {
+                                self.focus();
+                            }
+                            accepted(t) => {
+                                root.create_layer(t);
+                            }
+                        }
+                        IconButton {
+                            wide: true;
+                            text: "create";
+                            active: root.new_layer_name != "";
+                            clicked => {
+                                root.create_layer(root.new_layer_name);
+                            }
+                        }
+                        IconButton {
+                            wide: true;
+                            text: "cancel";
+                            clicked => {
+                                root.new_layer_open = false;
+                                root.new_layer_name = "";
                             }
                         }
                     }
