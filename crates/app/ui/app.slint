@@ -365,6 +365,11 @@ export struct EditLayer {
 export component ApplyDialog inherits Window {
     title: "keyd-viz — does your keyboard work?";
     background: #0c0f14;
+    // Fixed width, height auto-fit to content (same auto-fit trick MainWindow
+    // uses): the window must drive its own size — sizing a child doesn't size the
+    // window, so without this it opens at Slint's default minimum width.
+    width: 520px;
+    height: dlg.preferred-height;
     // Focus the test field the moment the window appears, so the user can just
     // start typing to verify the remap.
     forward-focus: test_box;
@@ -374,16 +379,16 @@ export component ApplyDialog inherits Window {
     callback keep();
     callback revert();
 
-    VerticalLayout {
+    dlg := VerticalLayout {
         padding: 16px;
         spacing: 10px;
-        width: 460px;
 
         Text {
             text: "Your change is live. Test it, then keep or revert.";
             color: #e6e6e6;
             font-size: 15px;
             font-weight: 700;
+            wrap: word-wrap;
         }
         if root.change_summary != "": Rectangle {
             background: #11151c;
@@ -408,6 +413,7 @@ export component ApplyDialog inherits Window {
             text: "Type here to test your keyboard:";
             color: #7d8694;
             font-size: 12px;
+            wrap: word-wrap;
         }
         // The throwaway test field — its content is never read; it exists purely
         // so the user can feel the remapped keys.
@@ -458,11 +464,13 @@ export component ApplyDialog inherits Window {
             color: #f0b429;
             font-size: 12px;
             font-weight: 700;
+            wrap: word-wrap;
         }
         Text {
             text: "anything but KEEP reverts \u{2014} timeout, revert, or closing this window";
             color: #7d8694;
             font-size: 11px;
+            wrap: word-wrap;
         }
     }
 }
