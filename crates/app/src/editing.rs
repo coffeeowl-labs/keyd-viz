@@ -16,7 +16,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use keydviz_core::edit::{EditConfig, SectionKind};
-use keydviz_core::{parser, round_trips, Config};
+use keydviz_core::{parser, round_trips, Config, TapHold};
 
 /// Why a config can't be opened for editing (it remains viewable as before).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +102,38 @@ impl EditSession {
             return Err(format!("this config has no [{layer}] section"));
         }
         self.edit.clear_binding(layer, key);
+        Ok(())
+    }
+
+    /// The selected key's current binding as a decomposed tap/hold, if it is one
+    /// of the editable tap/hold forms — so the panel can show "tap / hold" slots
+    /// instead of the raw `overload(...)` text. `None` when the key is unbound or
+    /// bound to something that isn't a tap/hold (plain remap, macro, etc.).
+    pub fn current_tap_hold(&self, layer: &str, key: &str) -> Option<TapHold> {
+        let rhs = self.current_binding(layer, key)?;
+        TapHold::parse(key, &rhs)
+    }
+
+    /// Make `key` a dual-function (tap/hold) key on the `layer` board: hold →
+    /// `target` (a layer or modifier), tap → `tap` (`None` = momentary hold-only).
+    /// Editing a key that is already a tap/hold preserves its function and any
+    /// timeouts already in the file (see [`TapHold::compose`]); a fresh one gets a
+    /// canonical `overload(target, tap)`. `Err` when there is no such board.
+    pub fn set_tap_hold(
+        &mut self,
+        layer: &str,
+        key: &str,
+        target: &str,
+        tap: Option<String>,
+    ) -> Result<(), String> {
+        // Read the existing binding (immutable) before taking the mutable borrow.
+        let existing = self.current_tap_hold(layer, key);
+        let th = TapHold::compose(existing.as_ref(), target.to_string(), tap);
+        let section = self
+            .edit
+            .target_section_mut(layer)
+            .ok_or_else(|| format!("this config has no [{layer}] section"))?;
+        section.set_or_add_binding(key, &th.serialize());
         Ok(())
     }
 
@@ -382,6 +414,45 @@ mod tests {
         s2.clear_binding("main", "nonexistent").unwrap();
         assert!(!s2.dirty());
         assert!(s2.clear_binding("sym", "a").unwrap_err().contains("[sym]"));
+    }
+
+    #[test]
+    fn tap_hold_new_key_emits_overload() {
+        let td = TempDir::new("th-new");
+        let mut s = session(&td);
+        // capslock currently = esc; make it tap esc / hold nav.
+        s.set_tap_hold("main", "capslock", "nav", Some("esc".into())).unwrap();
+        assert!(s.dirty());
+        assert_eq!(s.diff(), "- capslock = esc\n+ capslock = overload(nav, esc)\n");
+        let th = s.current_tap_hold("main", "capslock").unwrap();
+        assert_eq!(th.target, "nav");
+        assert_eq!(th.tap.as_deref(), Some("esc"));
+    }
+
+    #[test]
+    fn tap_hold_edit_preserves_lettermod_timeouts() {
+        // The hand-tuned hhkb case: editing the hold target must keep 150/200.
+        let td = TempDir::new("th-edit");
+        let p = td.0.join("test.conf");
+        std::fs::write(&p, "[ids]\n*\n\n[main]\nf = lettermod(nav, f, 150, 200)\n\n[nav]\nh = left\n[num]\nj = 1\n").unwrap();
+        let mut s = EditSession::open(&p).unwrap();
+        // The reader decomposes the existing lettermod into slots.
+        let cur = s.current_tap_hold("main", "f").unwrap();
+        assert_eq!(cur.func, "lettermod");
+        assert_eq!(cur.target, "nav");
+        // Repoint the hold from nav to num; timings survive.
+        s.set_tap_hold("main", "f", "num", Some("f".into())).unwrap();
+        assert_eq!(s.diff(), "- f = lettermod(nav, f, 150, 200)\n+ f = lettermod(num, f, 150, 200)\n");
+    }
+
+    #[test]
+    fn tap_hold_momentary_has_no_tap() {
+        let td = TempDir::new("th-mom");
+        let mut s = session(&td);
+        s.set_tap_hold("main", "capslock", "nav", None).unwrap();
+        assert_eq!(s.diff(), "- capslock = esc\n+ capslock = layer(nav)\n");
+        let th = s.current_tap_hold("main", "capslock").unwrap();
+        assert_eq!(th.tap, None);
     }
 
     #[test]
