@@ -452,6 +452,112 @@ impl EditConfig {
         out
     }
 
+    /// Rename layer `old_base` to `new_name`, rewriting **every** reference so nothing
+    /// orphans: each `[old_base]` / `[old_base:qual]` section header, each composite
+    /// `[…+old_base+…]` that includes it as a constituent, and every binding that
+    /// activates it via a well-known layer function (`layer`/`oneshot`/`toggle`/`swap`
+    /// and the tap/hold family — exactly the set [`Self::references_to`] reports). Inside
+    /// a rewritten value only the layer name is spliced; timeout args and all other text
+    /// are preserved verbatim (e.g. `lettermod(nav, 150, 200)` → `lettermod(sym, 150, 200)`).
+    ///
+    /// `Err` names why it was rejected, mirroring [`Self::add_layer`]'s name rules, plus:
+    /// the new name must differ from the old, `old_base` must exist as a *renameable*
+    /// layer — not the `main` base or a composite (`a+b` is defined by its parts, not a
+    /// name) — and the new base must not already exist. Marks the config dirty. Returns
+    /// the number of *binding* references rewritten (renamed headers excluded), so the
+    /// caller can report "updated N references".
+    pub fn rename_layer(&mut self, old_base: &str, new_name: &str) -> Result<usize, String> {
+        let new = new_name.trim();
+        if new.is_empty() {
+            return Err("layer name can't be empty".to_string());
+        }
+        if !new.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+            return Err("layer name: use letters, digits, '_' or '-'".to_string());
+        }
+        if matches!(new, "ids" | "global" | "aliases") {
+            return Err(format!("[{new}] is a reserved keyd section, not a layer"));
+        }
+        if new == old_base {
+            return Err("the layer name is unchanged".to_string());
+        }
+        // Only a plain named layer can be renamed — not keyd's implicit `main` base, and
+        // not a composite (which is defined by its `+`-joined parts, not by a name).
+        let renameable =
+            self.sections.iter().any(|s| s.kind == SectionKind::Layer && s.base_name().trim() == old_base);
+        if !renameable {
+            return Err(format!("[{old_base}] isn't a renameable layer"));
+        }
+        if self.sections.iter().any(|s| s.base_name().trim() == new) {
+            return Err(format!("[{new}] already exists"));
+        }
+
+        // 1. The layer's own section headers (`[nav]`, `[nav:C]`) — preserve any
+        //    `:qualifier` and the header line's surrounding whitespace.
+        for s in self
+            .sections
+            .iter_mut()
+            .filter(|s| s.kind == SectionKind::Layer && s.base_name().trim() == old_base)
+        {
+            let renamed = match s.name.split_once(':') {
+                Some((_, q)) => format!("{new}:{q}"),
+                None => new.to_string(),
+            };
+            rewrite_header_name(&mut s.header.raw, &renamed);
+            s.name = renamed;
+            s.dirty = true;
+        }
+
+        // 2. Composite headers that list `old_base` as a constituent (`[nav+sym]` →
+        //    `[symbols+sym]`) — otherwise that part dangles and keyd rejects the file.
+        for s in self.sections.iter_mut().filter(|s| s.kind == SectionKind::Composite) {
+            let (base, qual) = match s.name.split_once(':') {
+                Some((b, q)) => (b, Some(q)),
+                None => (s.name.as_str(), None),
+            };
+            if !base.split('+').any(|c| c == old_base) {
+                continue;
+            }
+            let new_base =
+                base.split('+').map(|c| if c == old_base { new } else { c }).collect::<Vec<_>>().join("+");
+            let renamed = match qual {
+                Some(q) => format!("{new_base}:{q}"),
+                None => new_base,
+            };
+            rewrite_header_name(&mut s.header.raw, &renamed);
+            s.name = renamed;
+            s.dirty = true;
+        }
+
+        // 3. Every binding that activates the layer, in any layer-bearing section —
+        //    splice in the new name, keep the rest of the value byte-for-byte.
+        let mut rewritten = 0usize;
+        for s in self.sections.iter_mut().filter(|s| {
+            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
+        }) {
+            let kind = s.kind;
+            for e in &mut s.entries {
+                let new_line = match &e.kind {
+                    EntryKind::Binding { val: Some(v), key, .. } => layer_ref_span(v)
+                        .filter(|span| &v[span.clone()] == old_base)
+                        .map(|span| (key.clone(), format!("{}{new}{}", &v[..span.start], &v[span.end..]))),
+                    _ => None,
+                };
+                if let Some((key, nv)) = new_line {
+                    e.raw = format!("{key} = {nv}");
+                    if let EntryKind::Binding { val, typed, dirty, .. } = &mut e.kind {
+                        *typed = classify(kind, Some(&nv));
+                        *val = Some(nv);
+                        *dirty = true;
+                    }
+                    rewritten += 1;
+                }
+            }
+        }
+
+        self.dirty = true;
+        Ok(rewritten)
+    }
+
     /// The file's line-ending style (`Lf`/`CrLf`), inferred from the first terminated
     /// line; `Lf` for an empty file or one that is a single unterminated line.
     fn file_eol(&self) -> Eol {
@@ -578,10 +684,35 @@ const LAYER_FNS: [&str; 4] = ["layer", "oneshot", "toggle", "swap"];
 /// excluded — both are valid without a matching `[…]` section, so flagging them would
 /// be a false alarm.
 fn layer_refs(val: &str) -> Option<&str> {
+    layer_ref_span(val).map(|r| &val[r])
+}
+
+/// The byte range within `val` of the layer name it activates — the splice point
+/// [`EditConfig::rename_layer`] rewrites, leaving everything else in the value verbatim.
+/// `None` under the same precision rules as [`layer_refs`] (which is `&val[span]`).
+fn layer_ref_span(val: &str) -> Option<std::ops::Range<usize>> {
     let (name, args) = crate::parser::parse_fn(val)?;
-    let arg0 = args.first()?.trim();
+    let arg0 = *args.first()?;
+    let trimmed = arg0.trim();
     let referenced = LAYER_FNS.contains(&name) || crate::parser::TAPHOLD.contains(&name);
-    (referenced && !crate::parser::is_mod(arg0) && !arg0.contains('+')).then_some(arg0)
+    if !(referenced && !crate::parser::is_mod(trimmed) && !trimmed.contains('+')) {
+        return None;
+    }
+    // `parse_fn` slices `arg0` out of `val`, so its byte offset is the pointer delta;
+    // add the leading whitespace `trim` drops to land on the name itself.
+    let off = arg0.as_ptr() as usize - val.as_ptr() as usize;
+    let lead = arg0.len() - arg0.trim_start().len();
+    Some(off + lead..off + lead + trimmed.len())
+}
+
+/// Replace the bracketed name in a section header line, preserving leading/trailing
+/// whitespace (`  [nav]  ` → `  [symbols]  `) and any inner `]` keyd keeps in a name
+/// (which spans the first `[` to the last `]`). Callers only pass header lines, so both
+/// brackets are present; a malformed line without them is left untouched.
+fn rewrite_header_name(raw: &mut String, new_name: &str) {
+    if let (Some(open), Some(close)) = (raw.find('['), raw.rfind(']')) {
+        *raw = format!("{}[{new_name}]{}", &raw[..open], &raw[close + 1..]);
+    }
 }
 
 /// The §5.1 round-trip gate, run before a file is opened for editing (a `false` sends
@@ -1069,5 +1200,66 @@ mod tests {
             ]
         );
         assert!(cfg.references_to("sym").is_empty());
+    }
+
+    #[test]
+    fn rename_layer_rewrites_headers_and_every_reference() {
+        let src = "[ids]\n*\n\n[main]\na = layer(nav)\nb = oneshot(nav)\n\
+                   c = lettermod(nav, 150, 200)\nd = overload(shift, esc)\n\
+                   [nav]\nh = left\n[nav:C]\nj = down\n";
+        let mut cfg = EditConfig::parse(src);
+        assert_eq!(cfg.rename_layer("nav", "symbols").unwrap(), 3);
+        assert_eq!(
+            cfg.serialize(),
+            "[ids]\n*\n\n[main]\na = layer(symbols)\nb = oneshot(symbols)\n\
+             c = lettermod(symbols, 150, 200)\nd = overload(shift, esc)\n\
+             [symbols]\nh = left\n[symbols:C]\nj = down\n"
+        );
+        assert!(cfg.is_dirty());
+        // No orphans: every reference followed the rename, and `shift` was never a ref.
+        assert!(cfg.orphan_layer_refs().is_empty());
+    }
+
+    #[test]
+    fn rename_layer_rewrites_composite_constituents() {
+        let src = "[main]\nx = y\n[nav]\nh = left\n[sym]\nk = up\n[nav+sym]\nq = w\n";
+        let mut cfg = EditConfig::parse(src);
+        cfg.rename_layer("nav", "navi").unwrap();
+        // The composite's `nav` part is rewritten so it doesn't dangle; `sym` is left.
+        assert_eq!(
+            cfg.serialize(),
+            "[main]\nx = y\n[navi]\nh = left\n[sym]\nk = up\n[navi+sym]\nq = w\n"
+        );
+    }
+
+    #[test]
+    fn rename_layer_rejects_bad_names_and_collisions() {
+        let mut cfg = EditConfig::parse("[main]\na = b\n[nav]\nh = left\n[sym]\nk = up\n");
+        assert!(cfg.rename_layer("nav", "").unwrap_err().contains("empty"));
+        assert!(cfg.rename_layer("nav", "a b").unwrap_err().contains("letters"));
+        assert!(cfg.rename_layer("nav", "ids").unwrap_err().contains("reserved"));
+        assert!(cfg.rename_layer("nav", "nav").unwrap_err().contains("unchanged"));
+        assert!(cfg.rename_layer("nav", "sym").unwrap_err().contains("exists"));
+        // Nothing changed on any rejection.
+        assert!(!cfg.is_dirty());
+        assert_eq!(cfg.serialize(), "[main]\na = b\n[nav]\nh = left\n[sym]\nk = up\n");
+    }
+
+    #[test]
+    fn rename_layer_refuses_main_composite_and_missing() {
+        let mut cfg = EditConfig::parse("[main]\na = b\n[nav+sym]\nx = y\n");
+        // The base layer and composites aren't simple renames; a missing layer can't be.
+        assert!(cfg.rename_layer("main", "base").unwrap_err().contains("renameable"));
+        assert!(cfg.rename_layer("nav+sym", "combo").unwrap_err().contains("renameable"));
+        assert!(cfg.rename_layer("ghost", "x").unwrap_err().contains("renameable"));
+        assert!(!cfg.is_dirty());
+    }
+
+    #[test]
+    fn rename_layer_qualified_only_and_blocks_existing_base() {
+        // A layer that exists only as a qualified section is still renameable.
+        let mut cfg = EditConfig::parse("[main]\na = layer(nav)\n[nav:C]\nj = down\n");
+        assert_eq!(cfg.rename_layer("nav", "fn").unwrap(), 1);
+        assert_eq!(cfg.serialize(), "[main]\na = layer(fn)\n[fn:C]\nj = down\n");
     }
 }

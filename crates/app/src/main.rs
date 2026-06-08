@@ -743,7 +743,10 @@ fn main() -> Result<(), slint::PlatformError> {
                     let (apply_ok, apply_hint) = apply_gate(&s);
                     win.set_edit_layers(model(choices));
                     win.set_hold_layers(model(hold_layer_choices(&s)));
+                    win.set_can_rename(renameable(&default_layer));
                     win.set_edit_layer(default_layer);
+                    win.set_rename_target("".into());
+                    win.set_rename_name("".into());
                     win.set_selected_phys("".into());
                     win.set_edit_current("".into());
                     win.set_edit_value("".into());
@@ -793,10 +796,14 @@ fn main() -> Result<(), slint::PlatformError> {
         let session = session.clone();
         win.on_pick_edit_layer(move |name| {
             let Some(win) = weak.upgrade() else { return };
-            // Changing the focused section dismisses any pending delete confirm — it
-            // named the previously-selected layer, which the user just moved off of.
+            // Changing the focused section dismisses any pending delete confirm or open
+            // rename field — both named the previously-selected layer, which the user
+            // just moved off of.
             win.set_delete_prompt("".into());
             win.set_delete_detail("".into());
+            win.set_rename_target("".into());
+            win.set_rename_name("".into());
+            win.set_can_rename(renameable(&name));
             win.set_edit_layer(name.clone());
             let phys = win.get_selected_phys().to_string();
             if !phys.is_empty() {
@@ -834,6 +841,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     drop(sb);
                     win.set_edit_layers(model(layers));
                     win.set_hold_layers(model(holds));
+                    win.set_can_rename(renameable(&created));
                     win.set_edit_layer(created.into());
                     win.set_selected_phys("".into());
                     win.set_edit_current("".into());
@@ -914,6 +922,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     drop(sb);
                     win.set_edit_layers(model(layers));
                     win.set_hold_layers(model(holds));
+                    win.set_can_rename(renameable(&next));
                     win.set_edit_layer(next.into());
                     win.set_selected_phys("".into());
                     win.set_edit_current("".into());
@@ -941,6 +950,50 @@ fn main() -> Result<(), slint::PlatformError> {
             let Some(win) = weak.upgrade() else { return };
             win.set_delete_prompt("".into());
             win.set_delete_detail("".into());
+        });
+    }
+
+    // Rename the selected layer: rewrite its section header(s) and every binding that
+    // points at it, so nothing orphans. The chooser / hold-targets / warnings / preview
+    // all refresh, and the renamed layer stays selected under its new name.
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        win.on_rename_layer(move |old_base, new_name| {
+            let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
+            let mut sb = session.borrow_mut();
+            let Some(s) = sb.as_mut() else { return };
+            match s.rename_layer(&old_base, &new_name) {
+                Ok(renamed) => {
+                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    let layers = edit_layer_choices(s);
+                    let holds = hold_layer_choices(s);
+                    refresh_warnings(&win, s); // following refs can clear an orphan
+                    drop(sb);
+                    win.set_edit_layers(model(layers));
+                    win.set_hold_layers(model(holds));
+                    win.set_edit_layer(renamed.clone().into());
+                    win.set_can_rename(renameable(&renamed));
+                    // The selection's section changed name; reset the picked key.
+                    win.set_selected_phys("".into());
+                    win.set_edit_current("".into());
+                    win.set_edit_value("".into());
+                    win.set_edit_dirty(dirty);
+                    win.set_capture_armed(false);
+                    win.set_rename_target("".into());
+                    win.set_rename_name("".into());
+                    refresh_preview(&win, &srcs, &path, cfg); // legend shows the new name
+                }
+                Err(e) => {
+                    // Keep the field open so the user can correct the name.
+                    drop(sb);
+                    win.set_edit_banner(format!("\u{26a0} {e}").into());
+                }
+            }
         });
     }
 
@@ -1409,6 +1462,14 @@ fn switch_keyboard(win: &MainWindow, idx: i32) {
 /// sections (so `[main]` only appears when it exists — no chip that errors on click).
 /// `name` is the exact base name [`editing::EditSession::set_binding`] targets; the
 /// chip shows the same (file vocabulary, not display-case).
+/// Whether a layer base name may be renamed: a real named layer, not keyd's implicit
+/// `main` base and not a composite (`a+b`, defined by its parts). Mirrors core's
+/// [`keydviz_core::edit::EditConfig::rename_layer`] guard, so the UI only offers the
+/// rename chip where the action can succeed.
+fn renameable(base: &str) -> bool {
+    !base.is_empty() && base != "main" && !base.contains('+')
+}
+
 fn edit_layer_choices(s: &editing::EditSession) -> Vec<EditLayer> {
     s.editable_sections()
         .into_iter()
@@ -1530,6 +1591,9 @@ fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &Shar
     win.set_new_layer_name("".into());
     win.set_delete_prompt("".into());
     win.set_delete_detail("".into());
+    win.set_rename_target("".into());
+    win.set_rename_name("".into());
+    win.set_can_rename(false);
     win.set_apply_available(false);
     win.set_apply_hint("".into());
     reset_apply_ui(win);

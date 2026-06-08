@@ -1026,3 +1026,35 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   warns) rather than special-cased. Workspace 217 tests green, clippy clean; viewer
   unaffected. **Remaining for E2**: layer **rename**, chords/`[global]`, create-config flow,
   one-level include closure scan (deferred, §5.3).
+- *(Phase 6 E2 — layer rename, 2026-06-08)* The deferred complement to create/delete:
+  rename a layer and rewrite **every** reference so nothing orphans (the whole reason it
+  was its own slice). **Core** (`edit.rs`): `EditConfig::rename_layer(old, new)` runs
+  `add_layer`'s name validation plus three guards — new name differs from old, the target
+  is a *renameable* layer (`SectionKind::Layer`, so not the `main` base or a composite),
+  and the new base doesn't already exist — then mutates in three passes: (1) the layer's
+  own section headers (`[nav]` / `[nav:C]`, preserving the `:qualifier` and the header
+  line's surrounding whitespace via `rewrite_header_name`, which splices first-`[`..last-`]`),
+  (2) composite headers that list it as a `+`-constituent (`[nav+sym]` → `[new+sym]`, exact
+  per-element match so `[navs+sym]` is untouched — otherwise the part dangles and keyd
+  rejects the file), and (3) every binding value that activates it, splicing **only** the
+  layer name and keeping timeout args verbatim (`lettermod(nav,150,200)` →
+  `lettermod(new,150,200)`). The splice point comes from `layer_ref_span` (new), which
+  `layer_refs` now delegates to: it reuses `parser::parse_fn` and locates the name's byte
+  range inside the value via the arg0 subslice's pointer offset — so reference-finding and
+  reference-rewriting share one grammar source and can't drift. All validation is up-front
+  (no partial application). Returns the binding-reference count. **App** (`editing.rs`):
+  `EditSession::rename_layer` returns the canonical new name to reselect. **UI**: a
+  "✎ rename" chip on the section chooser (shown only when `can_rename` — a `renameable()`
+  helper mirroring core's guard, set at every `set_edit_layer` site so it's never stale)
+  opens an inline name field pre-filled with the current name; commit rewrites refs and
+  reselects the layer under its new name, refreshing chooser / hold-targets / orphan
+  warnings / preview (a superset of the create/delete refresh). Field/chip guards are
+  mutually exclusive with the +layer and delete dialogs; `pick_edit_layer` and the
+  leave-edit-mode teardown clear the rename state. **Adversarial review (2 angles,
+  correctness + UI state-machine)**: state-machine clean; correctness clean except one
+  benign edge (renaming to a name that's only a composite *constituent*, e.g. `nav`→`b`
+  with `[a+b]` and no standalone `[b]`) — keyd just resolves the composite's `b` to the new
+  layer, and it's a gap `add_layer` shares, so left as-is for parity rather than made
+  asymmetrically stricter. Workspace 223 tests green, clippy clean; viewer unaffected.
+  **Remaining for E2**: chords/`[global]`, create-config flow, one-level include closure
+  scan (deferred, §5.3).

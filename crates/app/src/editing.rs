@@ -172,6 +172,16 @@ impl EditSession {
             .collect()
     }
 
+    /// Rename layer `old_base` to `new_name`, following every reference (so nothing
+    /// orphans), and return its canonical (trimmed) new name so the caller can reselect
+    /// it. `Err` names why it was rejected (bad name, unchanged, not a renameable layer,
+    /// or a name already in use). See
+    /// [`keydviz_core::edit::EditConfig::rename_layer`].
+    pub fn rename_layer(&mut self, old_base: &str, new_name: &str) -> Result<String, String> {
+        self.edit.rename_layer(old_base, new_name)?;
+        Ok(new_name.trim().to_string())
+    }
+
     /// The semantic model for re-rendering the boards — same derivation the
     /// viewer uses, so the preview is exactly what the viewer would show.
     pub fn config(&self) -> Config {
@@ -590,6 +600,23 @@ mod tests {
         assert_eq!(s.orphan_warnings().len(), 1);
         // Deleting a layer that doesn't exist is a named error.
         assert!(s.remove_layer("nope").unwrap_err().contains("[nope]"));
+    }
+
+    #[test]
+    fn rename_layer_follows_references_and_clears_orphans() {
+        let td = TempDir::new("rnlayer");
+        let p = td.0.join("test.conf");
+        std::fs::write(&p, "[ids]\n*\n[main]\ncapslock = layer(nav)\n[nav]\nh = left\n").unwrap();
+        let mut s = EditSession::open(&p).unwrap();
+        assert_eq!(s.rename_layer("nav", "symbols").unwrap(), "symbols");
+        assert!(s.dirty());
+        assert!(s.editable_sections().contains(&"symbols".to_string()));
+        assert!(!s.editable_sections().contains(&"nav".to_string()));
+        // The reference followed the rename — no orphan, and the binding now points at it.
+        assert!(s.orphan_warnings().is_empty());
+        assert_eq!(s.current_binding("main", "capslock").as_deref(), Some("layer(symbols)"));
+        // Renaming a non-layer / missing base is a named error.
+        assert!(s.rename_layer("main", "base").is_err());
     }
 
     #[test]
