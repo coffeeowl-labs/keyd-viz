@@ -119,9 +119,21 @@ Physical layouts come from a curated catalog (pick one in-app), or import a boar
 ## Edit mode
 
 The **edit** toggle turns the viewer into a visual config editor: click a key on the board,
-type a new binding (or press the key you want, or pick from the palette), watch the board
-re-render, then persist. Files the editor can't reproduce byte-for-byte stay view-only —
-it never risks clobbering what it doesn't fully understand.
+set its binding, watch the board re-render, then persist. Files the editor can't reproduce
+byte-for-byte stay view-only — it never risks clobbering what it doesn't fully understand.
+
+Set a key's binding by typing it, pressing the key you want (**capture**), or searching
+keyd's full key list (**pick…**). You can also:
+
+- make a key **dual-function** (tap/hold) — pick a hold layer or modifier and a tap key,
+  with an outcome-labelled "feel" instead of raw timeout knobs (an existing key's timings
+  are preserved as-is).
+- **unbind** a key so keyd stops remapping it — on a sub-layer it inherits the base layer;
+  on the base layer keyd just forwards the key's real code (it ceases to intercept — keyd
+  sits above the firmware, so this isn't a QMK-style transparent fall-through).
+- see an inline warning when a binding activates a **layer that doesn't exist**
+  (`layer(symbols)` with no `[symbols]` section) — keyd would reject the file, caught here
+  before you apply.
 
 Two ways to persist:
 

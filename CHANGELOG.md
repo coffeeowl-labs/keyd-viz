@@ -9,13 +9,17 @@ All notable changes to keyd-viz are documented here. The format is based on
 ### Added
 
 - **Edit mode (visual config editing).** An explicit **edit** toggle turns the viewer
-  into an editor for the displayed config: click a key, type a binding / press the key
-  you want / pick from a palette, watch the board re-render live, then persist. The
-  editor is line-faithful — untouched lines round-trip byte-for-byte — and any file it
-  can't reproduce exactly (or that keyd would reject) stays view-only rather than risk
-  clobbering it. Persist via **save draft** (writes to `~/.config/keyd-viz/drafts/`
-  with copy-paste install steps, a diff, and a `keyd check` verdict) — works on every
-  install, including the AppImage.
+  into an editor for the displayed config: click a key, then set its binding by typing
+  it, pressing the key you want (**capture**), or searching keyd's full key list
+  (**pick…**); watch the board re-render live, then persist. You can also make a key
+  **dual-function** (tap/hold) — a hold layer/modifier + a tap key, chosen by an
+  outcome-labelled "feel" rather than raw timeouts — **unbind** a key so keyd stops
+  remapping it, and get an inline warning when a binding activates a layer the config
+  never defines (keyd would reject it). The editor is line-faithful — untouched lines
+  round-trip byte-for-byte — and any file it can't reproduce exactly (or that keyd would
+  reject) stays view-only rather than risk clobbering it. Persist via **save draft**
+  (writes to `~/.config/keyd-viz/drafts/` with copy-paste install steps, a diff, and a
+  `keyd check` verdict) — works on every install, including the AppImage.
 - **One-click apply with auto-revert (AUR/source installs).** *Apply to /etc/keyd…*
   hands the edited config to `keydviz-apply`, a new one-shot privileged tool invoked
   via polkit (`pkexec`; a password per apply, by design). It validates with
