@@ -22,8 +22,8 @@ use std::rc::Rc;
 use devices::InputDevice;
 use keydviz_core::board::{KeyCap, KeyState};
 use keydviz_core::{
-    catalog, import_qmk, parse_file, parse_text, Behavior, Config, Geometry, Ids, MatchKind, Sheet,
-    MODIFIERS,
+    catalog, import_qmk, parse_file, parse_text, Behavior, Config, DeviceFlags, Geometry, Ids,
+    MatchKind, Sheet, MODIFIERS,
 };
 use slint::{Brush, Color, ModelRc, VecModel};
 
@@ -504,14 +504,44 @@ fn create_config_dir() -> PathBuf {
         .unwrap_or_else(|| applying::prod_config_dir().to_path_buf())
 }
 
+/// keyd's own virtual output devices carry vendor 0x0FAC (`device.c` sets
+/// `is_virtual` on this vendor). They must never be offered as a config target:
+/// keyd re-emits every grabbed keyboard *through* them, so a config matching
+/// `0fac:*` would point keyd at its own output — a feedback loop, not a keyboard.
+const KEYD_VIRTUAL_VENDOR: &str = "0fac";
+
+/// Whether a connected device should be offered as a create-config target. This is
+/// deliberately **stricter than keyd's own "is a keyboard" rule** (which also accepts
+/// media-key emitters), because the create list is a human-facing picker — precision
+/// beats recall. A candidate must:
+///   - have the **full alphanumeric key block** (`full_keyboard`) — drops the media-
+///     key/system pseudo-devices that share the input bus (Video Bus, WMI hotkeys,
+///     lid/power/sleep), which `is_keyboard` would let through;
+///   - **not be keyd's own virtual keyboard** (vendor `0fac`) — see above;
+///   - **report no pointer motion** (`MOUSE` = any REL/ABS axis) — drops mice that
+///     expose a keyboard HID interface (e.g. a Logitech G502 "Keyboard" node) and
+///     synthetic pointer devices (e.g. ydotoold).
+///
+/// Trade-off: a *combo* node that is both a full keyboard and a pointer — some laptops
+/// put the keyboard and touchpad on one event node — is excluded too (it's
+/// indistinguishable from a mouse's keyboard interface by capabilities alone). In
+/// practice such a device is already governed by an explicit config (so it wouldn't be
+/// a candidate anyway), and the "All keyboards (\*)" wildcard is the fallback.
+fn is_create_candidate(dev: &InputDevice) -> bool {
+    dev.full_keyboard
+        && dev.vendor != KEYD_VIRTUAL_VENDOR
+        && !dev.flags.intersects(DeviceFlags::MOUSE)
+}
+
 /// Connected keyboards eligible for a fresh config, deduped by `vendor:product`
-/// (one keyboard exposes several event nodes). See [`CreateCandidate`].
+/// (one keyboard exposes several event nodes). See [`CreateCandidate`] and
+/// [`is_create_candidate`].
 fn create_candidates(config_dir: &Path) -> Vec<CreateCandidate> {
     let configs = parse_configs(&conf_files_in(config_dir));
     let matchers: Vec<Ids> = configs.iter().map(|(_, c)| Ids::parse(&c.ids)).collect();
     let mut out: Vec<CreateCandidate> = Vec::new();
     for dev in devices::connected_devices() {
-        if !dev.is_keyboard {
+        if !is_create_candidate(&dev) {
             continue;
         }
         let devid = dev.devid();
@@ -2698,7 +2728,43 @@ mod glow_tests {
 
 #[cfg(test)]
 mod create_tests {
-    use super::sanitize_config_name;
+    use super::{is_create_candidate, sanitize_config_name, InputDevice};
+    use keydviz_core::DeviceFlags;
+
+    fn dev(vendor: &str, full: bool, flags: DeviceFlags) -> InputDevice {
+        InputDevice {
+            name: "x".into(),
+            vendor: vendor.into(),
+            product: "0001".into(),
+            is_keyboard: true,
+            full_keyboard: full,
+            flags,
+        }
+    }
+
+    #[test]
+    fn create_candidate_filter_keeps_only_real_keyboards() {
+        // A real external keyboard (HHKB): full key block, no pointer axes.
+        assert!(is_create_candidate(&dev("04fe", true, DeviceFlags::keyboard())));
+
+        // keyd's OWN virtual keyboard (vendor 0fac, full key block, no pointer) — the
+        // dangerous one: never offer it, or a config would target keyd's own output.
+        assert!(!is_create_candidate(&dev("0fac", true, DeviceFlags::keyboard())));
+
+        // Media-key / system pseudo-devices (Video Bus, WMI hotkeys, lid/power): they
+        // pass keyd's is_keyboard via media keys but lack the full alphanumeric block.
+        assert!(!is_create_candidate(&dev("0000", false, DeviceFlags::KEYBOARD)));
+
+        // A mouse exposing a keyboard HID interface (Logitech G502) or a synthetic
+        // pointer (ydotoold): full key block, but reports pointer motion.
+        let mousey = DeviceFlags::keyboard().union(DeviceFlags::MOUSE);
+        assert!(!is_create_candidate(&dev("046d", true, mousey)));
+
+        // A keyboard+touchpad combo node — excluded too (documented trade-off: it's
+        // capability-identical to a mouse's keyboard interface).
+        let combo = DeviceFlags::keyboard().union(DeviceFlags::MOUSE).union(DeviceFlags::TRACKPAD);
+        assert!(!is_create_candidate(&dev("0b05", true, combo)));
+    }
 
     #[test]
     fn sanitizes_device_names_to_the_allow_list() {
