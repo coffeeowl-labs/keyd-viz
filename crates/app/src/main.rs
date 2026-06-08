@@ -506,6 +506,10 @@ struct ApplyCtx {
     srcs: Rc<RefCell<Vec<SheetSrc>>>,
     run: RefCell<Option<applying::ApplyHandle>>,
     timer: RefCell<Option<slint::Timer>>,
+    /// The always-on-top countdown dialog (test field + timer + KEEP/revert),
+    /// alive only while a run is in `countdown`. Held so `finish`/`teardown_apply`
+    /// can close it and the timer can drive its seconds.
+    dialog: RefCell<Option<ApplyDialog>>,
 }
 
 thread_local! {
@@ -615,6 +619,7 @@ fn main() -> Result<(), slint::PlatformError> {
             srcs: srcs.clone(),
             run: RefCell::new(None),
             timer: RefCell::new(None),
+            dialog: RefCell::new(None),
         });
     });
     {
@@ -956,27 +961,8 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         });
     }
-
-    // The dead-man's switch, GUI half: KEEP is the only thing that persists. Sent
-    // best-effort — if the window just expired, the tool's `reverted` line wins.
-    {
-        let weak = win.as_weak();
-        win.on_keep_apply(move || {
-            let Some(win) = weak.upgrade() else { return };
-            if win.get_apply_state() == "countdown" {
-                with_apply_run(|h| h.keep());
-            }
-        });
-    }
-    {
-        let weak = win.as_weak();
-        win.on_revert_apply(move || {
-            let Some(win) = weak.upgrade() else { return };
-            if win.get_apply_state() == "countdown" {
-                with_apply_run(|h| h.revert()); // EOF → the tool reverts and reports
-            }
-        });
-    }
+    // The dead-man's switch GUI half (KEEP / revert during the countdown) lives on
+    // the ApplyDialog, wired in open_apply_dialog — see handle_apply_event.
 
     let demo = std::env::args().any(|a| a == "--demo");
     if demo {
@@ -1024,20 +1010,13 @@ fn main() -> Result<(), slint::PlatformError> {
         // loop until explicitly quit rather than until the last window closes. Without a
         // tray there'd be no way to bring the window back or quit, so we keep the default
         // close-to-quit behavior (win.run()).
-        let weak = win.as_weak();
-        win.window().on_close_requested(move || {
-            // Hiding mid-apply would strand a live change with no visible countdown
-            // and no KEEP button, persisted until the tool's timeout. Revert it now
-            // so "hiding the window reverts" (what the countdown UI promises) is
-            // literally true — the unprivileged GUI hiding can't itself send EOF.
-            if let Some(win) = weak.upgrade() {
-                if apply_busy(&win) {
-                    teardown_apply();
-                    reset_apply_ui(&win);
-                }
-            }
-            slint::CloseRequestResponse::HideWindow
-        });
+        //
+        // No apply teardown here: during the countdown the control surface is the
+        // separate always-on-top ApplyDialog, which stays up when the main window
+        // hides — so the user keeps KEEP/revert/test, and the dialog (or the tool's
+        // timeout) still governs the dead-man's switch. Closing *the dialog* reverts.
+        win.window()
+            .on_close_requested(|| slint::CloseRequestResponse::HideWindow);
         win.show()?;
         slint::run_event_loop_until_quit()
     } else {
@@ -1244,23 +1223,66 @@ fn with_apply_run(f: impl FnOnce(&applying::ApplyHandle)) {
 
 /// Reset every apply_* window property to its idle baseline. Called both when a
 /// session opens and when it closes so a new apply property can't be cleared in
-/// one place and forgotten in the other (the bug this consolidates: `apply_state`
-/// and `apply_seconds_left` were reset in different subsets of those two paths).
+/// one place and forgotten in the other.
 fn reset_apply_ui(win: &MainWindow) {
     win.set_apply_state("idle".into());
     win.set_apply_info("".into());
-    win.set_apply_seconds_left(0);
+}
+
+/// Open the always-on-top countdown dialog: a test field (auto-focused, so the
+/// user can immediately type to verify the remap — keyd remaps at the device
+/// level, so our own field exercises the live config), the live timer, and
+/// KEEP/revert. Closing the dialog reverts, like any non-KEEP exit. Returns the
+/// dialog + the timer driving its seconds; the caller parks both in `ApplyCtx`.
+fn open_apply_dialog(
+    win: &MainWindow,
+    secs: u64,
+) -> Result<(ApplyDialog, slint::Timer), slint::PlatformError> {
+    let dialog = ApplyDialog::new()?;
+    dialog.set_seconds_left(secs as i32);
+    // The diff/findings already composed for the main panel double as the
+    // "what changed" summary in the dialog.
+    dialog.set_change_summary(win.get_apply_info());
+    dialog.on_keep(|| with_apply_run(|h| h.keep()));
+    dialog.on_revert(|| with_apply_run(|h| h.revert()));
+    // Closing the dialog reverts (drop stdin → EOF). We hide rather than destroy
+    // so the tool's terminal event still tears it down cleanly via `finish`.
+    dialog.window().on_close_requested(move || {
+        with_apply_run(|h| h.revert());
+        slint::CloseRequestResponse::HideWindow
+    });
+    dialog.show()?;
+    window_set_on_top(dialog.window(), true);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let weak = dialog.as_weak();
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(200),
+        move || {
+            if let Some(d) = weak.upgrade() {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                d.set_seconds_left(left.as_secs() as i32);
+            }
+        },
+    );
+    Ok((dialog, timer))
 }
 
 /// Tear down a live apply run: revert it (drop stdin → the tool sees EOF and
-/// restores the prior config) and stop the countdown timer. Idempotent — a no-op
-/// when nothing is in flight, so any exit path can call it unconditionally.
+/// restores the prior config), stop the countdown timer, and close the dialog.
+/// Idempotent — a no-op when nothing is in flight, so any exit path can call it
+/// unconditionally.
 fn teardown_apply() {
     with_apply_run(|h| h.revert());
     APPLY.with(|a| {
         if let Some(ctx) = a.borrow().as_ref() {
             *ctx.timer.borrow_mut() = None;
             *ctx.run.borrow_mut() = None;
+            if let Some(d) = ctx.dialog.borrow_mut().take() {
+                let _ = d.hide();
+            }
         }
     });
 }
@@ -1364,6 +1386,9 @@ fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
         let finish = |state: &str, info: Option<String>| {
             *ctx.timer.borrow_mut() = None;
             *ctx.run.borrow_mut() = None;
+            if let Some(d) = ctx.dialog.borrow_mut().take() {
+                let _ = d.hide();
+            }
             win.set_apply_state(state.into());
             if let Some(info) = info {
                 win.set_apply_info(info.into());
@@ -1374,23 +1399,23 @@ fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
             E::Finding(_) => {}
             E::Applied { secs } => {
                 win.set_apply_state("countdown".into());
-                win.set_apply_seconds_left(secs as i32);
-                let deadline =
-                    std::time::Instant::now() + std::time::Duration::from_secs(secs);
-                let weak = win.as_weak();
-                let t = slint::Timer::default();
-                t.start(
-                    slint::TimerMode::Repeated,
-                    std::time::Duration::from_millis(200),
-                    move || {
-                        if let Some(win) = weak.upgrade() {
-                            let left = deadline
-                                .saturating_duration_since(std::time::Instant::now());
-                            win.set_apply_seconds_left(left.as_secs() as i32);
-                        }
-                    },
-                );
-                *ctx.timer.borrow_mut() = Some(t);
+                // The countdown surface is a separate always-on-top dialog with a
+                // test field, so the user can type to verify before deciding.
+                match open_apply_dialog(win, secs) {
+                    Ok((dialog, timer)) => {
+                        *ctx.dialog.borrow_mut() = Some(dialog);
+                        *ctx.timer.borrow_mut() = Some(timer);
+                    }
+                    Err(e) => {
+                        // No control surface would mean a live change the user
+                        // can't keep — revert immediately rather than strand it.
+                        with_apply_run(|h| h.revert());
+                        win.set_apply_info(
+                            format!("couldn't open the confirm window: {e} \u{2014} reverting")
+                                .into(),
+                        );
+                    }
+                }
             }
             E::Kept => {
                 let path = ctx.session.borrow().as_ref().map(|s| s.path.display().to_string());
@@ -1499,10 +1524,16 @@ fn file_mtime(path: &Path) -> Option<std::time::SystemTime> {
 /// titlebar → More Actions → Keep Above Window, or a KWin window rule for class `keydviz`).
 /// Also a no-op on backends without a winit window.
 fn set_window_on_top(win: &MainWindow, on: bool) {
+    window_set_on_top(win.window(), on);
+}
+
+/// The window-agnostic core of [`set_window_on_top`], so the apply dialog can be
+/// kept above too (it shares the same winit-backed always-on-top mechanism).
+fn window_set_on_top(window: &slint::Window, on: bool) {
     use i_slint_backend_winit::winit::window::WindowLevel;
     use i_slint_backend_winit::WinitWindowAccessor;
     let level = if on { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal };
-    win.window().with_winit_window(|w| w.set_window_level(level));
+    window.with_winit_window(|w| w.set_window_level(level));
 }
 
 /// glow are already live; this closes the gap for the base board). Polls once a second

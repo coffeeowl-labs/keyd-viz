@@ -355,6 +355,126 @@ export struct EditLayer {
     display: string,
 }
 
+// ---- apply countdown dialog ---------------------------------------------------
+// A separate always-on-top window shown only during the dead-man countdown. Its
+// reason to exist is the test field: keyd remaps at the device level, so typing
+// here exercises the just-applied config without switching apps — and the timer
+// sits right beside the box so you can see how long you have. KEEP / revert are
+// mouse-driven (confirming must never require the keyboard under test). Closing
+// this window reverts, like every non-KEEP exit.
+export component ApplyDialog inherits Window {
+    title: "keyd-viz — does your keyboard work?";
+    background: #0c0f14;
+    // Fixed width, height auto-fit to content (same auto-fit trick MainWindow
+    // uses): the window must drive its own size — sizing a child doesn't size the
+    // window, so without this it opens at Slint's default minimum width.
+    width: 520px;
+    height: dlg.preferred-height;
+    // Focus the test field the moment the window appears, so the user can just
+    // start typing to verify the remap.
+    forward-focus: test_box;
+
+    in property <int> seconds_left;
+    in property <string> change_summary;   // the diff / what changed (mono)
+    callback keep();
+    callback revert();
+
+    dlg := VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+
+        Text {
+            text: "Your change is live. Test it, then keep or revert.";
+            color: #e6e6e6;
+            font-size: 15px;
+            font-weight: 700;
+            wrap: word-wrap;
+        }
+        if root.change_summary != "": Rectangle {
+            background: #11151c;
+            border-color: #2a3340;
+            border-width: 1px;
+            border-radius: 8px;
+            height: csum.preferred-height + 14px;
+            csum := TextInput {
+                x: 8px;
+                y: 7px;
+                width: parent.width - 16px;
+                read-only: true;
+                wrap: word-wrap;
+                text: root.change_summary;
+                color: #cfd6df;
+                font-size: 12px;
+                font-family: "JetBrains Mono";
+            }
+        }
+
+        Text {
+            text: "Type here to test your keyboard:";
+            color: #7d8694;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        // The throwaway test field — its content is never read; it exists purely
+        // so the user can feel the remapped keys.
+        test_box := LineEdit {
+            height: 34px;
+            font-size: 15px;
+            placeholder-text: "press the keys you changed\u{2026}";
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+            Rectangle {
+                width: tcd.preferred-width + 16px;
+                height: 28px;
+                border-radius: 6px;
+                background: #122117;
+                border-width: 1px;
+                border-color: #3ddc84;
+                tcd := Text {
+                    x: 8px;
+                    y: (parent.height - self.height) / 2;
+                    text: "reverting in \{root.seconds_left}s";
+                    color: #3ddc84;
+                    font-size: 13px;
+                    font-weight: 700;
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            IconButton {
+                wide: true;
+                text: "revert";
+                clicked => {
+                    root.revert();
+                }
+            }
+            IconButton {
+                wide: true;
+                text: "KEEP \u{2014} it works";
+                active: true;
+                clicked => {
+                    root.keep();
+                }
+            }
+        }
+
+        Text {
+            text: "\u{26a0} keyboard dead? Backspace+Escape+Enter restarts keyd";
+            color: #f0b429;
+            font-size: 12px;
+            font-weight: 700;
+            wrap: word-wrap;
+        }
+        Text {
+            text: "anything but KEEP reverts \u{2014} timeout, revert, or closing this window";
+            color: #7d8694;
+            font-size: 11px;
+            wrap: word-wrap;
+        }
+    }
+}
+
 // ---- main window --------------------------------------------------------------
 export component MainWindow inherits Window {
     title: "keyd-viz";
@@ -442,15 +562,13 @@ export component MainWindow inherits Window {
     // idle | confirm | auth | countdown | kept | reverted | revert-failed | failed.
     // Only KEEP persists a change; every other exit from `countdown` reverts.
     in property <string> apply_state: "idle";
-    in property <int> apply_seconds_left;    // dead-man window remaining (countdown)
     in property <string> apply_info;         // findings / staleness / diff / outcome detail
     property <bool> apply_in_flight: root.apply_state == "confirm"
         || root.apply_state == "auth" || root.apply_state == "countdown";
     callback start_apply();    // pre-flight; → confirm (sensitive) or straight to auth
     callback confirm_apply();  // explicit command()/macro() acknowledgement
     callback cancel_apply();   // leave confirm / cancel auth / dismiss a terminal state
-    callback keep_apply();     // the keyboard works — persist (the only keeping path)
-    callback revert_apply();   // back out during the countdown
+    // KEEP / revert during the countdown live on ApplyDialog, not here.
 
     ScrollView {
         body := VerticalLayout {
@@ -970,49 +1088,14 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // countdown: the change is LIVE and the dead-man window is open.
-                    // KEEP is deliberately mouse-driven — confirming must not require
-                    // the keyboard under test.
-                    if root.apply_state == "countdown": Rectangle {
-                        height: kbar.preferred-height + 16px;
-                        border-radius: 8px;
-                        background: #122117;
-                        border-width: 1px;
-                        border-color: #3ddc84;
-                        kbar := VerticalLayout {
-                            padding: 8px;
-                            spacing: 6px;
-                            HorizontalLayout {
-                                spacing: 10px;
-                                alignment: start;
-                                IconButton {
-                                    wide: true;
-                                    text: "KEEP \u{2014} keyboard works (\{root.apply_seconds_left}s)";
-                                    active: true;
-                                    clicked => {
-                                        root.keep_apply();
-                                    }
-                                }
-                                IconButton {
-                                    wide: true;
-                                    text: "revert";
-                                    clicked => {
-                                        root.revert_apply();
-                                    }
-                                }
-                            }
-                            Text {
-                                text: "\u{26a0} keyboard dead? Backspace+Escape+Enter restarts keyd";
-                                color: #f0b429;
-                                font-size: 12px;
-                                font-weight: 700;
-                            }
-                            Text {
-                                text: "anything but KEEP reverts \u{2014} timeout, closing, or hiding the window included";
-                                color: #7d8694;
-                                font-size: 11px;
-                            }
-                        }
+                    // countdown: the change is LIVE — but the controls (test field,
+                    // timer, KEEP/revert) live in the always-on-top ApplyDialog so
+                    // the user can type to verify. Here we just point at it.
+                    if root.apply_state == "countdown": Text {
+                        text: "\u{2192} change is live \u{2014} test it in the confirm window (KEEP or revert there)";
+                        color: #3ddc84;
+                        font-size: 12px;
+                        font-weight: 700;
                     }
 
                     // terminal states: one bar, state-colored, dismissed explicitly.
