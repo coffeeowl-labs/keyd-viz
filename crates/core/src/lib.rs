@@ -34,4 +34,4 @@ pub use layout::layout_for;
 pub use model::{Config, Hold, HoldKind, Layer};
 pub use parser::{parse_file, parse_text};
 pub use prettify::{base_legend, prettify};
-pub use taphold::{TapHold, MODIFIERS};
+pub use taphold::{Behavior, TapHold, MODIFIERS};

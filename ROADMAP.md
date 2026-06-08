@@ -907,12 +907,20 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   already rendered holds; this is the editor half, built in tested layers: **T1**
   `core/taphold.rs` — `TapHold{func,target,tap,rest}` with `parse`/`serialize`/
   `compose`; `rest` keeps timeout args *verbatim* so editing never retunes a config
-  (e.g. hhkb's `lettermod(…,150,200)`); `compose` preserves an existing key's
-  func+timeouts and emits canonical `overload(target,tap)` for new keys, `layer(target)`
-  for momentary; exotic forms (`overloadi`, opaque) return `None` and stay raw. Reuses
+  (e.g. hhkb's `lettermod(…,150,200)`). A user-facing **"feel"** (`Behavior`) names the
+  tap-vs-hold tradeoff by outcome — **fast typing** → `overloadt2(…,200)` (permissive
+  hold, no idle guard) / **avoid misfires** → `lettermod(…,150,200)` (idle-guarded) —
+  with **timeouts baked in, never shown** (Apple-philosophy: surface the *behavior*
+  choice, hide the ms). `compose` preserves an existing key's func+timeouts when the
+  feel is unchanged, applies the feel's defaults on a new key or deliberate switch, and
+  emits `layer(target)` for momentary; exotic forms (`overload`, `overloadi`, opaque)
+  return `None`/aren't offered and stay raw. Hard-capped to these two functions +
+  momentary; power users hand-edit for more. Reuses
   one grammar source (`parser::{parse_fn,TAPHOLD,MODS,is_mod}` → `pub(crate)`). **T2**
-  `EditSession::{current_tap_hold,set_tap_hold}`. **T3** two-slot Slint panel (layer +
-  modifier chips, tap field, "hold only" toggle) wired like `apply_binding`. **Critic
+  `EditSession::{current_tap_hold,set_tap_hold}`. **T3** Slint panel (layer + modifier
+  hold chips, tap field, "hold only" toggle, and the **feel** chips — outcome-labeled
+  "fast typing"/"avoid misfires" with a hover detail, no prose lines) wired like
+  `apply_binding`. **Critic
   review (3 angles)** fixed: the hold-target list now excludes modifier-named layers
   (the `[shift]` chip collided with the `shift` modifier — visible in hhkb.conf),
   composite (`a+b`), and `main`; the sibling `apply_binding`/`make_transparent` handlers

@@ -21,7 +21,7 @@ use std::rc::Rc;
 use devices::InputDevice;
 use keydviz_core::board::{KeyCap, KeyState};
 use keydviz_core::{
-    catalog, import_qmk, parse_file, parse_text, Config, Geometry, Ids, Sheet, MODIFIERS,
+    catalog, import_qmk, parse_file, parse_text, Behavior, Config, Geometry, Ids, Sheet, MODIFIERS,
 };
 use slint::{Brush, Color, ModelRc, VecModel};
 
@@ -878,9 +878,10 @@ fn main() -> Result<(), slint::PlatformError> {
                 let t = win.get_th_tap().trim().to_string();
                 Some(if t.is_empty() { phys.clone() } else { t })
             };
+            let feel = feel_from_str(&win.get_th_feel());
             let mut sb = session.borrow_mut();
             let Some(s) = sb.as_mut() else { return };
-            match s.set_tap_hold(&layer, &phys, &target, tap) {
+            match s.set_tap_hold(&layer, &phys, &target, tap, feel) {
                 Ok(()) => {
                     let cur = s.current_binding(&layer, &phys).unwrap_or_default();
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
@@ -1233,6 +1234,7 @@ fn seed_tap_hold(win: &MainWindow, s: &editing::EditSession, layer: &str, phys: 
     match s.current_tap_hold(layer, phys) {
         Some(th) => {
             win.set_selected_is_tap_hold(true);
+            win.set_th_feel(feel_str(th.behavior()).into());
             win.set_th_hold(th.target.into());
             win.set_th_hold_only(th.tap.is_none());
             win.set_th_tap(th.tap.unwrap_or_default().into());
@@ -1246,10 +1248,28 @@ fn seed_tap_hold(win: &MainWindow, s: &editing::EditSession, layer: &str, phys: 
                 _ => phys.to_string(),
             };
             win.set_selected_is_tap_hold(false);
+            win.set_th_feel(feel_str(None).into());
             win.set_th_hold("".into());
             win.set_th_hold_only(false);
             win.set_th_tap(default_tap.into());
         }
+    }
+}
+
+/// The UI "feel" token for a tap/hold behavior (and the default for forms outside
+/// the two-behavior model). Kept in sync with [`feel_from_str`].
+fn feel_str(b: Option<Behavior>) -> &'static str {
+    match b {
+        Some(Behavior::TypingSafe) => "safe",
+        _ => "fast", // Responsive, or no recognised behavior → the eager default
+    }
+}
+
+/// Map the UI "feel" token back to a [`Behavior`] (defaults to Responsive).
+fn feel_from_str(s: &str) -> Behavior {
+    match s {
+        "safe" => Behavior::TypingSafe,
+        _ => Behavior::Responsive,
     }
 }
 

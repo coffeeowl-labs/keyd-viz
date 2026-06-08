@@ -20,10 +20,52 @@ use crate::parser::{is_mod, parse_fn, TAPHOLD};
 /// The UI offers these alongside the config's layers as "when held" choices.
 pub const MODIFIERS: [&str; 5] = crate::parser::MODS;
 
-/// The canonical function for a *new* tap/hold key: tap + hold, global timeout.
-const NEW_TAPHOLD_FUNC: &str = "overload";
 /// The momentary (hold-only, no tap) function.
 const MOMENTARY_FUNC: &str = "layer";
+
+/// The user-facing tap/hold *feel* — named by outcome, each mapping to a keyd
+/// function with baked-in timeouts (keyd's per-key ms are never surfaced). On edit
+/// a key's existing timings are preserved; these defaults apply only to a brand-new
+/// key or a deliberate feel *switch*. We hard-cap the editable forms to these two
+/// (plus momentary) — power users hand-edit the file for anything else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Behavior {
+    /// `overloadt2` — permissive hold, resolves on release order, no idle guard.
+    /// Engages on overlap with no pause; best for fast home-row typing.
+    Responsive,
+    /// `lettermod` — idle guard plus hold timeout: ignores quick taps and engages
+    /// only on a deliberate hold. Best for keys an accidental hold would ruin.
+    TypingSafe,
+}
+
+impl Behavior {
+    /// The keyd function this feel emits for a fresh binding.
+    pub fn func(self) -> &'static str {
+        match self {
+            Behavior::Responsive => "overloadt2",
+            Behavior::TypingSafe => "lettermod",
+        }
+    }
+
+    /// Baked-in default timeout args for a fresh binding of this feel. Single
+    /// backstop ms for `overloadt2`; idle + hold ms for `lettermod`.
+    fn default_rest(self) -> Vec<String> {
+        match self {
+            Behavior::Responsive => vec!["200".to_string()],
+            Behavior::TypingSafe => vec!["150".to_string(), "200".to_string()],
+        }
+    }
+
+    /// Which feel an existing function corresponds to — `None` for forms outside
+    /// the two-behavior model (plain `overload`, momentary `layer`, exotic forms).
+    pub fn from_func(func: &str) -> Option<Behavior> {
+        match func {
+            "overloadt2" => Some(Behavior::Responsive),
+            "lettermod" => Some(Behavior::TypingSafe),
+            _ => None,
+        }
+    }
+}
 
 /// A decomposed tap/hold binding the editor can read, edit, and re-serialize.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +132,13 @@ impl TapHold {
         is_mod(&self.target)
     }
 
+    /// The [`Behavior`] this binding's function corresponds to, if any (so the
+    /// panel can pre-select the matching feel). `None` for the momentary `layer`
+    /// form and any function outside the two-behavior model.
+    pub fn behavior(&self) -> Option<Behavior> {
+        Behavior::from_func(&self.func)
+    }
+
     /// Build the tap/hold to write when the user sets the slots, preserving an
     /// existing key's function and timeouts where it makes sense:
     /// - `tap = None` → momentary `layer(target)` (drops timeouts: `layer()` takes
@@ -99,26 +148,39 @@ impl TapHold {
     ///   `lettermod(num, g, 150, 200)`).
     /// - otherwise (a brand-new dual-function key, or one promoted from momentary)
     ///   → canonical `overload(target, tap)`.
-    pub fn compose(existing: Option<&TapHold>, target: String, tap: Option<String>) -> TapHold {
-        match (tap, existing) {
-            (None, _) => TapHold {
+    pub fn compose(
+        existing: Option<&TapHold>,
+        target: String,
+        tap: Option<String>,
+        feel: Behavior,
+    ) -> TapHold {
+        let Some(t) = tap else {
+            // Momentary hold-only: a layer, no tap, no timeouts — feel is moot.
+            return TapHold {
                 func: MOMENTARY_FUNC.to_string(),
                 target,
                 tap: None,
                 rest: Vec::new(),
-            },
-            (Some(t), Some(prev)) if prev.func != MOMENTARY_FUNC => TapHold {
-                func: prev.func.clone(),
-                target,
-                tap: Some(t),
-                rest: prev.rest.clone(),
-            },
-            (Some(t), _) => TapHold {
-                func: NEW_TAPHOLD_FUNC.to_string(),
-                target,
-                tap: Some(t),
-                rest: Vec::new(),
-            },
+            };
+        };
+        // Preserve the existing function + timeouts only when the key ALREADY has
+        // the chosen feel (so retargeting/retapping never retunes a hand-tuned
+        // config). A new key, or a deliberate feel switch, takes the feel defaults.
+        if let Some(prev) = existing {
+            if prev.behavior() == Some(feel) {
+                return TapHold {
+                    func: prev.func.clone(),
+                    target,
+                    tap: Some(t),
+                    rest: prev.rest.clone(),
+                };
+            }
+        }
+        TapHold {
+            func: feel.func().to_string(),
+            target,
+            tap: Some(t),
+            rest: feel.default_rest(),
         }
     }
 }
@@ -168,8 +230,11 @@ mod tests {
         assert_eq!(th.target, "nav");
         assert_eq!(th.tap.as_deref(), Some("f"));
         assert_eq!(th.serialize(), "overloadt2(nav, f, 200)");
-        // Repointing the hold keeps the form and the single 200ms backstop.
-        let edited = TapHold::compose(Some(&th), "num".into(), Some("f".into()));
+        // Repointing the hold keeps the form and the single 200ms backstop —
+        // because the chosen feel still matches the key's existing function.
+        assert_eq!(th.behavior(), Some(Behavior::Responsive));
+        let edited =
+            TapHold::compose(Some(&th), "num".into(), Some("f".into()), Behavior::Responsive);
         assert_eq!(edited.serialize(), "overloadt2(num, f, 200)");
     }
 
@@ -193,36 +258,50 @@ mod tests {
     }
 
     #[test]
-    fn compose_new_dual_function_key_uses_overload() {
-        let th = TapHold::compose(None, "nav".into(), Some("esc".into()));
-        assert_eq!(th.serialize(), "overload(nav, esc)");
+    fn compose_new_key_uses_the_feel_defaults() {
+        let responsive = TapHold::compose(None, "nav".into(), Some("esc".into()), Behavior::Responsive);
+        assert_eq!(responsive.serialize(), "overloadt2(nav, esc, 200)");
+        let safe = TapHold::compose(None, "nav".into(), Some("esc".into()), Behavior::TypingSafe);
+        assert_eq!(safe.serialize(), "lettermod(nav, esc, 150, 200)");
     }
 
     #[test]
     fn compose_new_momentary_uses_layer() {
-        let th = TapHold::compose(None, "nav".into(), None);
+        // Feel is irrelevant with no tap.
+        let th = TapHold::compose(None, "nav".into(), None, Behavior::Responsive);
         assert_eq!(th.serialize(), "layer(nav)");
     }
 
     #[test]
-    fn compose_edit_preserves_form_and_timeouts() {
+    fn compose_edit_within_same_feel_preserves_timeouts() {
         let existing = TapHold::parse("f", "lettermod(nav, f, 150, 200)").unwrap();
-        // Swap both the hold target and the tap; timings must survive.
-        let edited = TapHold::compose(Some(&existing), "num".into(), Some("g".into()));
+        // Same feel (Typing-safe) + swap target/tap → hand-tuned timings survive.
+        let edited =
+            TapHold::compose(Some(&existing), "num".into(), Some("g".into()), Behavior::TypingSafe);
         assert_eq!(edited.serialize(), "lettermod(num, g, 150, 200)");
     }
 
     #[test]
-    fn compose_promote_momentary_to_dual_uses_overload() {
+    fn compose_feel_switch_applies_new_defaults() {
+        // Deliberately switching feel resets to that feel's baked-in defaults.
+        let existing = TapHold::parse("f", "overloadt2(nav, f, 200)").unwrap();
+        let edited =
+            TapHold::compose(Some(&existing), "nav".into(), Some("f".into()), Behavior::TypingSafe);
+        assert_eq!(edited.serialize(), "lettermod(nav, f, 150, 200)");
+    }
+
+    #[test]
+    fn compose_promote_momentary_to_dual_uses_feel_default() {
         let existing = TapHold::parse("capslock", "layer(nav)").unwrap();
-        let edited = TapHold::compose(Some(&existing), "nav".into(), Some("esc".into()));
-        assert_eq!(edited.serialize(), "overload(nav, esc)");
+        let edited =
+            TapHold::compose(Some(&existing), "nav".into(), Some("esc".into()), Behavior::Responsive);
+        assert_eq!(edited.serialize(), "overloadt2(nav, esc, 200)");
     }
 
     #[test]
     fn compose_demote_to_momentary_drops_timeouts() {
         let existing = TapHold::parse("f", "lettermod(nav, f, 150, 200)").unwrap();
-        let edited = TapHold::compose(Some(&existing), "nav".into(), None);
+        let edited = TapHold::compose(Some(&existing), "nav".into(), None, Behavior::TypingSafe);
         assert_eq!(edited.serialize(), "layer(nav)");
     }
 }

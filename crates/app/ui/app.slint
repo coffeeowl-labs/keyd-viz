@@ -559,6 +559,7 @@ export component MainWindow inherits Window {
     in-out property <string> th_hold;        // chosen hold target (a layer or modifier)
     in-out property <string> th_tap;         // tap action (defaults to the physical key)
     in-out property <bool> th_hold_only;     // momentary: hold only, no tap action
+    in-out property <string> th_feel;        // tap-vs-hold "feel": "fast" | "safe"
     callback apply_tap_hold();               // compose th_hold/th_tap into the binding
     callback save_draft();
     callback confirm_discard();   // discard the unsaved session and proceed (leave / switch)
@@ -1108,6 +1109,76 @@ export component MainWindow inherits Window {
                                     clicked => {
                                         root.th_hold_only = !root.th_hold_only;
                                     }
+                                }
+                            }
+                            // feel: how the key disambiguates tap vs hold. Labels say
+                            // what they do (no keyd jargon, no ms); hovering reveals the
+                            // one-line detail. Only meaningful when there IS a tap.
+                            if !root.th_hold_only: HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                Text {
+                                    text: "feel:";
+                                    color: #cfd6df;
+                                    font-size: 12px;
+                                    font-family: "JetBrains Mono";
+                                    vertical-alignment: center;
+                                }
+                                Rectangle {
+                                    property <bool> sel: root.th_feel == "fast";
+                                    width: tf.preferred-width + 16px;
+                                    height: tf.preferred-height + 8px;
+                                    border-radius: 6px;
+                                    background: sel ? #16341f : (fastta.has-hover ? #1b2129 : #161b22);
+                                    border-width: 1px;
+                                    border-color: sel ? #3ddc84 : #2a3340;
+                                    fastta := TouchArea {
+                                        clicked => {
+                                            root.th_feel = "fast";
+                                        }
+                                    }
+                                    tf := Text {
+                                        x: 8px;
+                                        y: 4px;
+                                        text: "fast typing";
+                                        color: parent.sel ? #3ddc84 : #cfd6df;
+                                        font-size: 12px;
+                                        font-family: "JetBrains Mono";
+                                    }
+                                }
+                                Rectangle {
+                                    property <bool> sel: root.th_feel == "safe";
+                                    width: ts.preferred-width + 16px;
+                                    height: ts.preferred-height + 8px;
+                                    border-radius: 6px;
+                                    background: sel ? #16341f : (safeta.has-hover ? #1b2129 : #161b22);
+                                    border-width: 1px;
+                                    border-color: sel ? #3ddc84 : #2a3340;
+                                    safeta := TouchArea {
+                                        clicked => {
+                                            root.th_feel = "safe";
+                                        }
+                                    }
+                                    ts := Text {
+                                        x: 8px;
+                                        y: 4px;
+                                        text: "avoid misfires";
+                                        color: parent.sel ? #3ddc84 : #cfd6df;
+                                        font-size: 12px;
+                                        font-family: "JetBrains Mono";
+                                    }
+                                }
+                                Text {
+                                    // Hover detail; empty (no jitter) until a chip is hovered.
+                                    text: fastta.has-hover
+                                        ? "engages on overlap, no pause — best for fast typing"
+                                        : safeta.has-hover
+                                            ? "ignores quick taps — won’t trigger by accident"
+                                            : "";
+                                    color: #5a6673;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                    wrap: word-wrap;
                                 }
                             }
                             HorizontalLayout {
