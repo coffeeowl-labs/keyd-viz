@@ -968,10 +968,13 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   press-to-capture so a primed key can't fire into a pick. Workspace tests green
   (+7 picker, +1 board), clippy clean. *Follow-up same day:* the picker made the inline
   10-chip quick-palette redundant (those commons now live in the overlay's empty-query
-  header), so the second chip row was cut and `▽ transparent` folded into the action row
-  ([set] [pick…] [▽] [capture]) — one row instead of two. Also reworded the base-layer
-  marker to `▽ no remap — sends the real key` (was "default (emits the key)"): keyd grabs
-  evdev *above* the firmware, so base-layer transparency is keyd ceasing to intercept and
-  forwarding the real keycode, not a QMK-style firmware fallback — the old wording invited
-  that wrong mental model. **Remaining for E2**: layers/chords/`[global]`,
+  header), so the second chip row was cut and the clear-binding action folded into the
+  action row ([set] [pick…] [unbind] [capture]) — one row instead of two. Also dropped
+  QMK/VIA's "▽ transparent" vocabulary entirely (button → `unbind`, marker → `no remap —
+  sends the real key` / `inherits base`, no ▽ glyph): keyd grabs evdev *above* the
+  firmware, so there's no layer-below to "fall through" to — base-layer clearing is keyd
+  ceasing to intercept and forwarding the real keycode, not a firmware fallback. The
+  borrowed word invited that wrong mental model; keyd's own framing is just "the key has
+  a binding, remove it". (Internal `make_transparent` callback name kept.) **Remaining
+  for E2**: layers/chords/`[global]`,
   orphan warnings, create-config flow, one-level include closure scan (deferred, §5.3).
