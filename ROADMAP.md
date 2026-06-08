@@ -1058,3 +1058,39 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   asymmetrically stricter. Workspace 223 tests green, clippy clean; viewer unaffected.
   **Remaining for E2**: chords/`[global]`, create-config flow, one-level include closure
   scan (deferred, §5.3).
+- *(Phase 6 E2 — create-config flow, 2026-06-08)* Make a brand-new config for an
+  unconfigured keyboard from the GUI (design doc §5.5) — the last big gap: until now
+  the tool could only edit configs that already existed. **Core** (`edit.rs`):
+  `starter_config(ids_lines)` emits the minimal `[ids]\n<id>\n\n[main]\n` keyd both
+  accepts and matches (verified `keyd check` accepts the empty `[main]`), round-tripping
+  by construction with zero diagnostics/orphans. **App session** (`editing.rs`):
+  `EditSession::create(path, ids_lines)` opens on the starter with `original=""` (the file
+  isn't on disk yet) and `created=true`, ORed into `dirty()` so a fresh config is "unsaved"
+  before any edit; `is_new()` lets the caller treat a never-persisted config as a removable
+  phantom. The whole edit/preview/draft/apply surface then works unchanged — and the
+  **privileged apply tool needed no changes**: its transactional write path already handles
+  the `Absent` case (create via `O_EXCL`, revert by delete). **App wiring** (`main.rs`):
+  `create_candidates` lists connected keyboards no *specific* config governs (unclaimed or
+  wildcard-only — Explicit-governed ones are excluded; you edit those instead, §5.5),
+  deduped by `vendor:product`; `sanitize_config_name` derives an allow-list-safe name from
+  the device name; `config_name_taken` blocks a filename collision; `create_config_dir`
+  ties candidate detection, the collision check, and the apply target to the *same* dir the
+  apply tool writes (so they can't disagree). The new config is pushed as a real `SheetSrc`
+  (always last) so it becomes a board like any other; a never-persisted one is removed again
+  on exit. Refactored the edit-mode entry into a shared `enter_edit_session` so the toggle
+  and create paths can't drift (and `edit_dirty` now follows `s.dirty()` uniformly). **UI**:
+  a "+ config" header button opens an inline panel — candidate-keyboard chips + an "All
+  keyboards (\*)" wildcard, a name field (`.conf` suffix shown), validation/collision errors,
+  create/cancel — that drops straight into edit mode on the starter. **Adversarial review
+  (2 angles, correctness + UI state-machine)** caught one **critical**: the config-reload
+  watcher seeded `mtimes` once at startup sized to `srcs.len()` and indexed it per-tick, so
+  growing `srcs` (create) then keeping + leaving edit mode panicked out-of-bounds on the
+  feature's happy path — fixed by keying `mtimes` by path (a `HashMap`) so runtime grow/shrink
+  can't desync it. Plus two UX fixes: entering compact mode now closes the create panel (its
+  cancel button is compact-hidden — otherwise invisible wedged state), and re-clicking the
+  already-selected keyboard chip no longer clobbers a name the user has typed. Deferred
+  (acceptable): the keyboard chooser stays clickable behind the open panel (the panel is
+  self-contained; cosmetic only). Workspace tests green (+8: 2 core starter, 3 session, 3
+  name-sanitise), clippy `-D warnings` clean; GUI click-through left for manual verification
+  (can't drive Slint on live Wayland). **Remaining for E2**: chords/`[global]`, one-level
+  include closure scan (deferred, §5.3).

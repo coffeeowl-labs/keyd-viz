@@ -22,7 +22,8 @@ use std::rc::Rc;
 use devices::InputDevice;
 use keydviz_core::board::{KeyCap, KeyState};
 use keydviz_core::{
-    catalog, import_qmk, parse_file, parse_text, Behavior, Config, Geometry, Ids, Sheet, MODIFIERS,
+    catalog, import_qmk, parse_file, parse_text, Behavior, Config, Geometry, Ids, MatchKind, Sheet,
+    MODIFIERS,
 };
 use slint::{Brush, Color, ModelRc, VecModel};
 
@@ -474,6 +475,102 @@ fn rescan(srcs: &[SheetSrc]) -> DeviceMatching {
     (out, device_map)
 }
 
+/// A connected keyboard no *specific* config governs — a create-config candidate
+/// (design doc §5.5). Specifically-governed keyboards are excluded: the right action
+/// for those is editing the governing config (reachable from the chooser), not
+/// spawning a second file with a colliding id. Both unclaimed and wildcard-only
+/// keyboards qualify, because a new specific config out-ranks the wildcard.
+struct CreateCandidate {
+    /// The raw device name (may be empty) — used as the new board's label.
+    name: String,
+    /// Chip label, e.g. `PFU HHKB (04fe:0021)`.
+    label: String,
+    /// The `[ids]` entry to seed (the device's `vendor:product`).
+    devid: String,
+    /// A config name suggested from the device name, sanitised to the apply tool's
+    /// allow-list.
+    suggested: String,
+}
+
+/// The directory create-config reads existing configs from and writes the new one
+/// to — the *same* dir the one-click apply tool targets, so candidate detection,
+/// collision checks, and the apply path can never disagree. Falls back to the
+/// production `/etc/keyd` when one-click isn't available (AppImage / plain source:
+/// the new config goes through draft-then-install, but collisions are still checked
+/// against the real dir).
+fn create_config_dir() -> PathBuf {
+    applying::one_click()
+        .map(|i| i.config_dir().to_path_buf())
+        .unwrap_or_else(|| applying::prod_config_dir().to_path_buf())
+}
+
+/// Connected keyboards eligible for a fresh config, deduped by `vendor:product`
+/// (one keyboard exposes several event nodes). See [`CreateCandidate`].
+fn create_candidates(config_dir: &Path) -> Vec<CreateCandidate> {
+    let configs = parse_configs(&conf_files_in(config_dir));
+    let matchers: Vec<Ids> = configs.iter().map(|(_, c)| Ids::parse(&c.ids)).collect();
+    let mut out: Vec<CreateCandidate> = Vec::new();
+    for dev in devices::connected_devices() {
+        if !dev.is_keyboard {
+            continue;
+        }
+        let devid = dev.devid();
+        if out.iter().any(|c| c.devid == devid) {
+            continue;
+        }
+        let best = matchers
+            .iter()
+            .map(|ids| ids.match_device(&devid, dev.flags))
+            .max_by_key(|m| m.rank())
+            .unwrap_or(MatchKind::None);
+        if best == MatchKind::Explicit {
+            continue; // already governed — edit that config instead
+        }
+        let label =
+            if dev.name.is_empty() { devid.clone() } else { format!("{} ({devid})", dev.name) };
+        out.push(CreateCandidate {
+            name: dev.name.clone(),
+            label,
+            suggested: sanitize_config_name(&dev.name),
+            devid,
+        });
+    }
+    out
+}
+
+/// Turn a free-form device name into a config name the apply tool's allow-list
+/// accepts ([`keydviz_apply::valid_name`]): lowercased, every run of
+/// non-`[a-z0-9_]` collapsed to a single `-`, leading/trailing `-` trimmed, capped
+/// at 64. Falls back to `keyboard` when nothing usable survives.
+fn sanitize_config_name(name: &str) -> String {
+    let mut s = String::new();
+    let mut prev_dash = false;
+    for c in name.chars() {
+        let lc = c.to_ascii_lowercase();
+        if lc.is_ascii_alphanumeric() || lc == '_' {
+            s.push(lc);
+            prev_dash = false;
+        } else if !s.is_empty() && !prev_dash {
+            s.push('-');
+            prev_dash = true;
+        }
+    }
+    let capped: String = s.trim_matches('-').chars().take(64).collect();
+    let capped = capped.trim_end_matches('-');
+    if capped.is_empty() {
+        "keyboard".to_string()
+    } else {
+        capped.to_string()
+    }
+}
+
+/// Whether `<config_dir>/<name>.conf` already exists — a *filename* collision,
+/// distinct from an `[ids]` collision: creating over it would overwrite an unrelated
+/// config, so the UI blocks it and asks for a different name.
+fn config_name_taken(config_dir: &Path, name: &str) -> bool {
+    config_dir.join(format!("{name}.conf")).exists()
+}
+
 /// Register the bundled JetBrains Mono faces so typography is identical on every
 /// machine, regardless of installed fonts. Must be called after the Slint platform
 /// is initialized (i.e. after the first window is constructed).
@@ -734,40 +831,111 @@ fn main() -> Result<(), slint::PlatformError> {
                 return;
             }
             match editing::EditSession::open(&path) {
-                Ok(s) => {
-                    let choices = edit_layer_choices(&s);
-                    // Default to the first real section (usually `main`, but a config
-                    // whose bindings live only in layers has none — pick what exists).
-                    let default_layer =
-                        choices.first().map(|c| c.name.clone()).unwrap_or("main".into());
-                    let (apply_ok, apply_hint) = apply_gate(&s);
-                    win.set_edit_layers(model(choices));
-                    win.set_hold_layers(model(hold_layer_choices(&s)));
-                    win.set_can_rename(renameable(&default_layer));
-                    win.set_edit_layer(default_layer);
-                    win.set_rename_target("".into());
-                    win.set_rename_name("".into());
-                    win.set_selected_phys("".into());
-                    win.set_edit_current("".into());
-                    win.set_edit_value("".into());
-                    win.set_edit_dirty(false);
-                    win.set_draft_info("".into());
-                    win.set_capture_armed(false);
-                    win.set_new_layer_open(false);
-                    win.set_new_layer_name("".into());
-                    win.set_delete_prompt("".into());
-                    win.set_delete_detail("".into());
-                    win.set_edit_banner(banner.into());
-                    win.set_apply_available(apply_ok);
-                    win.set_apply_hint(apply_hint.into());
-                    refresh_warnings(&win, &s);
-                    reset_apply_ui(&win);
-                    *session.borrow_mut() = Some(s);
-                    win.set_edit_mode(true);
-                    render_board(&win); // freeze the board to the chosen section
-                }
+                Ok(s) => enter_edit_session(&win, &session, s, banner),
                 Err(v) => win.set_edit_banner(v.describe().into()),
             }
+        });
+    }
+
+    // Open the create-config panel: list connected keyboards no specific config
+    // governs, plus the wildcard, and default the selection + suggested name (§5.5).
+    {
+        let weak = win.as_weak();
+        win.on_begin_create(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let cands = create_candidates(&create_config_dir());
+            let (sel_id, sel_name) = match cands.first() {
+                Some(c) => (c.devid.clone(), c.suggested.clone()),
+                None => ("*".to_string(), "default".to_string()),
+            };
+            let data: Vec<CreateCandidateData> = cands
+                .iter()
+                .map(|c| CreateCandidateData {
+                    label: c.label.clone().into(),
+                    id: c.devid.clone().into(),
+                    suggested: c.suggested.clone().into(),
+                })
+                .collect();
+            win.set_create_candidates(model(data));
+            win.set_create_selected_id(sel_id.into());
+            win.set_create_name(sel_name.into());
+            win.set_create_error("".into());
+            win.set_create_open(true);
+        });
+    }
+
+    // Create the starter config for the chosen id+name and drop straight into edit
+    // mode on it. The new config becomes a real board (so the preview/apply/exit
+    // machinery — all keyed by path — works unchanged); a never-persisted one is
+    // removed again on exit (see `exit_edit`).
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        win.on_create_config(move |id, name| {
+            let Some(win) = weak.upgrade() else { return };
+            let id = id.to_string();
+            let name = name.trim().to_string();
+            if id.is_empty() {
+                win.set_create_error("pick a keyboard or \u{201c}All keyboards\u{201d}".into());
+                return;
+            }
+            if !keydviz_apply::valid_name(&name) {
+                win.set_create_error(
+                    "name: letters, digits, '_' or '-' only (max 64)".into(),
+                );
+                return;
+            }
+            let dir = create_config_dir();
+            if config_name_taken(&dir, &name) {
+                win.set_create_error(
+                    format!("{name}.conf already exists \u{2014} choose another name").into(),
+                );
+                return;
+            }
+            let path = dir.join(format!("{name}.conf"));
+            let s = match editing::EditSession::create(&path, &[&id]) {
+                Ok(s) => s,
+                // The starter round-trips by construction; surface anything unexpected
+                // in the panel rather than silently failing.
+                Err(v) => {
+                    win.set_create_error(v.describe().into());
+                    return;
+                }
+            };
+            // Look up the device name (for the board label) and build the banner.
+            let device =
+                create_candidates(&dir).into_iter().find(|c| c.devid == id).map(|c| c.name);
+            let banner = if id == "*" {
+                "new config \u{2014} applies to all keyboards not claimed by another config"
+                    .to_string()
+            } else {
+                match &device {
+                    Some(n) if !n.is_empty() => format!("new config \u{2014} applies to {n} ({id})"),
+                    _ => format!("new config \u{2014} applies to {id}"),
+                }
+            };
+            let matched_ids =
+                if id == "*" { vec!["*".to_string()] } else { vec![id.clone()] };
+            let device_label = device.unwrap_or_default();
+            // Add the new config as a board and select it.
+            let new_idx = {
+                let mut srcs = srcs.borrow_mut();
+                srcs.push(SheetSrc::catalog(&path, &s.config(), &device_label, matched_ids));
+                let data: Vec<SheetData> = srcs.iter().map(build_sheet_data).collect();
+                win.set_sheets(model(data));
+                srcs.len() - 1
+            };
+            win.set_active_index(new_idx as i32);
+            {
+                use slint::Model;
+                if let Some(row) = win.get_sheets().row_data(new_idx) {
+                    win.set_active_sheet(row);
+                }
+            }
+            win.set_create_open(false);
+            win.set_create_error("".into());
+            enter_edit_session(&win, &session, s, banner);
         });
     }
 
@@ -1569,6 +1737,49 @@ fn affected_line(src: &SheetSrc) -> String {
     }
 }
 
+/// Enter edit mode for `s` (freshly opened *or* just created): seed every edit-mode
+/// window property, store the session, and freeze the board to its default section.
+/// Shared by the edit toggle and the create-config flow so the two can't drift. The
+/// active sheet must already point at the config being edited (its board is what the
+/// preview renders onto). `edit_dirty` follows `s.dirty()` — `false` for a clean
+/// just-opened file, `true` for a brand-new config that has content to persist.
+fn enter_edit_session(
+    win: &MainWindow,
+    session: &SharedSession,
+    s: editing::EditSession,
+    banner: String,
+) {
+    let choices = edit_layer_choices(&s);
+    // Default to the first real section (usually `main`, but a config whose bindings
+    // live only in layers has none — pick what exists).
+    let default_layer = choices.first().map(|c| c.name.clone()).unwrap_or("main".into());
+    let (apply_ok, apply_hint) = apply_gate(&s);
+    win.set_edit_layers(model(choices));
+    win.set_hold_layers(model(hold_layer_choices(&s)));
+    win.set_can_rename(renameable(&default_layer));
+    win.set_edit_layer(default_layer);
+    win.set_rename_target("".into());
+    win.set_rename_name("".into());
+    win.set_selected_phys("".into());
+    win.set_edit_current("".into());
+    win.set_edit_value("".into());
+    win.set_edit_dirty(s.dirty());
+    win.set_draft_info("".into());
+    win.set_capture_armed(false);
+    win.set_new_layer_open(false);
+    win.set_new_layer_name("".into());
+    win.set_delete_prompt("".into());
+    win.set_delete_detail("".into());
+    win.set_edit_banner(banner.into());
+    win.set_apply_available(apply_ok);
+    win.set_apply_hint(apply_hint.into());
+    refresh_warnings(win, &s);
+    reset_apply_ui(win);
+    *session.borrow_mut() = Some(s);
+    win.set_edit_mode(true);
+    render_board(win); // freeze the board to the chosen section
+}
+
 /// Leave edit mode: drop the session, clear the edit chrome, and discard the unsaved
 /// preview by re-deriving the sheet from the file on disk.
 fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &SharedSession) {
@@ -1598,11 +1809,28 @@ fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &Shar
     win.set_apply_hint("".into());
     reset_apply_ui(win);
     let mut srcs = srcs.borrow_mut();
-    if let Some((idx, src)) = srcs.iter_mut().enumerate().find(|(_, x)| x.path == s.path) {
-        if let Ok(cfg) = parse_file(&src.path) {
-            src.cfg = cfg;
+    if let Some(idx) = srcs.iter().position(|x| x.path == s.path) {
+        if s.is_new() && !s.path.exists() {
+            // A new config that was never persisted (cancelled, or applied-then-reverted):
+            // remove its phantom board entirely rather than re-deriving from a file that
+            // doesn't exist. Rebuild the chooser and reselect a surviving board.
+            srcs.remove(idx);
+            let data: Vec<SheetData> = srcs.iter().map(build_sheet_data).collect();
+            win.set_sheets(model(data));
+            if !srcs.is_empty() {
+                let active = win.get_active_index().max(0).min(srcs.len() as i32 - 1);
+                win.set_active_index(active);
+                use slint::Model;
+                if let Some(row) = win.get_sheets().row_data(active as usize) {
+                    win.set_active_sheet(row);
+                }
+            }
+        } else {
+            if let Ok(cfg) = parse_file(&srcs[idx].path) {
+                srcs[idx].cfg = cfg;
+            }
+            publish_sheet(win, idx, &srcs[idx]);
         }
-        publish_sheet(win, idx, src);
     }
     drop(srcs);
     render_board(win);
@@ -1989,8 +2217,11 @@ fn spawn_config_reload(
 ) -> slint::Timer {
     let weak = win.as_weak();
     // Seed last-seen mtimes so we only reload on a *future* change, not at startup.
-    let mut mtimes: Vec<Option<std::time::SystemTime>> =
-        srcs.borrow().iter().map(|s| file_mtime(&s.path)).collect();
+    // Keyed by path, not index: `srcs` grows (create-config) and shrinks (phantom
+    // removal) at runtime, so an index-aligned vec would desync and panic — the map
+    // tracks each config by its own path regardless of position.
+    let mut mtimes: std::collections::HashMap<PathBuf, Option<std::time::SystemTime>> =
+        srcs.borrow().iter().map(|s| (s.path.clone(), file_mtime(&s.path))).collect();
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(1000), move || {
         let Some(win) = weak.upgrade() else { return };
@@ -2003,10 +2234,12 @@ fn spawn_config_reload(
                 continue;
             }
             let now = file_mtime(&src.path);
-            if now.is_none() || now == mtimes[idx] {
+            // A freshly-added path isn't in the map yet → treat as "changed" so it gets
+            // seeded (and re-derived once from disk, harmless). `None` mtime = mid-save.
+            if now.is_none() || mtimes.get(&src.path).is_some_and(|&prev| prev == now) {
                 continue; // missing (mid-save) or unchanged
             }
-            mtimes[idx] = now;
+            mtimes.insert(src.path.clone(), now);
             match parse_file(&src.path) {
                 Ok(cfg) => {
                     src.cfg = cfg;
@@ -2460,5 +2693,38 @@ mod glow_tests {
         let emph = vec![false, false];
         let glow = resolve_glow(&sets, &emph, &held(&["a"]));
         assert_eq!(glow, vec![false, true]);
+    }
+}
+
+#[cfg(test)]
+mod create_tests {
+    use super::sanitize_config_name;
+
+    #[test]
+    fn sanitizes_device_names_to_the_allow_list() {
+        assert_eq!(sanitize_config_name("PFU HHKB"), "pfu-hhkb");
+        assert_eq!(sanitize_config_name("ASUS ROG Zephyrus G14"), "asus-rog-zephyrus-g14");
+        // Leading/trailing junk trimmed; runs of symbols collapse to one dash.
+        assert_eq!(sanitize_config_name("  ::Keychron K2:: "), "keychron-k2");
+        assert_eq!(sanitize_config_name("My_Board-2"), "my_board-2");
+        // Every result is a name the apply tool would accept.
+        for n in ["PFU HHKB", "  ::Keychron K2:: ", "My_Board-2", ""] {
+            let s = sanitize_config_name(n);
+            assert!(keydviz_apply::valid_name(&s), "{n:?} → {s:?} should be valid");
+        }
+    }
+
+    #[test]
+    fn falls_back_when_nothing_usable_survives() {
+        assert_eq!(sanitize_config_name(""), "keyboard");
+        assert_eq!(sanitize_config_name("!!! ###"), "keyboard");
+    }
+
+    #[test]
+    fn caps_at_64_and_stays_valid() {
+        let long = "a".repeat(200);
+        let s = sanitize_config_name(&long);
+        assert_eq!(s.len(), 64);
+        assert!(keydviz_apply::valid_name(&s));
     }
 }

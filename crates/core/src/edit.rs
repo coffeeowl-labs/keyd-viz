@@ -665,6 +665,22 @@ impl EditConfig {
     }
 }
 
+/// Generate the minimal starter config for a brand-new keyboard (design doc §5.5):
+/// an `[ids]` section listing `ids_lines` — each a `vendor:product` or the bare `*`
+/// wildcard — followed by an empty `[main]`. This is the smallest config keyd both
+/// accepts and matches to a device; the user fills in bindings from the editor. The
+/// output round-trips by construction (it parses and re-serializes identically) and
+/// carries no orphan/diagnostic issues. Authored in LF (a freshly created file).
+pub fn starter_config(ids_lines: &[&str]) -> String {
+    let mut out = String::from("[ids]\n");
+    for line in ids_lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("\n[main]\n");
+    out
+}
+
 /// A binding that points at an undefined layer — `key = …layer(`layer`)…` living in
 /// section `[`section`]` (base name). See [`EditConfig::orphan_layer_refs`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1261,5 +1277,32 @@ mod tests {
         let mut cfg = EditConfig::parse("[main]\na = layer(nav)\n[nav:C]\nj = down\n");
         assert_eq!(cfg.rename_layer("nav", "fn").unwrap(), 1);
         assert_eq!(cfg.serialize(), "[main]\na = layer(fn)\n[fn:C]\nj = down\n");
+    }
+
+    // -------------------------------------------------------------- starter config (§5.5)
+    #[test]
+    fn starter_config_is_minimal_valid_and_round_trips() {
+        // A specific device id.
+        let s = starter_config(&["04fe:0021"]);
+        assert_eq!(s, "[ids]\n04fe:0021\n\n[main]\n");
+        // Round-trips by construction (the §5.1 gate the create path runs).
+        assert!(round_trips(&s));
+        let cfg = EditConfig::parse(&s);
+        // Has [ids] + [main], an empty main, no diagnostics, no orphans.
+        assert!(cfg.diagnostics().is_empty());
+        assert!(cfg.orphan_layer_refs().is_empty());
+        assert_eq!(cfg.section("ids").unwrap().kind, SectionKind::Ids);
+        let main = cfg.section("main").unwrap();
+        assert_eq!(main.kind, SectionKind::Main);
+        assert!(!main.entries.iter().any(|e| matches!(e.kind, EntryKind::Binding { .. })));
+    }
+
+    #[test]
+    fn starter_config_wildcard_and_multi_id() {
+        assert_eq!(starter_config(&["*"]), "[ids]\n*\n\n[main]\n");
+        assert_eq!(
+            starter_config(&["04fe:0021", "k:1234:5678"]),
+            "[ids]\n04fe:0021\nk:1234:5678\n\n[main]\n"
+        );
     }
 }

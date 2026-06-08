@@ -15,7 +15,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use keydviz_core::edit::{EditConfig, SectionKind};
+use keydviz_core::edit::{starter_config, EditConfig, SectionKind};
 use keydviz_core::{parser, round_trips, Behavior, Config, TapHold};
 
 /// Why a config can't be opened for editing (it remains viewable as before).
@@ -43,11 +43,20 @@ impl ViewOnly {
 
 /// An open edit session for one real config file.
 pub struct EditSession {
-    /// The real config this session edits (e.g. `/etc/keyd/hhkb.conf`).
+    /// The real config this session edits (e.g. `/etc/keyd/hhkb.conf`). For a
+    /// freshly-created config (see [`EditSession::create`]) the file does not yet
+    /// exist — the apply tool's `Absent` write path creates it.
     pub path: PathBuf,
-    /// The file's bytes at open — diff base and staleness sentinel.
+    /// The file's bytes at open — diff base and staleness sentinel. Empty for a
+    /// brand-new config: the diff then shows the whole starter as additions, and
+    /// the staleness check (a read of a not-yet-existing path) yields nothing.
     original: String,
     edit: EditConfig,
+    /// This session is creating a new config that isn't on disk yet (§5.5). It has
+    /// content to persist even before the first edit, so [`Self::dirty`] reports
+    /// dirty until the create is applied (after which the session is re-opened as a
+    /// normal on-disk one and `created` is false).
+    created: bool,
 }
 
 /// Result of a draft save: where it went and what to run to install it.
@@ -78,7 +87,29 @@ impl EditSession {
         if let Some(w) = edit.diagnostics().iter().find(|w| w.contains("rejects")) {
             return Err(ViewOnly::KeydRejects(w.clone()));
         }
-        Ok(EditSession { path: path.to_path_buf(), original, edit })
+        Ok(EditSession { path: path.to_path_buf(), original, edit, created: false })
+    }
+
+    /// Start a brand-new config for an unconfigured keyboard (design doc §5.5).
+    /// `path` is where it *will* live — `<config-dir>/<name>.conf`, which must not
+    /// exist yet (the caller checks; this is the path the one-click apply tool
+    /// re-derives from the name). `ids_lines` are the `[ids]` entries (a chosen
+    /// device's `vendor:product`, or the bare `*` wildcard). The session opens on a
+    /// minimal `[ids]`+`[main]` starter ([`starter_config`]) with the same §5.1 gate
+    /// as [`Self::open`] — which the generated text passes by construction — so the
+    /// whole edit/preview/draft/apply surface works unchanged from here.
+    pub fn create(path: &Path, ids_lines: &[&str]) -> Result<EditSession, ViewOnly> {
+        let starter = starter_config(ids_lines);
+        // Identity-by-construction, but run the gate so create can never seed a model
+        // the editor would otherwise refuse — one definition of "editable", not two.
+        if !round_trips(&starter) {
+            return Err(ViewOnly::RoundTripGate);
+        }
+        let edit = EditConfig::parse(&starter);
+        if let Some(w) = edit.diagnostics().iter().find(|w| w.contains("rejects")) {
+            return Err(ViewOnly::KeydRejects(w.clone()));
+        }
+        Ok(EditSession { path: path.to_path_buf(), original: String::new(), edit, created: true })
     }
 
     /// Bind `key = val` on the board for `layer` (`"main"` for the base board).
@@ -251,7 +282,17 @@ impl EditSession {
     }
 
     pub fn dirty(&self) -> bool {
-        self.edit.is_dirty()
+        // A not-yet-applied new config has content to persist even before any edit.
+        self.created || self.edit.is_dirty()
+    }
+
+    /// This session is creating a config that isn't on disk yet (`true` only between
+    /// [`Self::create`] and the first successful apply, after which the session is
+    /// re-opened on the now-existing file). Lets the caller treat a never-persisted
+    /// new config as a removable phantom board on exit, rather than re-deriving it
+    /// from a file that doesn't exist.
+    pub fn is_new(&self) -> bool {
+        self.created
     }
 
     /// A compact `-old` / `+new` line diff of the session's changes (common
@@ -617,6 +658,50 @@ mod tests {
         assert_eq!(s.current_binding("main", "capslock").as_deref(), Some("layer(symbols)"));
         // Renaming a non-layer / missing base is a named error.
         assert!(s.rename_layer("main", "base").is_err());
+    }
+
+    #[test]
+    fn create_new_config_is_editable_and_dirty_from_the_start() {
+        let td = TempDir::new("create");
+        // The target file does NOT exist — create() never reads it.
+        let path = td.0.join("newboard.conf");
+        let mut s = EditSession::create(&path, &["04fe:0021"]).unwrap();
+        // A fresh config has content to persist even before any edit.
+        assert!(s.dirty());
+        assert_eq!(s.serialized(), "[ids]\n04fe:0021\n\n[main]\n");
+        // The starter derives the chosen id and an empty, editable [main].
+        assert_eq!(s.config().ids, vec!["04fe:0021".to_string()]);
+        assert_eq!(s.editable_sections(), vec!["main".to_string()]);
+        // Editing the new config works like any other session.
+        s.set_binding("main", "capslock", "esc").unwrap();
+        assert_eq!(s.current_binding("main", "capslock").as_deref(), Some("esc"));
+        // The diff shows the whole new file as additions (original is empty).
+        assert_eq!(s.diff(), "+ [ids]\n+ 04fe:0021\n+ \n+ [main]\n+ capslock = esc\n");
+    }
+
+    #[test]
+    fn create_wildcard_and_apply_target() {
+        let td = TempDir::new("create-wild");
+        let path = td.0.join("default.conf");
+        let s = EditSession::create(&path, &["*"]).unwrap();
+        assert_eq!(s.serialized(), "[ids]\n*\n\n[main]\n");
+        // It's a one-click apply candidate (right dir, allow-listed name) even though
+        // the file doesn't exist yet — the tool's Absent path creates it.
+        assert_eq!(s.apply_target(&td.0).as_deref(), Some("default"));
+        // No stale warning for a not-yet-existing file.
+        assert!(s.stale_warning().is_none());
+    }
+
+    #[test]
+    fn create_save_draft_writes_the_starter() {
+        let td = TempDir::new("create-draft");
+        let path = td.0.join("mine.conf");
+        let mut s = EditSession::create(&path, &["dead:beef"]).unwrap();
+        s.set_binding("main", "a", "b").unwrap();
+        let saved = s.save_draft_to(&td.0.join("drafts")).unwrap();
+        let body = std::fs::read_to_string(&saved.draft_path).unwrap();
+        assert_eq!(body, "[ids]\ndead:beef\n\n[main]\na = b\n");
+        assert!(saved.install_steps.contains("mine.conf"));
     }
 
     #[test]

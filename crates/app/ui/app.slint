@@ -71,6 +71,14 @@ export struct DeviceMatch {
     sheet: int,
 }
 
+// One connected keyboard offered as a create-config target (design doc §5.5):
+// keyboards no specific config governs (unclaimed or wildcard-only).
+export struct CreateCandidateData {
+    label: string,      // e.g. "PFU HHKB (04fe:0021)"
+    id: string,         // the [ids] entry to seed: vendor:product (or "*" for the wildcard chip)
+    suggested: string,  // suggested config file name (no .conf), already allow-list-safe
+}
+
 // ---- one key cap --------------------------------------------------------------
 // Absolutely positioned on a 51px grid (46px cap + 5px gap), so any geometry —
 // staggered, ortho, split, tall ISO-enter — renders from its (x, y, w, h) in key units.
@@ -608,6 +616,28 @@ export component MainWindow inherits Window {
     callback cancel_apply();   // leave confirm / cancel auth / dismiss a terminal state
     // KEEP / revert during the countdown live on ApplyDialog, not here.
 
+    // ---- create config (Phase 6 E2: a starter config for an unconfigured keyboard, §5.5) ----
+    in-out property <bool> create_open: false;          // the create panel is showing (only outside edit mode)
+    in property <[CreateCandidateData]> create_candidates;  // connected keyboards no specific config governs
+    in-out property <string> create_selected_id: "";   // chosen [ids] entry (a vendor:product or "*")
+    in-out property <string> create_name: "";           // config file name being typed (no .conf)
+    in-out property <string> create_error: "";          // bad name / filename-collision reason ("" = ok)
+    callback begin_create();                 // open the panel: populate candidates + sensible defaults
+    callback create_config(string, string);  // (ids entry, name) → create the starter + enter edit mode
+
+    // Compact mode hides the create panel *and* its cancel button (both gated `!compact`),
+    // so close the panel when entering compact — otherwise the user is stuck with invisible
+    // create state until they un-compact. Compact is a transient overlay; a half-started new
+    // config shouldn't survive into it.
+    changed compact => {
+        if (root.compact && root.create_open) {
+            root.create_open = false;
+            root.create_selected_id = "";
+            root.create_name = "";
+            root.create_error = "";
+        }
+    }
+
     ScrollView {
         body := VerticalLayout {
             padding: root.compact ? 8px : 22px;
@@ -662,6 +692,15 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     spacing: 4px;
                     alignment: end;
+                    // New-config entry (Phase 6 E2, §5.5). Hidden while editing (finish or
+                    // cancel the current edit first) and while the create panel is already open.
+                    if !root.edit_mode && !root.create_open: IconButton {
+                        wide: true;
+                        text: "+ config";
+                        clicked => {
+                            root.begin_create();
+                        }
+                    }
                     // Edit-mode toggle (Phase 6 E1). The viewer is the default; "done"
                     // leaves edit mode (the session's unsaved preview is discarded).
                     IconButton {
@@ -794,6 +833,156 @@ export component MainWindow inherits Window {
                 text: "\u{26a0} \{root.edit_banner}";
                 color: #f0b429;
                 font-size: 12px;
+            }
+
+            // ---- create-config panel (Phase 6 E2, §5.5) -------------------------------
+            // Outside edit mode: pick the keyboard a new config should govern (a connected
+            // one, or all keyboards via the wildcard), name it, and start editing the
+            // starter. Creating enters edit mode on the new config; the rest of the
+            // edit/preview/draft/apply flow is unchanged from here.
+            if root.create_open && !root.edit_mode && !root.compact: Rectangle {
+                background: #0c0f14;
+                border-color: #3ddc84;
+                border-width: 1px;
+                border-radius: 12px;
+                height: createbody.preferred-height;
+                createbody := VerticalLayout {
+                    padding: 12px;
+                    spacing: 8px;
+
+                    Text {
+                        text: "New config";
+                        color: #e6e6e6;
+                        font-size: 15px;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: "Which keyboard should this config govern?";
+                        color: #7d8694;
+                        font-size: 12px;
+                    }
+
+                    // candidate keyboards (connected, not already governed by a specific
+                    // config) + a wildcard option. Picking one seeds the id and a suggested
+                    // name; the name stays editable.
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        for cand in root.create_candidates: Rectangle {
+                            property <bool> sel: cand.id == root.create_selected_id;
+                            width: cc.preferred-width + 18px;
+                            height: cc.preferred-height + 8px;
+                            border-radius: 7px;
+                            background: sel ? #16341f : (cca.has-hover ? #1b2129 : #161b22);
+                            border-width: 1px;
+                            border-color: sel ? #3ddc84 : #2a3340;
+                            cca := TouchArea {
+                                clicked => {
+                                    // Only seed the suggested name when switching to a
+                                    // *different* keyboard — re-clicking the selected chip
+                                    // mustn't clobber a name the user has since typed.
+                                    if (root.create_selected_id != cand.id) {
+                                        root.create_name = cand.suggested;
+                                    }
+                                    root.create_selected_id = cand.id;
+                                    root.create_error = "";
+                                }
+                            }
+                            cc := Text {
+                                x: 9px;
+                                y: 4px;
+                                text: cand.label;
+                                color: sel ? #3ddc84 : #cfd6df;
+                                font-size: 12px;
+                                font-weight: sel ? 700 : 400;
+                                font-family: "JetBrains Mono";
+                            }
+                        }
+                        // Wildcard: applies to every keyboard not claimed by another config.
+                        Rectangle {
+                            property <bool> sel: root.create_selected_id == "*";
+                            width: wc.preferred-width + 18px;
+                            height: wc.preferred-height + 8px;
+                            border-radius: 7px;
+                            background: sel ? #16341f : (wca.has-hover ? #1b2129 : #161b22);
+                            border-width: 1px;
+                            border-color: sel ? #3ddc84 : #2a3340;
+                            wca := TouchArea {
+                                clicked => {
+                                    if (root.create_selected_id != "*") {
+                                        root.create_name = "default";
+                                    }
+                                    root.create_selected_id = "*";
+                                    root.create_error = "";
+                                }
+                            }
+                            wc := Text {
+                                x: 9px;
+                                y: 4px;
+                                text: "All keyboards (*)";
+                                color: sel ? #3ddc84 : #cfd6df;
+                                font-size: 12px;
+                                font-weight: sel ? 700 : 400;
+                                font-family: "JetBrains Mono";
+                            }
+                        }
+                    }
+
+                    // name + create/cancel
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Text {
+                            text: "name:";
+                            color: #7d8694;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                        LineEdit {
+                            width: 200px;
+                            height: 28px;
+                            font-size: 13px;
+                            placeholder-text: "config name (e.g. hhkb)";
+                            text <=> root.create_name;
+                            // No `init => self.focus()` — same ScrollView recursion guard as
+                            // the new-layer / rename fields. The user clicks to focus.
+                            accepted(t) => {
+                                root.create_config(root.create_selected_id, t);
+                            }
+                        }
+                        Text {
+                            text: ".conf";
+                            color: #7d8694;
+                            font-size: 13px;
+                            font-family: "JetBrains Mono";
+                            vertical-alignment: center;
+                        }
+                        IconButton {
+                            wide: true;
+                            text: "create";
+                            active: root.create_name != "" && root.create_selected_id != "";
+                            clicked => {
+                                root.create_config(root.create_selected_id, root.create_name);
+                            }
+                        }
+                        IconButton {
+                            wide: true;
+                            text: "cancel";
+                            clicked => {
+                                root.create_open = false;
+                                root.create_selected_id = "";
+                                root.create_name = "";
+                                root.create_error = "";
+                            }
+                        }
+                    }
+
+                    if root.create_error != "": Text {
+                        text: "\u{26a0} \{root.create_error}";
+                        color: #e5534b;
+                        font-size: 12px;
+                    }
+                }
             }
 
             // ---- edit panel (edit mode only; the viewer never renders any of this) ----
