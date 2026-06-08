@@ -116,17 +116,19 @@ impl EditSession {
 
     /// Make `key` a dual-function (tap/hold) key on the `layer` board: hold →
     /// `target` (a layer or modifier), tap → `tap` (`None` = momentary hold-only),
-    /// with the chosen `feel` ([`Behavior`]). Retargeting/retapping a key that
-    /// already has this feel preserves its function and timeouts (see
-    /// [`TapHold::compose`]); a new key or a deliberate feel switch takes that
-    /// feel's baked-in defaults. `Err` when there is no such board.
+    /// with the chosen `feel` ([`Behavior`]). `feel == None` means "no feel picked"
+    /// — an existing tap/hold whose form we don't name (plain `overload`) is then
+    /// preserved as-is. Retargeting/retapping a key that already has the chosen
+    /// feel preserves its function and timeouts (see [`TapHold::compose`]); a new
+    /// key or a deliberate feel switch takes that feel's defaults. `Err` when there
+    /// is no such board.
     pub fn set_tap_hold(
         &mut self,
         layer: &str,
         key: &str,
         target: &str,
         tap: Option<String>,
-        feel: Behavior,
+        feel: Option<Behavior>,
     ) -> Result<(), String> {
         // Read the existing binding (immutable) before taking the mutable borrow.
         let existing = self.current_tap_hold(layer, key);
@@ -423,7 +425,7 @@ mod tests {
         let td = TempDir::new("th-new");
         let mut s = session(&td);
         // capslock currently = esc; make it a Responsive tap esc / hold nav.
-        s.set_tap_hold("main", "capslock", "nav", Some("esc".into()), Behavior::Responsive)
+        s.set_tap_hold("main", "capslock", "nav", Some("esc".into()), Some(Behavior::Responsive))
             .unwrap();
         assert!(s.dirty());
         assert_eq!(s.diff(), "- capslock = esc\n+ capslock = overloadt2(nav, esc, 200)\n");
@@ -445,7 +447,7 @@ mod tests {
         assert_eq!(cur.func, "lettermod");
         assert_eq!(cur.behavior(), Some(Behavior::TypingSafe));
         // Repoint the hold from nav to num at the same feel; timings survive.
-        s.set_tap_hold("main", "f", "num", Some("f".into()), Behavior::TypingSafe).unwrap();
+        s.set_tap_hold("main", "f", "num", Some("f".into()), Some(Behavior::TypingSafe)).unwrap();
         assert_eq!(s.diff(), "- f = lettermod(nav, f, 150, 200)\n+ f = lettermod(num, f, 150, 200)\n");
     }
 
@@ -453,7 +455,7 @@ mod tests {
     fn tap_hold_momentary_has_no_tap() {
         let td = TempDir::new("th-mom");
         let mut s = session(&td);
-        s.set_tap_hold("main", "capslock", "nav", None, Behavior::Responsive).unwrap();
+        s.set_tap_hold("main", "capslock", "nav", None, Some(Behavior::Responsive)).unwrap();
         assert_eq!(s.diff(), "- capslock = esc\n+ capslock = layer(nav)\n");
         let th = s.current_tap_hold("main", "capslock").unwrap();
         assert_eq!(th.tap, None);

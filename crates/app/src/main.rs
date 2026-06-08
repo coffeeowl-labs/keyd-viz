@@ -1234,6 +1234,9 @@ fn seed_tap_hold(win: &MainWindow, s: &editing::EditSession, layer: &str, phys: 
     match s.current_tap_hold(layer, phys) {
         Some(th) => {
             win.set_selected_is_tap_hold(true);
+            // Light the matching feel chip; leave BOTH unlit ("") for a tap/hold
+            // whose form we don't name (plain overload/overloadt) so editing it
+            // preserves the form rather than silently converting it.
             win.set_th_feel(feel_str(th.behavior()).into());
             win.set_th_hold(th.target.into());
             win.set_th_hold_only(th.tap.is_none());
@@ -1248,7 +1251,8 @@ fn seed_tap_hold(win: &MainWindow, s: &editing::EditSession, layer: &str, phys: 
                 _ => phys.to_string(),
             };
             win.set_selected_is_tap_hold(false);
-            win.set_th_feel(feel_str(None).into());
+            // A fresh dual-function key defaults to the eager feel.
+            win.set_th_feel("fast".into());
             win.set_th_hold("".into());
             win.set_th_hold_only(false);
             win.set_th_tap(default_tap.into());
@@ -1256,20 +1260,24 @@ fn seed_tap_hold(win: &MainWindow, s: &editing::EditSession, layer: &str, phys: 
     }
 }
 
-/// The UI "feel" token for a tap/hold behavior (and the default for forms outside
-/// the two-behavior model). Kept in sync with [`feel_from_str`].
+/// The UI "feel" token for an existing binding's behavior: `""` (no chip lit) for
+/// a form outside the two-behavior model, so editing it preserves rather than
+/// converts. Kept in sync with [`feel_from_str`].
 fn feel_str(b: Option<Behavior>) -> &'static str {
     match b {
+        Some(Behavior::Responsive) => "fast",
         Some(Behavior::TypingSafe) => "safe",
-        _ => "fast", // Responsive, or no recognised behavior → the eager default
+        None => "", // unnamed form (plain overload/overloadt) → no feel chosen
     }
 }
 
-/// Map the UI "feel" token back to a [`Behavior`] (defaults to Responsive).
-fn feel_from_str(s: &str) -> Behavior {
+/// Map the UI "feel" token to a [`Behavior`]. `""` → `None` ("no feel chosen":
+/// preserve an existing unnamed form); otherwise a concrete feel.
+fn feel_from_str(s: &str) -> Option<Behavior> {
     match s {
-        "safe" => Behavior::TypingSafe,
-        _ => Behavior::Responsive,
+        "fast" => Some(Behavior::Responsive),
+        "safe" => Some(Behavior::TypingSafe),
+        _ => None,
     }
 }
 
