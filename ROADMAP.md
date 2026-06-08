@@ -460,6 +460,21 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
 - **Heatmap persistence** (P4) — local data store format/location, opt-in.
 - **Upstream opportunity:** propose adding key events to keyd's IPC so external GUIs don't need
   `/dev/input` at all (would eliminate the helper's `monitor` privilege). Long-shot; revisit.
+- **AI UX-critic pass (gated — do *after* the edit-mode feature surface is mostly built).**
+  A solo dev can't escape the curse of knowledge: once you know how the UI works you can't feel
+  what a first-time user feels. Idea: a panel of persona-primed critic agents (e.g. never-used-a-
+  remapper novice; QMK/VIA power user new to keyd; impatient skimmer; low-vision/accessibility)
+  each given **rendered screenshots** of a screen/state (not the `.slint` source — they must see
+  what ships), a task goal, and a heuristic rubric (Nielsen + a 5-second first-impression read +
+  a hesitation-flagging task walkthrough). Synthesize across personas, dedup, triage like a code
+  review. Runs as a multi-agent Workflow. **Why gated:** the pass is far higher-value once there
+  are more screens/flows to evaluate at once, and after we've manually weeded the obvious friction
+  while finishing the edit features — so the agents spend their attention on the subtle 20%.
+  **Honest limits:** agents *simulate* confusion (some findings won't be real), can't measure
+  time-on-task / eye-path, and complement rather than replace one or two real first-time humans;
+  treat it as a cheap, repeatable first pass. Likely first target when we start: the tap/hold
+  panel (newest + densest). Automating "drive the app into state X, capture" is real work — start
+  with manual screenshots, invest in a capture harness only if the manual pass proves its worth.
 
 ---
 
