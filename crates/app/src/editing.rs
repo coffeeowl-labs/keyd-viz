@@ -92,6 +92,19 @@ impl EditSession {
         Ok(())
     }
 
+    /// Make `key` transparent (pass-through) on the `layer` board: remove its
+    /// binding so the key falls through to the base layer — keyd's default for any
+    /// unbound key. Clears the key from every section that merges into the board
+    /// (last-wins means a single leftover would keep it bound). A no-op when the
+    /// key was already unbound. `Err` only when there is no such board at all.
+    pub fn clear_binding(&mut self, layer: &str, key: &str) -> Result<(), String> {
+        if !self.editable_sections().iter().any(|s| s == layer) {
+            return Err(format!("this config has no [{layer}] section"));
+        }
+        self.edit.clear_binding(layer, key);
+        Ok(())
+    }
+
     /// The semantic model for re-rendering the boards — same derivation the
     /// viewer uses, so the preview is exactly what the viewer would show.
     pub fn config(&self) -> Config {
@@ -256,24 +269,47 @@ fn shell_quote(s: &str) -> String {
 
 /// Minimal line diff: trim the common prefix and suffix, emit the differing
 /// middle as `-`/`+` lines. Exact and readable for localized edits.
+/// A compact `-old` / `+new` line diff showing only the lines that actually
+/// changed. Computed via a longest-common-subsequence so removals/additions
+/// scattered across the file — e.g. clearing a key that recurs in several merged
+/// sections — don't drag untouched lines (section headers especially) into the
+/// diff. This is the change summary the user reviews before installing or
+/// applying, so it must reflect exactly what changed. Configs are small
+/// (`MAX_CONFIG_BYTES`), so the O(n·m) table is fine.
 fn line_diff(old: &str, new: &str) -> String {
     let a: Vec<&str> = old.lines().collect();
     let b: Vec<&str> = new.lines().collect();
-    let mut start = 0;
-    while start < a.len() && start < b.len() && a[start] == b[start] {
-        start += 1;
+    // lcs[i][j] = LCS length of a[i..] and b[j..].
+    let mut lcs = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for i in (0..a.len()).rev() {
+        for j in (0..b.len()).rev() {
+            lcs[i][j] = if a[i] == b[j] {
+                lcs[i + 1][j + 1] + 1
+            } else {
+                lcs[i + 1][j].max(lcs[i][j + 1])
+            };
+        }
     }
-    let mut end_a = a.len();
-    let mut end_b = b.len();
-    while end_a > start && end_b > start && a[end_a - 1] == b[end_b - 1] {
-        end_a -= 1;
-        end_b -= 1;
-    }
+    // Walk the table in file order, emitting `-`/`+` only for off-subsequence
+    // lines; common lines advance both cursors silently.
     let mut out = String::new();
-    for line in &a[start..end_a] {
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        if a[i] == b[j] {
+            i += 1;
+            j += 1;
+        } else if lcs[i + 1][j] >= lcs[i][j + 1] {
+            out.push_str(&format!("- {}\n", a[i]));
+            i += 1;
+        } else {
+            out.push_str(&format!("+ {}\n", b[j]));
+            j += 1;
+        }
+    }
+    for line in &a[i..] {
         out.push_str(&format!("- {line}\n"));
     }
-    for line in &b[start..end_b] {
+    for line in &b[j..] {
         out.push_str(&format!("+ {line}\n"));
     }
     out
@@ -329,6 +365,36 @@ mod tests {
         assert_eq!(s.current_binding("nav", "j").as_deref(), Some("down"));
         // No such section → a named error, not a panic or silent drop.
         assert!(s.set_binding("sym", "a", "b").unwrap_err().contains("[sym]"));
+    }
+
+    #[test]
+    fn clear_binding_makes_a_key_transparent() {
+        let td = TempDir::new("clear");
+        let mut s = session(&td);
+        s.clear_binding("main", "capslock").unwrap();
+        assert!(s.dirty());
+        // Unbound now → the preview falls through (no remap), and the line is gone.
+        assert_eq!(s.current_binding("main", "capslock"), None);
+        assert_eq!(s.config().remap("capslock"), None);
+        assert_eq!(s.diff(), "- capslock = esc\n");
+        // Clearing an already-unbound key is a no-op; a missing board errors.
+        let mut s2 = session(&td);
+        s2.clear_binding("main", "nonexistent").unwrap();
+        assert!(!s2.dirty());
+        assert!(s2.clear_binding("sym", "a").unwrap_err().contains("[sym]"));
+    }
+
+    #[test]
+    fn clear_across_merged_sections_diffs_cleanly() {
+        // Clearing a key that recurs across merged sections must NOT show the
+        // untouched header between them as removed-and-re-added (the diff is the
+        // user's pre-install review). The LCS line_diff keeps it to real changes.
+        let td = TempDir::new("clear-merged");
+        let p = td.0.join("test.conf");
+        std::fs::write(&p, "[ids]\n*\n\n[nav]\nh = left\n[nav:C]\nh = right\nj = down\n").unwrap();
+        let mut s = EditSession::open(&p).unwrap();
+        s.clear_binding("nav", "h").unwrap();
+        assert_eq!(s.diff(), "- h = left\n- h = right\n");
     }
 
     #[test]

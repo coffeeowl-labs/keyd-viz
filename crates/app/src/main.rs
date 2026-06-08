@@ -811,6 +811,40 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
+    // Make the selection transparent (pass-through): clear its binding so the key
+    // falls through to the base layer — keyd's default for any unbound key. Distinct
+    // from "noop" (which disables the key); mirrors VIA's "▽".
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        win.on_make_transparent(move || {
+            let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
+            let layer = win.get_edit_layer().to_string();
+            let phys = win.get_selected_phys().to_string();
+            if phys.is_empty() {
+                return;
+            }
+            let mut sb = session.borrow_mut();
+            let Some(s) = sb.as_mut() else { return };
+            match s.clear_binding(&layer, &phys) {
+                Ok(()) => {
+                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    drop(sb);
+                    win.set_edit_current("".into());
+                    win.set_edit_value("".into());
+                    win.set_edit_dirty(dirty);
+                    win.set_capture_armed(false);
+                    refresh_preview(&win, &srcs, &path, cfg);
+                }
+                Err(e) => win.set_edit_banner(format!("\u{26a0} {e}").into()),
+            }
+        });
+    }
+
     // Arm/disarm press-to-capture; the next live key-down becomes the value (consumed
     // in [`handle_key_event`]).
     {

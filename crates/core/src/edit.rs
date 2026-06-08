@@ -113,6 +113,10 @@ pub struct Section {
     pub name: String,
     pub kind: SectionKind,
     pub entries: Vec<Entry>,
+    /// Set when a binding was *removed* from this section. Edits and adds mark the
+    /// surviving entry dirty, but a removal leaves no entry to flag — so this
+    /// captures it, and [`EditConfig::is_dirty`] ORs it in.
+    pub dirty: bool,
 }
 
 impl Section {
@@ -210,6 +214,21 @@ impl Section {
         *dirty = true;
         true
     }
+
+    /// Remove **every** binding line for `key` from this section, making the key
+    /// transparent (it falls through to the base layer — keyd's default for an
+    /// unbound key). All duplicates must go: keyd applies entries in order, so a
+    /// single leftover assignment would keep the key bound. Comments and blank
+    /// lines are left untouched (we don't guess which ones "belonged" to the key).
+    /// Marks the section dirty and returns whether anything was removed.
+    pub fn remove_binding(&mut self, key: &str) -> bool {
+        let before = self.entries.len();
+        self.entries
+            .retain(|e| !matches!(&e.kind, EntryKind::Binding { key: k, .. } if k == key));
+        let removed = self.entries.len() != before;
+        self.dirty |= removed;
+        removed
+    }
 }
 
 /// A whole config file as an ordered list of verbatim lines: anything before the
@@ -249,6 +268,7 @@ impl EditConfig {
                     name: name.to_string(),
                     kind: section_kind(name),
                     entries: Vec::new(),
+                    dirty: false,
                 });
                 continue;
             }
@@ -315,11 +335,34 @@ impl EditConfig {
         })
     }
 
-    /// True once any binding line was edited or added this session.
+    /// Make `key` transparent on the `layer` board: remove its binding from
+    /// **every** layer-bearing section whose base name is `layer`. keyd merges
+    /// duplicate sections (and `[nav]` / `[nav:C]` both feed the "nav" board) and
+    /// applies them last-wins, so clearing only the last one would leave the key
+    /// bound — all contributors must drop it for the key to fall through to base.
+    /// This mirrors how the viewer reads a board across all matching sections.
+    /// Returns whether anything was removed.
+    pub fn clear_binding(&mut self, layer: &str, key: &str) -> bool {
+        let mut removed = false;
+        for s in self.sections.iter_mut().filter(|s| {
+            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
+                && s.base_name().trim() == layer
+        }) {
+            removed |= s.remove_binding(key);
+        }
+        removed
+    }
+
+    /// True once any binding line was edited, added, or removed this session.
+    /// Edits/adds flag the surviving entry; a removal has no entry to flag, so it
+    /// sets the owning section's `dirty` — both are ORed in here.
     pub fn is_dirty(&self) -> bool {
         let dirty = |e: &Entry| matches!(e.kind, EntryKind::Binding { dirty: true, .. });
         self.preamble.iter().any(dirty)
-            || self.sections.iter().any(|s| s.entries.iter().any(dirty))
+            || self
+                .sections
+                .iter()
+                .any(|s| s.dirty || s.entries.iter().any(dirty))
     }
 
     /// keyd-validation-parity diagnostics (design doc §12): conditions the model
@@ -625,5 +668,63 @@ mod tests {
         let mut cfg = EditConfig::parse("[main]\n");
         cfg.target_section_mut("main").unwrap().set_or_add_binding("q", "esc");
         assert!(cfg.is_dirty());
+    }
+
+    // ----------------------------------------------------------------- remove/clear
+    #[test]
+    fn remove_binding_drops_just_that_line() {
+        let src = "[main]\n# capslock\ncapslock = esc\na = b\n";
+        let mut cfg = EditConfig::parse(src);
+        assert!(cfg.section_mut("main").unwrap().remove_binding("capslock"));
+        // The line goes; its comment is left as-is (we don't guess intent).
+        assert_eq!(cfg.serialize(), "[main]\n# capslock\na = b\n");
+    }
+
+    #[test]
+    fn remove_binding_drops_every_duplicate() {
+        // keyd is last-wins, so transparency needs ALL assignments gone.
+        let mut cfg = EditConfig::parse("[main]\na = x\nb = y\na = z\n");
+        assert!(cfg.section_mut("main").unwrap().remove_binding("a"));
+        assert_eq!(cfg.serialize(), "[main]\nb = y\n");
+    }
+
+    #[test]
+    fn remove_binding_missing_key_is_a_noop() {
+        let src = "[main]\na = b\n";
+        let mut cfg = EditConfig::parse(src);
+        assert!(!cfg.section_mut("main").unwrap().remove_binding("q"));
+        assert_eq!(cfg.serialize(), src);
+        assert!(!cfg.is_dirty());
+    }
+
+    #[test]
+    fn remove_only_change_still_marks_dirty() {
+        // A pure removal leaves no entry to carry a dirty flag — the section-level
+        // flag is what keeps is_dirty() honest (else save/apply would stay off).
+        let mut cfg = EditConfig::parse("[main]\na = b\n");
+        assert!(!cfg.is_dirty());
+        assert!(cfg.section_mut("main").unwrap().remove_binding("a"));
+        assert!(cfg.is_dirty());
+    }
+
+    #[test]
+    fn clear_binding_spans_every_merged_section() {
+        // [nav] and [nav:C] both feed the "nav" board; clearing only one would
+        // leave the key bound, so clear_binding must hit both.
+        let src = "[nav]\nh = left\n[nav:C]\nh = right\nj = down\n";
+        let mut cfg = EditConfig::parse(src);
+        assert!(cfg.clear_binding("nav", "h"));
+        assert_eq!(cfg.serialize(), "[nav]\n[nav:C]\nj = down\n");
+        assert!(cfg.is_dirty());
+    }
+
+    #[test]
+    fn clear_binding_missing_is_a_noop() {
+        let src = "[nav]\nh = left\n";
+        let mut cfg = EditConfig::parse(src);
+        assert!(!cfg.clear_binding("nav", "q"));
+        assert!(!cfg.clear_binding("missing", "h"));
+        assert_eq!(cfg.serialize(), src);
+        assert!(!cfg.is_dirty());
     }
 }
