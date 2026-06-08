@@ -29,12 +29,12 @@ use crate::model::{Config, Hold, HoldKind, Layer};
 /// Tap/hold actions whose first arg is the hold target (a layer or modifier) and
 /// (optional) second arg is the tap key. `overloadi` is *not* in this family — its
 /// leading args are descriptors, handled separately.
-const TAPHOLD: [&str; 4] = ["lettermod", "overload", "overloadt", "overloadt2"];
+pub(crate) const TAPHOLD: [&str; 4] = ["lettermod", "overload", "overloadt", "overloadt2"];
 
 /// Modifier targets — a hold onto one of these is a modifier, not a layer.
-const MODS: [&str; 5] = ["control", "shift", "alt", "meta", "altgr"];
+pub(crate) const MODS: [&str; 5] = ["control", "shift", "alt", "meta", "altgr"];
 
-fn is_mod(target: &str) -> bool {
+pub(crate) fn is_mod(target: &str) -> bool {
     MODS.contains(&target)
 }
 
@@ -202,7 +202,7 @@ fn is_chord_key(key: &str) -> bool {
 /// each arg are skipped (spaces only — keyd doesn't skip tabs here); empty args are
 /// dropped; anything after the balancing `)` is discarded — all exactly as keyd
 /// does. `None` when there is no `(` or the parens never balance.
-fn parse_fn(s: &str) -> Option<(&str, Vec<&str>)> {
+pub(crate) fn parse_fn(s: &str) -> Option<(&str, Vec<&str>)> {
     let b = s.as_bytes();
     let open = s.find('(')?;
     let name = &s[..open];

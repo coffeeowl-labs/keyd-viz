@@ -20,7 +20,9 @@ use std::rc::Rc;
 
 use devices::InputDevice;
 use keydviz_core::board::{KeyCap, KeyState};
-use keydviz_core::{catalog, import_qmk, parse_file, parse_text, Config, Geometry, Ids, Sheet};
+use keydviz_core::{
+    catalog, import_qmk, parse_file, parse_text, Behavior, Config, Geometry, Ids, Sheet, MODIFIERS,
+};
 use slint::{Brush, Color, ModelRc, VecModel};
 
 slint::include_modules!();
@@ -720,6 +722,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         choices.first().map(|c| c.name.clone()).unwrap_or("main".into());
                     let (apply_ok, apply_hint) = apply_gate(&s);
                     win.set_edit_layers(model(choices));
+                    win.set_hold_layers(model(hold_layer_choices(&s)));
                     win.set_edit_layer(default_layer);
                     win.set_selected_phys("".into());
                     win.set_edit_current("".into());
@@ -751,6 +754,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let Some(s) = sb.as_ref() else { return };
             let layer = win.get_edit_layer().to_string();
             let cur = s.current_binding(&layer, &phys).unwrap_or_default();
+            seed_tap_hold(&win, s, &layer, &phys);
             win.set_selected_phys(phys);
             win.set_edit_current(cur.clone().into());
             win.set_edit_value(cur.into());
@@ -769,6 +773,7 @@ fn main() -> Result<(), slint::PlatformError> {
             if !phys.is_empty() {
                 if let Some(s) = session.borrow().as_ref() {
                     let cur = s.current_binding(&name, &phys).unwrap_or_default();
+                    seed_tap_hold(&win, s, &name, &phys);
                     win.set_edit_current(cur.clone().into());
                     win.set_edit_value(cur.into());
                 }
@@ -799,6 +804,7 @@ fn main() -> Result<(), slint::PlatformError> {
             match s.set_binding(&layer, &phys, &value) {
                 Ok(()) => {
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    seed_tap_hold(&win, s, &layer, &phys); // keep the tap/hold panel in sync
                     drop(sb);
                     win.set_edit_current(value.clone().into());
                     win.set_edit_value(value.into());
@@ -833,9 +839,56 @@ fn main() -> Result<(), slint::PlatformError> {
             match s.clear_binding(&layer, &phys) {
                 Ok(()) => {
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    seed_tap_hold(&win, s, &layer, &phys); // keep the tap/hold panel in sync
                     drop(sb);
                     win.set_edit_current("".into());
                     win.set_edit_value("".into());
+                    win.set_edit_dirty(dirty);
+                    win.set_capture_armed(false);
+                    refresh_preview(&win, &srcs, &path, cfg);
+                }
+                Err(e) => win.set_edit_banner(format!("\u{26a0} {e}").into()),
+            }
+        });
+    }
+
+    // Make the selection a dual-function (tap/hold) key — VIA's Mod-Tap / Layer-Tap.
+    // Hold target + tap come from the th_* slots; the composer (TapHold) preserves an
+    // existing key's function + timeouts and emits canonical overload(...) for new ones.
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        win.on_apply_tap_hold(move || {
+            let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
+            let layer = win.get_edit_layer().to_string();
+            let phys = win.get_selected_phys().to_string();
+            let target = win.get_th_hold().trim().to_string();
+            if phys.is_empty() || target.is_empty() {
+                return;
+            }
+            // Momentary → no tap; otherwise the tap field (defaulting to the key
+            // itself when left blank, matching keyd's overload(layer) short form).
+            let tap = if win.get_th_hold_only() {
+                None
+            } else {
+                let t = win.get_th_tap().trim().to_string();
+                Some(if t.is_empty() { phys.clone() } else { t })
+            };
+            let feel = feel_from_str(&win.get_th_feel());
+            let mut sb = session.borrow_mut();
+            let Some(s) = sb.as_mut() else { return };
+            match s.set_tap_hold(&layer, &phys, &target, tap, feel) {
+                Ok(()) => {
+                    let cur = s.current_binding(&layer, &phys).unwrap_or_default();
+                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    seed_tap_hold(&win, s, &layer, &phys);
+                    drop(sb);
+                    win.set_edit_current(cur.clone().into());
+                    win.set_edit_value(cur.into());
                     win.set_edit_dirty(dirty);
                     win.set_capture_armed(false);
                     refresh_preview(&win, &srcs, &path, cfg);
@@ -1154,6 +1207,78 @@ fn edit_layer_choices(s: &editing::EditSession) -> Vec<EditLayer> {
         .into_iter()
         .map(|n| EditLayer { name: n.clone().into(), display: n.into() })
         .collect()
+}
+
+/// Layers offered as tap/hold "when held" targets. Excludes:
+/// - the base (`main`) — you hold *into* a layer, never onto the base board;
+/// - any layer whose name is a modifier (`[shift]` etc.) — `overload(shift, …)`
+///   always means the *modifier*, so such a layer can't be addressed by name and
+///   would otherwise duplicate the fixed modifier chip;
+/// - composite layers (`a+b`) — keyd auto-activates those from their parts; they
+///   are not valid `overload`/`layer` targets.
+///
+/// The 5 modifiers are offered separately (fixed chips in the UI).
+fn hold_layer_choices(s: &editing::EditSession) -> Vec<slint::SharedString> {
+    s.editable_sections()
+        .into_iter()
+        .filter(|n| n != "main" && !n.contains('+') && !MODIFIERS.contains(&n.as_str()))
+        .map(Into::into)
+        .collect()
+}
+
+/// Pre-fill the tap/hold slots for the selected key: decompose its current binding
+/// into hold-target + tap when it is a tap/hold, otherwise default the tap to the
+/// physical key (a sensible start for a new dual-function key) and leave the hold
+/// target unset until the user picks one.
+fn seed_tap_hold(win: &MainWindow, s: &editing::EditSession, layer: &str, phys: &str) {
+    match s.current_tap_hold(layer, phys) {
+        Some(th) => {
+            win.set_selected_is_tap_hold(true);
+            // Light the matching feel chip; leave BOTH unlit ("") for a tap/hold
+            // whose form we don't name (plain overload/overloadt) so editing it
+            // preserves the form rather than silently converting it.
+            win.set_th_feel(feel_str(th.behavior()).into());
+            win.set_th_hold(th.target.into());
+            win.set_th_hold_only(th.tap.is_none());
+            win.set_th_tap(th.tap.unwrap_or_default().into());
+        }
+        None => {
+            // Not a tap/hold yet. Default the tap to the key's current simple remap
+            // (so making `capslock = esc` dual-function keeps esc as the tap), or to
+            // the physical key when unbound / bound to something non-trivial.
+            let default_tap = match s.current_binding(layer, phys) {
+                Some(v) if !v.is_empty() && !v.contains('(') && v != "noop" => v,
+                _ => phys.to_string(),
+            };
+            win.set_selected_is_tap_hold(false);
+            // A fresh dual-function key defaults to the eager feel.
+            win.set_th_feel("fast".into());
+            win.set_th_hold("".into());
+            win.set_th_hold_only(false);
+            win.set_th_tap(default_tap.into());
+        }
+    }
+}
+
+/// The UI "feel" token for an existing binding's behavior: `""` (no chip lit) for
+/// a form outside the two-behavior model, so editing it preserves rather than
+/// converts. Kept in sync with [`feel_from_str`].
+fn feel_str(b: Option<Behavior>) -> &'static str {
+    match b {
+        Some(Behavior::Responsive) => "fast",
+        Some(Behavior::TypingSafe) => "safe",
+        None => "", // unnamed form (plain overload/overloadt) → no feel chosen
+    }
+}
+
+/// Map the UI "feel" token to a [`Behavior`]. `""` → `None` ("no feel chosen":
+/// preserve an existing unnamed form); otherwise a concrete feel.
+fn feel_from_str(s: &str) -> Option<Behavior> {
+    match s {
+        "fast" => Some(Behavior::Responsive),
+        "safe" => Some(Behavior::TypingSafe),
+        _ => None,
+    }
 }
 
 /// Minimal §5.5 affected-keyboards line for the edit banner: which connected

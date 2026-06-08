@@ -551,6 +551,16 @@ export component MainWindow inherits Window {
     callback apply_binding(string);          // typed / palette / captured value for the selection
     callback make_transparent();             // clear the selection's binding → falls through to base
     callback arm_capture();
+    // ---- tap/hold (dual-function) editor: VIA's Mod-Tap / Layer-Tap ----
+    in property <[string]> hold_layers;      // the config's layers offered as "when held" (no main)
+    // keyd's fixed modifier set — the other "when held" choices (Mod-Tap).
+    property <[string]> hold_mods: ["control", "shift", "alt", "meta", "altgr"];
+    in property <bool> selected_is_tap_hold; // the selection is already a tap/hold binding
+    in-out property <string> th_hold;        // chosen hold target (a layer or modifier)
+    in-out property <string> th_tap;         // tap action (defaults to the physical key)
+    in-out property <bool> th_hold_only;     // momentary: hold only, no tap action
+    in-out property <string> th_feel;        // tap-vs-hold "feel": "fast" | "safe"
+    callback apply_tap_hold();               // compose th_hold/th_tap into the binding
     callback save_draft();
     callback confirm_discard();   // discard the unsaved session and proceed (leave / switch)
     callback cancel_discard();    // dismiss the prompt, stay in the session
@@ -1009,6 +1019,188 @@ export component MainWindow inherits Window {
                                 color: #cfd6df;
                                 font-size: 11px;
                                 font-family: "JetBrains Mono";
+                            }
+                        }
+                    }
+
+                    // tap / hold (dual-function) key — VIA's Mod-Tap / Layer-Tap.
+                    // "When held" picks a layer or modifier; "when tapped" is a key
+                    // (or none, for a momentary hold). keyd's per-key timeouts aren't
+                    // exposed; an existing key's timings are preserved on the Rust side.
+                    if root.selected_phys != "": Rectangle {
+                        background: #11151c;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: #2a3340;
+                        thp := VerticalLayout {
+                            padding: 9px;
+                            spacing: 7px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: "tap / hold (dual-function)";
+                                    color: #8a93a0;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                                if root.selected_is_tap_hold: Text {
+                                    text: "\u{2022} editing existing \u{2014} any timings preserved";
+                                    color: #5a6673;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            // when held: a layer or a modifier (one selectable chip).
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                Text {
+                                    text: "hold:";
+                                    color: #cfd6df;
+                                    font-size: 12px;
+                                    font-family: "JetBrains Mono";
+                                    vertical-alignment: center;
+                                }
+                                for lay in root.hold_layers: IconButton {
+                                    wide: true;
+                                    text: lay;
+                                    active: root.th_hold == lay;
+                                    clicked => {
+                                        root.th_hold = lay;
+                                    }
+                                }
+                                for m in root.hold_mods: IconButton {
+                                    wide: true;
+                                    text: m;
+                                    active: root.th_hold == m;
+                                    clicked => {
+                                        root.th_hold = m;
+                                    }
+                                }
+                            }
+                            // when tapped: a key (disabled for a momentary hold).
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                Text {
+                                    text: "tap:";
+                                    color: #cfd6df;
+                                    font-size: 12px;
+                                    font-family: "JetBrains Mono";
+                                    vertical-alignment: center;
+                                }
+                                LineEdit {
+                                    width: 160px;
+                                    height: 28px;
+                                    font-size: 13px;
+                                    enabled: !root.th_hold_only;
+                                    // Blank tap falls back to the key itself; use the
+                                    // "hold only" toggle for a true no-tap (momentary) key.
+                                    placeholder-text: root.th_hold_only
+                                        ? "(hold only)"
+                                        : "taps " + root.selected_phys;
+                                    text <=> root.th_tap;
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "hold only";
+                                    active: root.th_hold_only;
+                                    clicked => {
+                                        root.th_hold_only = !root.th_hold_only;
+                                    }
+                                }
+                            }
+                            // feel: how the key disambiguates tap vs hold. Labels say
+                            // what they do (no keyd jargon, no ms); hovering reveals the
+                            // one-line detail on its own fixed-height line (blank at
+                            // rest → no layout jitter). Only meaningful when there's a tap.
+                            if !root.th_hold_only: VerticalLayout {
+                                spacing: 4px;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    Text {
+                                        text: "feel:";
+                                        color: #cfd6df;
+                                        font-size: 12px;
+                                        font-family: "JetBrains Mono";
+                                        vertical-alignment: center;
+                                    }
+                                    Rectangle {
+                                        property <bool> sel: root.th_feel == "fast";
+                                        width: tf.preferred-width + 16px;
+                                        height: tf.preferred-height + 8px;
+                                        border-radius: 6px;
+                                        background: sel ? #16341f : (fastta.has-hover ? #1b2129 : #161b22);
+                                        border-width: 1px;
+                                        border-color: sel ? #3ddc84 : #2a3340;
+                                        fastta := TouchArea {
+                                            clicked => {
+                                                root.th_feel = "fast";
+                                            }
+                                        }
+                                        tf := Text {
+                                            x: 8px;
+                                            y: 4px;
+                                            text: "fast typing";
+                                            color: parent.sel ? #3ddc84 : #cfd6df;
+                                            font-size: 12px;
+                                            font-family: "JetBrains Mono";
+                                        }
+                                    }
+                                    Rectangle {
+                                        property <bool> sel: root.th_feel == "safe";
+                                        width: ts.preferred-width + 16px;
+                                        height: ts.preferred-height + 8px;
+                                        border-radius: 6px;
+                                        background: sel ? #16341f : (safeta.has-hover ? #1b2129 : #161b22);
+                                        border-width: 1px;
+                                        border-color: sel ? #3ddc84 : #2a3340;
+                                        safeta := TouchArea {
+                                            clicked => {
+                                                root.th_feel = "safe";
+                                            }
+                                        }
+                                        ts := Text {
+                                            x: 8px;
+                                            y: 4px;
+                                            text: "avoid misfires";
+                                            color: parent.sel ? #3ddc84 : #cfd6df;
+                                            font-size: 12px;
+                                            font-family: "JetBrains Mono";
+                                        }
+                                    }
+                                }
+                                Text {
+                                    // Fixed height so the row never reflows; empty until a
+                                    // chip is hovered, or a static nudge for an unnamed form.
+                                    height: 15px;
+                                    text: fastta.has-hover
+                                        ? "engages on overlap, no pause — best for fast typing"
+                                        : safeta.has-hover
+                                            ? "ignores quick taps — won’t trigger by accident"
+                                            : (root.selected_is_tap_hold && root.th_feel == "")
+                                                ? "custom form kept as-is — pick a feel to change it"
+                                                : "";
+                                    color: #5a6673;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+                            HorizontalLayout {
+                                alignment: start;
+                                IconButton {
+                                    wide: true;
+                                    text: "set tap/hold";
+                                    active: root.th_hold != "";
+                                    clicked => {
+                                        if (root.th_hold != "") {
+                                            root.apply_tap_hold();
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
