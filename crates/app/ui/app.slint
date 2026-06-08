@@ -926,15 +926,15 @@ export component MainWindow inherits Window {
                             }
                         }
                         Text {
-                            // "▽" = transparent: keyd stops remapping the key. On a
-                            // sublayer it inherits the base layer; on base there is nothing
-                            // below, so keyd just forwards the key's real (hardware) code —
-                            // not a firmware fallback, keyd simply ceases to intercept.
+                            // unbound: keyd stops remapping the key. On a sublayer it
+                            // inherits the base layer; on base there is nothing below, so
+                            // keyd just forwards the key's real (hardware) code — not a
+                            // firmware fallback, keyd simply ceases to intercept.
                             text: root.edit_current != ""
                                 ? "= \{root.edit_current}"
                                 : (root.edit_layer == "main" || root.edit_layer == "")
-                                    ? "\u{25bd} no remap \u{2014} sends the real key"
-                                    : "\u{25bd} inherits base";
+                                    ? "no remap \u{2014} sends the real key"
+                                    : "inherits base";
                             color: root.edit_current == "" ? #7d8694 : #cfd6df;
                             font-size: 13px;
                             font-family: "JetBrains Mono";
@@ -971,10 +971,12 @@ export component MainWindow inherits Window {
                                 root.open_picker("binding");
                             }
                         }
-                        // "▽ transparent": clear the binding so keyd stops remapping the
-                        // key — on a sublayer it inherits the base layer, on base it sends
-                        // the real key. Distinct from "noop" (which disables the key).
-                        // Dimmed when the key is already transparent — nothing to clear.
+                        // "unbind": clear the binding so keyd stops remapping the key —
+                        // on a sublayer it inherits the base layer, on base it sends the
+                        // real key. Distinct from "noop" (which disables the key). Dimmed
+                        // when the key is already unbound — nothing to clear. (We avoid
+                        // QMK's "▽ transparent": keyd has no firmware layer to fall through
+                        // to, so the word would mislead — see the marker comment below.)
                         Rectangle {
                             width: trp.preferred-width + 14px;
                             height: 24px;
@@ -993,7 +995,7 @@ export component MainWindow inherits Window {
                             trp := Text {
                                 x: 7px;
                                 y: (parent.height - self.height) / 2;
-                                text: "\u{25bd} transparent";
+                                text: "unbind";
                                 color: already ? #4a525e : #6fc3cf;
                                 font-size: 12px;
                                 font-weight: 700;
