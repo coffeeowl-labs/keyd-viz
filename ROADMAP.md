@@ -1094,3 +1094,27 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   name-sanitise), clippy `-D warnings` clean; GUI click-through left for manual verification
   (can't drive Slint on live Wayland). **Remaining for E2**: chords/`[global]`, one-level
   include closure scan (deferred, §5.3).
+- *(Phase 6 E2 — create-config refinements, 2026-06-08)* Two follow-ups after real-hardware
+  use. **Device-list filtering** (`is_create_candidate`): the candidate list used keyd's loose
+  `is_keyboard` rule and surfaced junk — media-key pseudo-devices (Video Bus, WMI hotkeys,
+  lid/power), a mouse exposing a keyboard HID interface (Logitech G502), the ydotoold synthetic
+  device, and — worst — **keyd's own virtual keyboard (`0fac:0ade`)**, which a config must never
+  target (keyd re-emits through it → feedback loop). New predicate requires the full alphanumeric
+  block (drops media-only pseudo-devices), excludes keyd's virtual vendor `0x0FAC`, and excludes
+  anything reporting pointer motion (drops mouse keyboard-interfaces + synthetic pointers).
+  Documented trade-off: a keyboard+touchpad *combo* node (one event node) is excluded too —
+  capability-identical to a mouse's keyboard interface; usually already config-governed, wildcard
+  is the fallback. **A "show all devices" escape hatch was considered and rejected** (UI weight for
+  a rare case with a clean manual-edit workaround; revisit only if users actually hit it).
+  **"Already configured" explainer** (`create_scan` + `governed_line`): the dialog was silently
+  omitting keyboards already governed by a specific config (correct per §5.5 — edit those, don't
+  spawn a colliding second config), reading as "where are my keyboards?". It now names them in a
+  muted line ("Already configured — edit from the chooser above: …", capped). +2 tests; clippy
+  clean; release binary rebuilt.
+- *(Phase 6 E2 — TODO: same-rank duplicate-`[ids]` load-time warning, §5.5)* The create flow now
+  *prevents authoring* a colliding id (governed keyboards are excluded as candidates), but keyd-viz
+  doesn't yet *detect* a pre-existing one: two config files that claim the **same** id at the **same
+  rank** are a misconfiguration keyd resolves nondeterministically by `readdir` order. §5.5 calls for
+  warning on load (don't silently pick a side). Not built — natural completion of the create-config
+  correctness story, complements the orphan-warning machinery. **Remaining for E2**: chords/`[global]`,
+  the duplicate-id load-time warning (this item), one-level include closure scan (deferred, §5.3).
