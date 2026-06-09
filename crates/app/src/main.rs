@@ -1029,6 +1029,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let cur = s.current_binding(&layer, &phys).unwrap_or_default();
             seed_tap_hold(&win, s, &layer, &phys);
             refresh_chords(&win, s, &layer, &phys);
+            win.set_editing_global(false); // clicking a key returns from the global form
             win.set_selected_phys(phys);
             win.set_edit_current(cur.clone().into());
             win.set_edit_value(cur.into());
@@ -1049,6 +1050,7 @@ fn main() -> Result<(), slint::PlatformError> {
             win.set_delete_detail("".into());
             win.set_rename_target("".into());
             win.set_rename_name("".into());
+            win.set_editing_global(false); // picking a layer leaves the global form
             win.set_can_rename(renameable(&name));
             win.set_edit_layer(name.clone());
             let phys = win.get_selected_phys().to_string();
@@ -1514,6 +1516,70 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
+    // ---- [global] daemon options (E2) ----
+    // Enter the global-options form: deselect any key (hides the per-key editors) and
+    // populate the rows. The board stays frozen to the current layer.
+    {
+        let weak = win.as_weak();
+        let session = session.clone();
+        win.on_edit_global(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let Some(s) = session.borrow().as_ref().map(global_rows_for) else { return };
+            win.set_selected_phys("".into());
+            win.set_global_rows(model(s));
+            win.set_editing_global(true);
+        });
+    }
+    // Set / clear a global option. Empty value clears (EditSession::set_global), so the
+    // toggle's "off" and a blanked field both route here. Rebuild the rows + preview.
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        win.on_set_global(move |name, value| {
+            let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
+            let mut sb = session.borrow_mut();
+            let Some(s) = sb.as_mut() else { return };
+            match s.set_global(&name, &value) {
+                Ok(()) => {
+                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    let rows = global_rows_for(s);
+                    drop(sb);
+                    win.set_global_rows(model(rows));
+                    win.set_edit_dirty(dirty);
+                    refresh_preview(&win, &srcs, &path, cfg);
+                }
+                Err(e) => {
+                    drop(sb);
+                    win.set_edit_banner(format!("\u{26a0} {e}").into());
+                }
+            }
+        });
+    }
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        win.on_clear_global(move |name| {
+            let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
+            let mut sb = session.borrow_mut();
+            let Some(s) = sb.as_mut() else { return };
+            s.clear_global(&name);
+            let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+            let rows = global_rows_for(s);
+            drop(sb);
+            win.set_global_rows(model(rows));
+            win.set_edit_dirty(dirty);
+            refresh_preview(&win, &srcs, &path, cfg);
+        });
+    }
+
     // Save the draft and surface the verdict + diff + copy-paste install steps.
     {
         let weak = win.as_weak();
@@ -1847,6 +1913,40 @@ fn refresh_chords(win: &MainWindow, s: &editing::EditSession, layer: &str, phys:
     win.set_chord_action("".into());
 }
 
+/// Rows for the `[global]` options form: every documented keyd global (value pulled
+/// from the config, "" = unset), followed by any unrecognized `[global]` line so the
+/// file's own content is never hidden.
+fn global_rows_for(s: &editing::EditSession) -> Vec<GlobalRow> {
+    let entries = s.global_entries();
+    let value_of = |name: &str| {
+        entries.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()).unwrap_or_default()
+    };
+    let mut rows: Vec<GlobalRow> = keydviz_core::GLOBAL_OPTIONS
+        .iter()
+        .map(|o| GlobalRow {
+            name: o.name.into(),
+            label: o.label.into(),
+            value: value_of(o.name).into(),
+            hint: o.hint.into(),
+            is_bool: o.boolean,
+            known: true,
+        })
+        .collect();
+    for (k, v) in &entries {
+        if !keydviz_core::is_known_global(k) {
+            rows.push(GlobalRow {
+                name: k.clone().into(),
+                label: k.clone().into(),
+                value: v.clone().into(),
+                hint: "".into(),
+                is_bool: false,
+                known: false,
+            });
+        }
+    }
+    rows
+}
+
 /// Layers offered as tap/hold "when held" targets. Excludes:
 /// - the base (`main`) — you hold *into* a layer, never onto the base board;
 /// - any layer whose name is a modifier (`[shift]` etc.) — `overload(shift, …)`
@@ -1965,6 +2065,8 @@ fn enter_edit_session(
     win.set_chord_rows(model(Vec::<ChordRow>::new()));
     win.set_chord_key2("".into());
     win.set_chord_action("".into());
+    win.set_editing_global(false);
+    win.set_global_rows(model(global_rows_for(&s)));
     win.set_rename_target("".into());
     win.set_rename_name("".into());
     win.set_selected_phys("".into());
@@ -2016,6 +2118,8 @@ fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &Shar
     win.set_chord_rows(model(Vec::<ChordRow>::new()));
     win.set_chord_key2("".into());
     win.set_chord_action("".into());
+    win.set_editing_global(false);
+    win.set_global_rows(model(Vec::<GlobalRow>::new()));
     win.set_apply_available(false);
     win.set_apply_hint("".into());
     reset_apply_ui(win);

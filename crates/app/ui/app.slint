@@ -372,6 +372,18 @@ export struct ChordRow {
     action: string,
 }
 
+// One row in the [global] options form: `name` is the keyd key, `label`/`hint` the
+// human framing, `value` the current setting ("" = unset/default), `is_bool` renders
+// a toggle, `known` distinguishes a documented option from an unrecognized line.
+export struct GlobalRow {
+    name: string,
+    label: string,
+    value: string,
+    hint: string,
+    is_bool: bool,
+    known: bool,
+}
+
 // ---- apply countdown dialog ---------------------------------------------------
 // A separate always-on-top window shown only during the dead-man countdown. Its
 // reason to exist is the test field: keyd remaps at the device level, so typing
@@ -616,6 +628,14 @@ export component MainWindow inherits Window {
     callback add_chord();             // commit selected_phys + chord_key2 → chord_action
     callback edit_chord(string);      // arg = chord LHS → seed the builder from it
     callback remove_chord(string);    // arg = chord LHS → delete it
+    // ---- [global] daemon options (E2): a typed form for keyd's documented globals.
+    // `editing_global` swaps the per-key editors for the options form; a layer chip
+    // returns to key editing. `global_rows` is rebuilt by Rust after each change.
+    in property <bool> editing_global: false;
+    in property <[GlobalRow]> global_rows;
+    callback edit_global();              // enter the global-options form
+    callback set_global(string, string); // (name, value) — "" value clears to default
+    callback clear_global(string);       // remove an option → keyd default
     callback save_draft();
     callback confirm_discard();   // discard the unsaved session and proceed (leave / switch)
     callback cancel_discard();    // dismiss the prompt, stay in the session
@@ -1172,7 +1192,7 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                         }
                         for lay in root.edit_layers: Rectangle {
-                            property <bool> sel: lay.name == root.edit_layer;
+                            property <bool> sel: lay.name == root.edit_layer && !root.editing_global;
                             width: elt.preferred-width + 16px;
                             height: elt.preferred-height + 8px;
                             border-radius: 7px;
@@ -1194,9 +1214,35 @@ export component MainWindow inherits Window {
                                 font-family: "JetBrains Mono";
                             }
                         }
+                        // ⚙ global: edit keyd's daemon-wide options (not a layer). Always
+                        // available; selecting it swaps in the options form.
+                        Rectangle {
+                            property <bool> sel: root.editing_global;
+                            width: gbl.preferred-width + 16px;
+                            height: gbl.preferred-height + 8px;
+                            border-radius: 7px;
+                            background: sel ? #f0b429 : (gblta.has-hover ? #1b2129 : #161b22);
+                            border-width: 1px;
+                            border-color: sel ? #f0b429 : #2a3340;
+                            gblta := TouchArea {
+                                clicked => {
+                                    root.edit_global();
+                                }
+                            }
+                            gbl := Text {
+                                x: 8px;
+                                y: 4px;
+                                text: "\u{2699} global";
+                                color: sel ? #11151c : #cfd6df;
+                                font-size: 12px;
+                                font-weight: sel ? 700 : 400;
+                                font-family: "JetBrains Mono";
+                            }
+                        }
                         // + layer: open the inline name field below the chooser. Hidden
-                        // while a delete confirm or rename field is pending (resolve first).
-                        if !root.new_layer_open && root.delete_prompt == "" && root.rename_target == "": Rectangle {
+                        // while a delete confirm or rename field is pending (resolve first),
+                        // or while editing globals (no layer context then).
+                        if !root.editing_global && !root.new_layer_open && root.delete_prompt == "" && root.rename_target == "": Rectangle {
                             width: addl.preferred-width + 16px;
                             height: addl.preferred-height + 8px;
                             border-radius: 7px;
@@ -1223,7 +1269,7 @@ export component MainWindow inherits Window {
                         // every reference on commit). Offered only for a real named layer —
                         // `can_rename` excludes the `main` base and composites. Hidden while
                         // another layer dialog is up.
-                        if root.can_rename && !root.new_layer_open && root.delete_prompt == "" && root.rename_target == "": Rectangle {
+                        if root.can_rename && !root.editing_global && !root.new_layer_open && root.delete_prompt == "" && root.rename_target == "": Rectangle {
                             width: renl.preferred-width + 16px;
                             height: renl.preferred-height + 8px;
                             border-radius: 7px;
@@ -1249,7 +1295,7 @@ export component MainWindow inherits Window {
                         }
                         // delete the selected layer (confirm-gated). Hidden once the
                         // confirm bar (or rename field) is up, so it can't re-target.
-                        if root.edit_layer != "" && !root.new_layer_open && root.delete_prompt == "" && root.rename_target == "": Rectangle {
+                        if root.edit_layer != "" && !root.editing_global && !root.new_layer_open && root.delete_prompt == "" && root.rename_target == "": Rectangle {
                             width: dell.preferred-width + 16px;
                             height: dell.preferred-height + 8px;
                             border-radius: 7px;
@@ -1359,13 +1405,70 @@ export component MainWindow inherits Window {
                         }
                     }
 
+                    // [global] daemon options form: a typed editor for keyd's documented
+                    // globals (timeouts, layer_indicator, default_layout, …). Shown when the
+                    // ⚙ global chip is selected; the per-key editors below are hidden then.
+                    if root.editing_global: VerticalLayout {
+                        spacing: 7px;
+                        Text {
+                            text: "global options \u{2014} keyd daemon settings (blank a field to reset to default)";
+                            color: #7d8694;
+                            font-size: 11px;
+                        }
+                        for g in root.global_rows: HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            Text {
+                                text: g.label;
+                                color: g.value != "" ? #cfd6df : #7d8694;
+                                font-size: 12px;
+                                width: 200px;
+                                vertical-alignment: center;
+                            }
+                            // boolean option → on/off toggle (keyd writes 1/0).
+                            if g.is_bool: IconButton {
+                                wide: true;
+                                text: g.value == "1" ? "on" : "off";
+                                active: g.value == "1";
+                                clicked => {
+                                    root.set_global(g.name, g.value == "1" ? "" : "1");
+                                }
+                            }
+                            // everything else → a text field; Enter commits, blank clears.
+                            if !g.is_bool: LineEdit {
+                                width: 120px;
+                                height: 26px;
+                                font-size: 12px;
+                                placeholder-text: "default";
+                                text: g.value;
+                                accepted(t) => {
+                                    root.set_global(g.name, t);
+                                }
+                            }
+                            Text {
+                                text: g.known ? g.hint : "(unrecognized \u{2014} kept as-is)";
+                                color: #5a6673;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                            // clear an explicitly-set option (dimmed when already at default).
+                            if g.value != "": IconButton {
+                                wide: true;
+                                text: "\u{2715}";
+                                clicked => {
+                                    root.clear_global(g.name);
+                                }
+                            }
+                        }
+                    }
+
                     // selection row: the picked key, its current binding, and the new value
-                    if root.selected_phys == "": Text {
+                    if !root.editing_global && root.selected_phys == "": Text {
                         text: "click a key on the board to edit its binding";
                         color: #7d8694;
                         font-size: 12px;
                     }
-                    if root.selected_phys != "": HorizontalLayout {
+                    if !root.editing_global && root.selected_phys != "": HorizontalLayout {
                         spacing: 8px;
                         alignment: start;
                         Rectangle {
@@ -1485,7 +1588,7 @@ export component MainWindow inherits Window {
                     // Each chord is listed under BOTH its keys, so it shows here whichever
                     // constituent is selected. The builder pairs the selected key (key 1)
                     // with a picked key 2 → an action.
-                    if root.selected_phys != "" && root.chord_editable: VerticalLayout {
+                    if !root.editing_global && root.selected_phys != "" && root.chord_editable: VerticalLayout {
                         spacing: 6px;
                         Text {
                             text: "chords with \{root.selected_phys}";
@@ -1614,7 +1717,7 @@ export component MainWindow inherits Window {
                     // "When held" picks a layer or modifier; "when tapped" is a key
                     // (or none, for a momentary hold). keyd's per-key timeouts aren't
                     // exposed; an existing key's timings are preserved on the Rust side.
-                    if root.selected_phys != "": Rectangle {
+                    if !root.editing_global && root.selected_phys != "": Rectangle {
                         background: #11151c;
                         border-radius: 8px;
                         border-width: 1px;

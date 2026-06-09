@@ -1155,3 +1155,26 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   **Remaining for E2**: `[global]` options editing (next), the duplicate-id load-time warning,
   one-level include closure scan (deferred, §5.3); composite-`[a+b]`-overlay *rendering* (§12) is a
   separate viewer item.
+- *(Phase 6 E2 — `[global]` options editing, 2026-06-09)* A typed form for keyd's daemon-wide
+  `[global]` options (timeouts, `layer_indicator`, `default_layout`, …) — previously the section
+  was opaque `Typed::Raw`, uneditable. **Core**: new `globals.rs` table `GLOBAL_OPTIONS`
+  (`GlobalOption{name,label,hint,boolean}`, ordered most-edited-first — the documented keyd set
+  from `man keyd`) + `is_known_global`; this is keyd-domain knowledge so it lives in core and the
+  GUI renders from it. `edit.rs`: extracted `append_section` (the EOL-faithful blank-separated
+  append `add_layer` already did) and added `global_section_mut` — returns the existing `[global]`
+  or appends an empty one (keyd accepts it anywhere; round-trips). **Session** (`editing.rs`):
+  `global_entries` (current options, last-wins per key), `set_global(name,value)` (creates the
+  section on first set; **empty value clears** → keyd default), `clear_global`. All through the
+  line model → byte-exact round-trip + dirty tracking unchanged. **App** (`main.rs`):
+  `global_rows_for` (known options with current values, then any unrecognized `[global]` line so
+  nothing in the file is hidden), `on_edit_global`/`on_set_global`/`on_clear_global` on the usual
+  borrow→mutate→snapshot→drop→refresh pattern. **UI** (`app.slint`): a `⚙ global` chip in the
+  section chooser swaps the per-key editors (selection row / chord / tap-hold, all now gated on
+  `!editing_global`) for the options form — booleans render as on/off toggles, the rest as text
+  fields (Enter commits, blank resets), each with a hint + `✕` clear; the layer-op chips hide in
+  global mode. Picking a layer or clicking a board key returns to key editing. Self-review
+  (correctness + state-machine): empty-clears, last-wins reads, no stale-field churn (rows rebuild
+  only on commit), board-click exits global mode. Workspace tests green (+2 session: create/edit/
+  clear, last-wins read), clippy `-D warnings` clean; GUI click-through manual.
+  **Remaining for E2**: the duplicate-id load-time warning, one-level include closure scan
+  (deferred, §5.3); composite-`[a+b]`-overlay *rendering* (§12) is a separate viewer item.

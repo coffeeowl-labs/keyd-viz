@@ -268,6 +268,48 @@ impl EditSession {
         Ok(())
     }
 
+    /// The `[global]` daemon options currently set, as `(name, value)` (last-wins per
+    /// key, in file order). Empty when there is no `[global]` section. The editor pairs
+    /// these with [`keydviz_core::GLOBAL_OPTIONS`] to render the options form, and shows
+    /// any key not in that table as a generic row so nothing in the file is hidden.
+    pub fn global_entries(&self) -> Vec<(String, String)> {
+        let Some(section) = self.edit.section("global") else { return Vec::new() };
+        let mut out: Vec<(String, String)> = Vec::new();
+        for e in &section.entries {
+            if let EntryKind::Binding { key, val: Some(v), .. } = &e.kind {
+                // last-wins: a later assignment to the same key replaces the earlier.
+                out.retain(|(k, _)| k != key);
+                out.push((key.clone(), v.clone()));
+            }
+        }
+        out
+    }
+
+    /// Set a `[global]` option `name = value`, creating the `[global]` section if the
+    /// config has none. An empty `value` clears the option (removes its line → keyd
+    /// falls back to the built-in default). `Err` on an empty name.
+    pub fn set_global(&mut self, name: &str, value: &str) -> Result<(), String> {
+        let (name, value) = (name.trim(), value.trim());
+        if name.is_empty() {
+            return Err("missing option name".into());
+        }
+        if value.is_empty() {
+            self.clear_global(name);
+            return Ok(());
+        }
+        self.edit.global_section_mut().set_or_add_binding(name, value);
+        Ok(())
+    }
+
+    /// Remove a `[global]` option (every assignment of it), so keyd uses its default.
+    /// A no-op when the option (or the `[global]` section) isn't present.
+    pub fn clear_global(&mut self, name: &str) -> bool {
+        match self.edit.section_mut("global") {
+            Some(s) => s.remove_binding(name.trim()),
+            None => false,
+        }
+    }
+
     /// Create a new empty layer `[name]` and return its canonical (trimmed) name so
     /// the caller can select it. `Err` names why it was rejected (empty, bad chars,
     /// reserved special, or a duplicate base name). See
@@ -967,6 +1009,49 @@ mod tests {
         // the '+'-joined key, is what the orphan scan reads).
         s.set_chord("leftshift", "rightshift", "toggle(missing)").unwrap();
         assert!(s.orphan_warnings().iter().any(|w| w.contains("missing")));
+    }
+
+    #[test]
+    fn set_global_creates_section_then_edits_and_clears() {
+        let td = TempDir::new("global");
+        // SRC has no [global]; setting an option creates one (appended).
+        let mut s = session(&td);
+        assert!(s.global_entries().is_empty());
+        s.set_global("layer_indicator", "1").unwrap();
+        assert!(s.dirty());
+        assert_eq!(s.global_entries(), vec![("layer_indicator".to_string(), "1".to_string())]);
+        assert!(s.serialized().contains("[global]"));
+        assert!(s.serialized().contains("layer_indicator = 1"));
+        // Re-setting rewrites in place (no duplicate line).
+        s.set_global("layer_indicator", "0").unwrap();
+        assert_eq!(s.global_entries(), vec![("layer_indicator".to_string(), "0".to_string())]);
+        // Empty value clears the option back to the keyd default.
+        s.set_global("layer_indicator", "").unwrap();
+        assert!(s.global_entries().is_empty());
+        assert!(!s.serialized().contains("layer_indicator"));
+        // Missing name is rejected; clearing an absent option is a no-op.
+        assert!(s.set_global("", "1").unwrap_err().contains("name"));
+        assert!(!s.clear_global("oneshot_timeout"));
+    }
+
+    #[test]
+    fn global_entries_reads_existing_section_last_wins() {
+        let td = TempDir::new("global2");
+        let p = td.0.join("test.conf");
+        std::fs::write(
+            &p,
+            "[global]\nmacro_timeout = 600\nlayer_indicator = 1\nmacro_timeout = 400\n\n[main]\na = b\n",
+        )
+        .unwrap();
+        let s = EditSession::open(&p).unwrap();
+        // Duplicate key collapses to the last assignment, order otherwise preserved.
+        assert_eq!(
+            s.global_entries(),
+            vec![
+                ("layer_indicator".to_string(), "1".to_string()),
+                ("macro_timeout".to_string(), "400".to_string()),
+            ]
+        );
     }
 
     #[test]

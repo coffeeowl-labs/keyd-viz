@@ -380,6 +380,15 @@ impl EditConfig {
             return Err(format!("[{n}] already exists"));
         }
 
+        self.append_section(n, SectionKind::Layer);
+        Ok(())
+    }
+
+    /// Append a new empty `[name]` section of `kind` at the end of the file, after a
+    /// blank-line separator in the file's own line-ending style (preserving a missing
+    /// final newline). Marks the config dirty and returns the new section. The caller
+    /// owns name validation — this just performs the EOL-faithful append.
+    fn append_section(&mut self, name: &str, kind: SectionKind) -> &mut Section {
         let style = self.file_eol();
         // Preserve a file that had no trailing newline: terminate the old last line
         // (so it doesn't glue to what we append) and let the new header be the
@@ -404,14 +413,24 @@ impl EditConfig {
         }
         let header_eol = if missing_final { Eol::None } else { style };
         self.sections.push(Section {
-            header: Entry { raw: format!("[{n}]"), eol: header_eol, kind: EntryKind::Header },
-            name: n.to_string(),
-            kind: SectionKind::Layer,
+            header: Entry { raw: format!("[{name}]"), eol: header_eol, kind: EntryKind::Header },
+            name: name.to_string(),
+            kind,
             entries: Vec::new(),
             dirty: false,
         });
         self.dirty = true;
-        Ok(())
+        self.sections.last_mut().expect("just pushed")
+    }
+
+    /// The `[global]` section for editing daemon options, creating an empty one at the
+    /// end of the file if the config has none yet. keyd accepts `[global]` anywhere, so
+    /// appending round-trips cleanly; most real configs already carry one.
+    pub fn global_section_mut(&mut self) -> &mut Section {
+        if self.sections.iter().any(|s| s.name == "global") {
+            return self.section_mut("global").expect("checked above");
+        }
+        self.append_section("global", SectionKind::Global)
     }
 
     /// Delete a layer: drop **every** layer-bearing section whose base name is `base`
