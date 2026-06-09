@@ -1178,3 +1178,21 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   clear, last-wins read), clippy `-D warnings` clean; GUI click-through manual.
   **Remaining for E2**: the duplicate-id load-time warning, one-level include closure scan
   (deferred, §5.3); composite-`[a+b]`-overlay *rendering* (§12) is a separate viewer item.
+- *(Phase 6 E2 — edit-section restructure, 2026-06-09)* User feedback: stacking each new feature
+  into one always-visible column had made the selected-key panel a wall of controls (simple remap
+  + chords + tap/hold all at once). Reorganized around **one principle: the panel shows one thing
+  at a time**, chosen by the section-chooser row. (1) **Chords moved out of the per-key area** into
+  their own `⌨ chords` panel (a chip beside `⚙ global`, same swap-the-panel pattern) — a chord is a
+  *separate construct* from a key's own binding (keyd disambiguates a chord vs. its members' bindings
+  by timing, so a key can legitimately be both; the board's `⊕`/`⇧⇧` badge is the non-intrusive
+  "also in a chord" cue). The manager lists every `[main]` chord with edit/delete + a two-key builder
+  (`EditSession::chords()` replaces the per-key `chords_for_key`). (2) **A selected key's binding is
+  remap XOR tap/hold** — a `behavior: simple | tap/hold` toggle (`key_mode`, seeded from the current
+  binding) shows exactly one editor, making the either/or obvious and hiding the dense tap/hold panel
+  until chosen. So a selected key now shows ~2 rows (header + simple editor) instead of ~6. The
+  chooser is the single context switch: a layer → per-key editing, `⚙ global` → options form,
+  `⌨ chords` → chord manager; picking any one exits the others (and a board click returns to keys).
+  No core/session logic changed beyond `chords()`; pure UI/state reorganization. Tests green, clippy
+  `-D warnings` clean; GUI click-through manual.
+  **Remaining for E2**: the duplicate-id load-time warning, one-level include closure scan
+  (deferred, §5.3); composite-`[a+b]`-overlay *rendering* (§12) is a separate viewer item.

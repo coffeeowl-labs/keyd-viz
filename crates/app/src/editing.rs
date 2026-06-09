@@ -172,13 +172,11 @@ impl EditSession {
         Ok(())
     }
 
-    /// Every chord in `[main]` that includes `key` as one of its `+`-joined parts,
-    /// as `(chord_key, action)` in file order — the verbatim LHS spelling and RHS
-    /// value. A chord `j+k` is returned for both `j` and `k`, so the editor can list
-    /// it under either constituent key. Chords are `[main]`-only (the parser doesn't
-    /// model per-layer chords); duplicate spellings of the same chord collapse to the
-    /// last (keyd is last-wins). See [`keydviz_core::canonical_chord`].
-    pub fn chords_for_key(&self, key: &str) -> Vec<(String, String)> {
+    /// Every chord defined in `[main]`, as `(chord_key, action)` in file order — the
+    /// verbatim LHS spelling and RHS value, deduped by canonical form (keep-last, since
+    /// keyd is last-wins). The ⌨ chords manager lists these. Chords are `[main]`-only
+    /// (the parser doesn't model per-layer chords). See [`keydviz_core::canonical_chord`].
+    pub fn chords(&self) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = Vec::new();
         for s in &self.edit.sections {
             if s.kind != SectionKind::Main {
@@ -186,7 +184,7 @@ impl EditSession {
             }
             for e in &s.entries {
                 let EntryKind::Binding { key: k, val: Some(v), .. } = &e.kind else { continue };
-                if is_chord_key(k) && k.split('+').any(|p| p.trim() == key) {
+                if is_chord_key(k) {
                     let canon = canonical_chord(k);
                     out.retain(|(ek, _)| canonical_chord(ek) != canon);
                     out.push((k.clone(), v.clone()));
@@ -934,15 +932,18 @@ mod tests {
     }
 
     #[test]
-    fn chords_for_key_lists_under_both_keys() {
+    fn chords_lists_all_main_chords() {
         let td = TempDir::new("chord-list");
         let p = td.0.join("test.conf");
-        std::fs::write(&p, "[ids]\n*\n\n[main]\nj+k = esc\n").unwrap();
+        std::fs::write(&p, "[ids]\n*\n\n[main]\nj+k = esc\nx+c = toggle(game)\n").unwrap();
         let s = EditSession::open(&p).unwrap();
-        // The same chord appears under either constituent key; an unrelated key has none.
-        assert_eq!(s.chords_for_key("j"), vec![("j+k".to_string(), "esc".to_string())]);
-        assert_eq!(s.chords_for_key("k"), vec![("j+k".to_string(), "esc".to_string())]);
-        assert!(s.chords_for_key("z").is_empty());
+        assert_eq!(
+            s.chords(),
+            vec![
+                ("j+k".to_string(), "esc".to_string()),
+                ("x+c".to_string(), "toggle(game)".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -952,10 +953,10 @@ mod tests {
         // First time: a new line is appended to [main].
         s.set_chord("j", "k", "esc").unwrap();
         assert!(s.dirty());
-        assert_eq!(s.chords_for_key("j"), vec![("j+k".to_string(), "esc".to_string())]);
+        assert_eq!(s.chords(), vec![("j+k".to_string(), "esc".to_string())]);
         // Editing the reversed spelling rewrites the SAME line (LHS preserved, value changed).
         s.set_chord("k", "j", "tab").unwrap();
-        let chords = s.chords_for_key("j");
+        let chords = s.chords();
         assert_eq!(chords, vec![("j+k".to_string(), "tab".to_string())], "one line, rewritten");
         assert!(s.serialized().contains("j+k = tab"));
         assert!(!s.serialized().contains("k+j"), "no duplicate reversed line");
@@ -983,7 +984,7 @@ mod tests {
         // Remove via the reversed spelling — canonical match still finds it.
         s.remove_chord("k+j").unwrap();
         assert!(s.dirty());
-        assert!(s.chords_for_key("j").is_empty());
+        assert!(s.chords().is_empty());
         assert!(!s.serialized().contains("j+k"));
         // Removing a chord that isn't there is a no-op; no [main] is an error.
         let mut s2 = EditSession::open(&p).unwrap();

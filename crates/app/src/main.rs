@@ -1028,8 +1028,13 @@ fn main() -> Result<(), slint::PlatformError> {
             let layer = win.get_edit_layer().to_string();
             let cur = s.current_binding(&layer, &phys).unwrap_or_default();
             seed_tap_hold(&win, s, &layer, &phys);
-            refresh_chords(&win, s, &layer, &phys);
-            win.set_editing_global(false); // clicking a key returns from the global form
+            // Default the editor mode to match the key's current binding: an existing
+            // tap/hold opens in tap/hold mode, anything else in simple mode.
+            let mode = if win.get_selected_is_tap_hold() { "taphold" } else { "simple" };
+            win.set_key_mode(mode.into());
+            // Clicking a key returns from the global / chords panels.
+            win.set_editing_global(false);
+            win.set_editing_chords(false);
             win.set_selected_phys(phys);
             win.set_edit_current(cur.clone().into());
             win.set_edit_value(cur.into());
@@ -1050,19 +1055,20 @@ fn main() -> Result<(), slint::PlatformError> {
             win.set_delete_detail("".into());
             win.set_rename_target("".into());
             win.set_rename_name("".into());
-            win.set_editing_global(false); // picking a layer leaves the global form
+            win.set_editing_global(false); // picking a layer leaves the global / chords panels
+            win.set_editing_chords(false);
             win.set_can_rename(renameable(&name));
             win.set_edit_layer(name.clone());
             let phys = win.get_selected_phys().to_string();
-            if let Some(s) = session.borrow().as_ref() {
-                if !phys.is_empty() {
+            if !phys.is_empty() {
+                if let Some(s) = session.borrow().as_ref() {
                     let cur = s.current_binding(&name, &phys).unwrap_or_default();
                     seed_tap_hold(&win, s, &name, &phys);
+                    let mode = if win.get_selected_is_tap_hold() { "taphold" } else { "simple" };
+                    win.set_key_mode(mode.into());
                     win.set_edit_current(cur.clone().into());
                     win.set_edit_value(cur.into());
                 }
-                // Show/hide the chord section as we move on/off [main].
-                refresh_chords(&win, s, &name, &phys);
             }
             render_board(&win);
         });
@@ -1411,6 +1417,7 @@ fn main() -> Result<(), slint::PlatformError> {
             // Route to the field the picker was opened for; never auto-apply.
             match win.get_picker_target().as_str() {
                 "tap" => win.set_th_tap(name),
+                "chord_key1" => win.set_chord_key1(name),
                 "chord_key2" => win.set_chord_key2(name),
                 "chord_action" => win.set_chord_action(name),
                 _ => win.set_edit_value(name),
@@ -1420,7 +1427,34 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // ---- chords (E2): selected key (key 1) + picked key 2 → action, on [main] ----
+    // Switch a selected key's editor between simple remap and tap/hold (one binding
+    // line — the modes are mutually exclusive). Pure setter; fields are already seeded.
+    {
+        let weak = win.as_weak();
+        win.on_set_key_mode(move |mode| {
+            let Some(win) = weak.upgrade() else { return };
+            win.set_key_mode(mode);
+        });
+    }
+
+    // ---- chords (E2): the ⌨ chords manager — a panel listing every [main] chord ----
+    // Enter the manager: deselect any key (hides the per-key editors), clear the builder.
+    {
+        let weak = win.as_weak();
+        let session = session.clone();
+        win.on_edit_chords(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let Some(rows) = session.borrow().as_ref().map(chord_rows_all) else { return };
+            win.set_selected_phys("".into());
+            win.set_editing_global(false);
+            win.set_chord_rows(model(rows));
+            win.set_chord_key1("".into());
+            win.set_chord_key2("".into());
+            win.set_chord_action("".into());
+            win.set_editing_chords(true);
+        });
+    }
+
     // Add or edit a chord: an existing chord for the two keys (any order) is rewritten
     // in place, else a new line is appended. The combo/toggle badge appears on both keys.
     {
@@ -1432,7 +1466,7 @@ fn main() -> Result<(), slint::PlatformError> {
             if refuse_if_applying(&win) {
                 return;
             }
-            let key1 = win.get_selected_phys().to_string();
+            let key1 = win.get_chord_key1().to_string();
             let key2 = win.get_chord_key2().to_string();
             let action = win.get_chord_action().to_string();
             let mut sb = session.borrow_mut();
@@ -1441,13 +1475,13 @@ fn main() -> Result<(), slint::PlatformError> {
                 Ok(()) => {
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
                     refresh_warnings(&win, s); // a toggle chord can target a missing layer
-                    let rows = chord_rows_for(s, &key1);
+                    let rows = chord_rows_all(s);
                     drop(sb);
                     win.set_chord_rows(model(rows));
+                    win.set_chord_key1("".into());
                     win.set_chord_key2("".into());
                     win.set_chord_action("".into());
                     win.set_edit_dirty(dirty);
-                    win.set_capture_armed(false);
                     refresh_preview(&win, &srcs, &path, cfg);
                 }
                 Err(e) => {
@@ -1458,26 +1492,22 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // Edit a chord: fill the builder from the existing row (other key → key 2, current
-    // action → the field). The user then presses "add", whose canonical match rewrites
-    // the existing line. (Fill-only, like the key picker — it does not itself apply.)
+    // Edit a chord: fill the builder from the existing row (its two keys + action). The
+    // user then presses "add", whose canonical match rewrites the existing line.
+    // (Fill-only, like the key picker — it does not itself apply.) A 3+-key chord
+    // collapses to its first two keys here — a documented limitation; delete handles 3+.
     {
         let weak = win.as_weak();
         let session = session.clone();
         win.on_edit_chord(move |chord| {
             let Some(win) = weak.upgrade() else { return };
-            let phys = win.get_selected_phys().to_string();
-            // The other constituent key → key 2 (first non-selected part; a 3+-key chord
-            // edited this way collapses to two keys — a documented limitation).
-            let other =
-                chord.split('+').map(str::trim).find(|p| *p != phys).unwrap_or("").to_string();
-            win.set_chord_key2(other.into());
+            let parts: Vec<&str> = chord.split('+').map(str::trim).collect();
+            win.set_chord_key1(parts.first().copied().unwrap_or("").into());
+            win.set_chord_key2(parts.get(1).copied().unwrap_or("").into());
             if let Some(s) = session.borrow().as_ref() {
                 let canon = keydviz_core::canonical_chord(&chord);
-                if let Some((_, act)) = s
-                    .chords_for_key(&phys)
-                    .into_iter()
-                    .find(|(k, _)| keydviz_core::canonical_chord(k) == canon)
+                if let Some((_, act)) =
+                    s.chords().into_iter().find(|(k, _)| keydviz_core::canonical_chord(k) == canon)
                 {
                     win.set_chord_action(act.into());
                 }
@@ -1495,14 +1525,13 @@ fn main() -> Result<(), slint::PlatformError> {
             if refuse_if_applying(&win) {
                 return;
             }
-            let phys = win.get_selected_phys().to_string();
             let mut sb = session.borrow_mut();
             let Some(s) = sb.as_mut() else { return };
             match s.remove_chord(&chord) {
                 Ok(()) => {
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
                     refresh_warnings(&win, s);
-                    let rows = chord_rows_for(s, &phys);
+                    let rows = chord_rows_all(s);
                     drop(sb);
                     win.set_chord_rows(model(rows));
                     win.set_edit_dirty(dirty);
@@ -1526,6 +1555,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let Some(win) = weak.upgrade() else { return };
             let Some(s) = session.borrow().as_ref().map(global_rows_for) else { return };
             win.set_selected_phys("".into());
+            win.set_editing_chords(false);
             win.set_global_rows(model(s));
             win.set_editing_global(true);
         });
@@ -1889,28 +1919,16 @@ fn edit_layer_choices(s: &editing::EditSession) -> Vec<EditLayer> {
         .collect()
 }
 
-/// The chords the selected key participates in, as UI rows: `chord` is the verbatim
+/// All `[main]` chords as UI rows for the ⌨ chords manager: `chord` is the verbatim
 /// LHS (used to edit/delete), `display` the pretty `j + k` form, `action` the RHS.
-fn chord_rows_for(s: &editing::EditSession, phys: &str) -> Vec<ChordRow> {
-    s.chords_for_key(phys)
+fn chord_rows_all(s: &editing::EditSession) -> Vec<ChordRow> {
+    s.chords()
         .into_iter()
         .map(|(chord, action)| {
             let display = chord.split('+').map(str::trim).collect::<Vec<_>>().join(" + ");
             ChordRow { chord: chord.into(), display: display.into(), action: action.into() }
         })
         .collect()
-}
-
-/// Seed the chord sub-section for the selected key. Chords are modeled on `[main]`
-/// only (the parser doesn't populate per-layer chords), so the section is shown there
-/// (or on the base board) and hidden on other layers. Also resets the builder fields.
-fn refresh_chords(win: &MainWindow, s: &editing::EditSession, layer: &str, phys: &str) {
-    let editable = layer == "main" || layer.is_empty();
-    win.set_chord_editable(editable);
-    let rows = if editable && !phys.is_empty() { chord_rows_for(s, phys) } else { Vec::new() };
-    win.set_chord_rows(model(rows));
-    win.set_chord_key2("".into());
-    win.set_chord_action("".into());
 }
 
 /// Rows for the `[global]` options form: every documented keyd global (value pulled
@@ -2058,11 +2076,12 @@ fn enter_edit_session(
     let (apply_ok, apply_hint) = apply_gate(&s);
     win.set_edit_layers(model(choices));
     win.set_hold_layers(model(hold_layer_choices(&s)));
-    let chord_editable = default_layer.as_str() == "main" || default_layer.is_empty();
     win.set_can_rename(renameable(&default_layer));
     win.set_edit_layer(default_layer);
-    win.set_chord_editable(chord_editable);
-    win.set_chord_rows(model(Vec::<ChordRow>::new()));
+    win.set_key_mode("simple".into());
+    win.set_editing_chords(false);
+    win.set_chord_rows(model(chord_rows_all(&s)));
+    win.set_chord_key1("".into());
     win.set_chord_key2("".into());
     win.set_chord_action("".into());
     win.set_editing_global(false);
@@ -2114,8 +2133,10 @@ fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &Shar
     win.set_rename_target("".into());
     win.set_rename_name("".into());
     win.set_can_rename(false);
-    win.set_chord_editable(false);
+    win.set_key_mode("simple".into());
+    win.set_editing_chords(false);
     win.set_chord_rows(model(Vec::<ChordRow>::new()));
+    win.set_chord_key1("".into());
     win.set_chord_key2("".into());
     win.set_chord_action("".into());
     win.set_editing_global(false);
