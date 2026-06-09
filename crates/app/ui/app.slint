@@ -363,6 +363,15 @@ export struct EditLayer {
     display: string,
 }
 
+// One chord listed under the selected key in the selection row: `chord` is the
+// verbatim LHS spelling ("j+k") used to edit/delete it, `display` is the pretty
+// "j + k" shown, `action` is the RHS ("esc" / "toggle(game)").
+export struct ChordRow {
+    chord: string,
+    display: string,
+    action: string,
+}
+
 // ---- apply countdown dialog ---------------------------------------------------
 // A separate always-on-top window shown only during the dead-man countdown. Its
 // reason to exist is the test field: keyd remaps at the device level, so typing
@@ -588,14 +597,25 @@ export component MainWindow inherits Window {
     // A shared overlay; `picker_target` routes the pick to the binding or the tap field.
     // Fill-only: picking sets the field, it does not apply — the user still hits "set".
     in-out property <bool> picker_open: false;
-    in-out property <string> picker_target: "";   // "binding" | "tap"
+    in-out property <string> picker_target: "";   // "binding" | "tap" | "chord_key2" | "chord_action"
     in-out property <string> picker_query: "";
     in property <[string]> picker_results;         // ranked slice (Rust holds the full list)
     in property <int> picker_truncated: 0;         // matches dropped past the cap (0 = all shown)
     in property <string> picker_source;            // "keyd list-keys (N)" | "built-in list"
     callback filter_keys(string);
-    callback open_picker(string);   // arg = target ("binding" | "tap")
+    callback open_picker(string);   // arg = target ("binding" | "tap" | "chord_key2" | "chord_action")
     callback pick_key(string);
+    // ---- chords (E2): two keys pressed together → one action, edited inline in the
+    // selection row. `chord_rows` are the chords the selected key is part of; the
+    // builder pairs the selected key (key 1) with `chord_key2` → `chord_action`.
+    // Shown only on [main] (the parser models chords there); `chord_editable` gates it.
+    in property <[ChordRow]> chord_rows;
+    in property <bool> chord_editable: false;
+    in-out property <string> chord_key2: "";    // second key being built ("" = none picked)
+    in-out property <string> chord_action: "";  // action for the builder
+    callback add_chord();             // commit selected_phys + chord_key2 → chord_action
+    callback edit_chord(string);      // arg = chord LHS → seed the builder from it
+    callback remove_chord(string);    // arg = chord LHS → delete it
     callback save_draft();
     callback confirm_discard();   // discard the unsaved session and proceed (leave / switch)
     callback cancel_discard();    // dismiss the prompt, stay in the session
@@ -1460,6 +1480,136 @@ export component MainWindow inherits Window {
                         }
                     }
 
+                    // chords: two keys pressed together emit one action. Shown only on
+                    // [main] (where the parser models chords) — `chord_editable` gates it.
+                    // Each chord is listed under BOTH its keys, so it shows here whichever
+                    // constituent is selected. The builder pairs the selected key (key 1)
+                    // with a picked key 2 → an action.
+                    if root.selected_phys != "" && root.chord_editable: VerticalLayout {
+                        spacing: 6px;
+                        Text {
+                            text: "chords with \{root.selected_phys}";
+                            color: #7d8694;
+                            font-size: 11px;
+                        }
+                        for c in root.chord_rows: HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            Rectangle {
+                                width: crow.preferred-width + 14px;
+                                height: 26px;
+                                border-radius: 6px;
+                                background: #11191d;
+                                border-width: 1px;
+                                border-color: #2a3340;
+                                crow := Text {
+                                    x: 7px;
+                                    y: (parent.height - self.height) / 2;
+                                    text: "\{c.display} \u{2192} \{c.action}";
+                                    color: #cfd6df;
+                                    font-size: 12px;
+                                    font-family: "JetBrains Mono";
+                                }
+                            }
+                            IconButton {
+                                wide: true;
+                                text: "\u{270e} edit";
+                                clicked => {
+                                    root.edit_chord(c.chord);
+                                }
+                            }
+                            IconButton {
+                                wide: true;
+                                text: "\u{2715} remove";
+                                clicked => {
+                                    root.remove_chord(c.chord);
+                                }
+                            }
+                        }
+                        // + chord builder: selected key + picked key 2 → action
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            Rectangle {
+                                width: ck1.preferred-width + 14px;
+                                height: 28px;
+                                border-radius: 6px;
+                                background: #3a2f14;
+                                border-width: 1px;
+                                border-color: #f0b429;
+                                ck1 := Text {
+                                    x: 7px;
+                                    y: (parent.height - self.height) / 2;
+                                    text: root.selected_phys;
+                                    color: #f0b429;
+                                    font-size: 13px;
+                                    font-weight: 700;
+                                    font-family: "JetBrains Mono";
+                                }
+                            }
+                            Text {
+                                text: "+";
+                                color: #7d8694;
+                                font-size: 14px;
+                                vertical-alignment: center;
+                            }
+                            Rectangle {
+                                width: ck2.preferred-width + 14px;
+                                height: 28px;
+                                border-radius: 6px;
+                                background: root.chord_key2 != "" ? #3a2f14 : #11191d;
+                                border-width: 1px;
+                                border-color: root.chord_key2 != "" ? #f0b429 : #2a3340;
+                                ck2 := Text {
+                                    x: 7px;
+                                    y: (parent.height - self.height) / 2;
+                                    text: root.chord_key2 != "" ? root.chord_key2 : "pick key 2";
+                                    color: root.chord_key2 != "" ? #f0b429 : #7d8694;
+                                    font-size: 13px;
+                                    font-weight: root.chord_key2 != "" ? 700 : 400;
+                                    font-family: "JetBrains Mono";
+                                }
+                            }
+                            IconButton {
+                                wide: true;
+                                text: "pick\u{2026}";
+                                clicked => {
+                                    root.open_picker("chord_key2");
+                                }
+                            }
+                            Text {
+                                text: "\u{2192}";
+                                color: #7d8694;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                            }
+                            LineEdit {
+                                width: 160px;
+                                height: 28px;
+                                font-size: 13px;
+                                placeholder-text: "action (e.g. esc)";
+                                text <=> root.chord_action;
+                                accepted(t) => {
+                                    root.add_chord();
+                                }
+                            }
+                            IconButton {
+                                wide: true;
+                                text: "pick\u{2026}";
+                                clicked => {
+                                    root.open_picker("chord_action");
+                                }
+                            }
+                            IconButton {
+                                wide: true;
+                                text: "add";
+                                clicked => {
+                                    root.add_chord();
+                                }
+                            }
+                        }
+                    }
+
                     // tap / hold (dual-function) key — VIA's Mod-Tap / Layer-Tap.
                     // "When held" picks a layer or modifier; "when tapped" is a key
                     // (or none, for a momentary hold). keyd's per-key timeouts aren't
@@ -1869,7 +2019,10 @@ export component MainWindow inherits Window {
                                     vertical-alignment: center;
                                 }
                                 Text {
-                                    text: root.picker_target == "tap" ? "\u{2192} tap" : "\u{2192} binding";
+                                    text: root.picker_target == "tap" ? "\u{2192} tap"
+                                        : root.picker_target == "chord_key2" ? "\u{2192} chord key 2"
+                                        : root.picker_target == "chord_action" ? "\u{2192} chord action"
+                                        : "\u{2192} binding";
                                     color: #6fc3cf;
                                     font-size: 12px;
                                     font-family: "JetBrains Mono";

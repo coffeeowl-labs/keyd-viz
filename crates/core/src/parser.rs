@@ -189,9 +189,22 @@ fn parse_main_binding(cfg: &mut Config, key: &str, val: &str) {
 
 /// A chord key binds two or more `+`-joined keys (`j+k`). A lone `+` (the shifted
 /// `=`) or a leading/trailing `+` is not a chord.
-fn is_chord_key(key: &str) -> bool {
+pub fn is_chord_key(key: &str) -> bool {
     let parts: Vec<&str> = key.split('+').collect();
     parts.len() >= 2 && parts.iter().all(|p| !p.trim().is_empty())
+}
+
+/// Canonical form of a chord key for order-independent `a+b == b+a` matching: split
+/// on `+`, trim each part, sort, rejoin with `+`. Used to find the existing line for
+/// a chord regardless of the order it was spelled (the editor rewrites that line in
+/// place, keeping the user's original spelling). Purely lexical on the raw key tokens
+/// — it does *not* canonicalise keysyms, so genuinely different LHS spellings like
+/// `equal+a` and `=+a` stay distinct (they are distinct lines to keyd). Callers should
+/// guarantee [`is_chord_key`] first.
+pub fn canonical_chord(key: &str) -> String {
+    let mut parts: Vec<&str> = key.split('+').map(str::trim).collect();
+    parts.sort_unstable();
+    parts.join("+")
 }
 
 /// Port of keyd's `parse_fn` (config.c): match `name(arg, …)`. The name is
@@ -370,5 +383,20 @@ mod tests {
         assert!(!is_chord_key("a+"));
         assert!(!is_chord_key("+a"));
         assert!(is_chord_key("j+k"));
+    }
+
+    #[test]
+    fn canonical_chord_collapses_order() {
+        // a+b == b+a regardless of spelling order; 3-key too.
+        assert_eq!(canonical_chord("k+j"), canonical_chord("j+k"));
+        assert_eq!(canonical_chord("c+a+b"), "a+b+c");
+        // Whitespace around parts is trimmed before comparison.
+        assert_eq!(canonical_chord("k + j"), canonical_chord("j+k"));
+    }
+
+    #[test]
+    fn canonical_chord_does_not_over_merge_alt_spellings() {
+        // `=` and `equal` are different LHS tokens to keyd — keep them distinct.
+        assert_ne!(canonical_chord("equal+a"), canonical_chord("=+a"));
     }
 }

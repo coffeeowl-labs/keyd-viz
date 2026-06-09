@@ -315,6 +315,13 @@ fn chord_target_for(cfg: &Config, key: &str) -> Option<String> {
         .map(|(_, target)| target.clone())
 }
 
+/// Whether `key` participates in any general (non-toggle) combo. Such keys get a
+/// small `⊕` badge so a freshly-added `j+k = esc` is visible on the board (toggle
+/// chords carry the louder `⇧⇧` badge instead — see `build_base`).
+fn in_combo(cfg: &Config, key: &str) -> bool {
+    cfg.combos.iter().any(|(chord, _)| chord.split('+').any(|p| p.trim() == key))
+}
+
 fn build_base(cfg: &Config, geom: &Geometry) -> Board {
     let mut keys = Vec::new();
     for slot in &geom.slots {
@@ -375,6 +382,13 @@ fn build_base(cfg: &Config, geom: &Geometry) -> Board {
             cap.badge_right = Some(Badge {
                 text: "\u{21e7}\u{21e7}".to_string(), // ⇧⇧
                 color: accent_for(&target).to_string(),
+            });
+        } else if in_combo(cfg, name) {
+            // A general combo (`j+k = esc`): a single badge slot, so this only shows
+            // when the key isn't already wearing the louder toggle `⇧⇧`.
+            cap.badge_right = Some(Badge {
+                text: "\u{2295}".to_string(), // ⊕
+                color: REMAP_ACCENT.to_string(),
             });
         }
 
@@ -480,5 +494,30 @@ mod tests {
         assert!(all.contains(&"noop"));
         assert!(all.iter().all(|k| is_primary_keysym(k)));
         assert!(!is_primary_keysym("equal")); // alt name, not primary
+    }
+
+    fn cap_named<'a>(board: &'a Board, name: &str) -> &'a KeyCap {
+        board.keys.iter().find(|c| c.phys == name).expect("slot present")
+    }
+
+    #[test]
+    fn general_combo_badges_both_keys_toggle_takes_precedence() {
+        let geom = Geometry::from_rows(&[&[("j", 1.0), ("k", 1.0), ("x", 1.0), ("c", 1.0)]]);
+        let cfg = Config {
+            combos: vec![("j+k".into(), "esc".into())],
+            chords: vec![("x+c".into(), "game".into())],
+            ..Config::default()
+        };
+        let board = build_base(&cfg, &geom);
+        // A general combo gets the ⊕ badge on each constituent key.
+        for k in ["j", "k"] {
+            let badge = cap_named(&board, k).badge_right.as_ref().expect("combo badge");
+            assert_eq!(badge.text, "\u{2295}", "{k} should wear the combo badge");
+        }
+        // A toggle chord keeps its louder ⇧⇧ badge (single slot, toggle wins).
+        for k in ["x", "c"] {
+            let badge = cap_named(&board, k).badge_right.as_ref().expect("toggle badge");
+            assert_eq!(badge.text, "\u{21e7}\u{21e7}", "{k} should wear the toggle badge");
+        }
     }
 }

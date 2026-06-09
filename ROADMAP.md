@@ -1118,3 +1118,40 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   warning on load (don't silently pick a side). Not built — natural completion of the create-config
   correctness story, complements the orphan-warning machinery. **Remaining for E2**: chords/`[global]`,
   the duplicate-id load-time warning (this item), one-level include closure scan (deferred, §5.3).
+- *(Phase 6 E2 — chord editing, 2026-06-08)* Edit chords (`key1+key2 = action`: two keys struck
+  together emit one action) visually — previously read-only. The parser already classified them
+  (`toggle(..)` → `cfg.chords` with a `⇧⇧` badge; everything else → `cfg.combos`), so this is the
+  *editing* surface plus combo visibility. **UX (decided with the human, two iterations):** *inline in
+  the key's selection row*, not a dedicated panel — click a key and its selection row lists every
+  chord that key is part of (each with edit/delete) plus a "+ chord" builder where the clicked key is
+  key 1 and you pick key 2 + an action. The key insight that kills the "which key owns it" ambiguity:
+  a chord is listed under **both** its constituents (clicking `j` or `k` both surface `j+k`). **Scope
+  decided from the parser:** chords are `[main]`-only this round — `derive()` only routes
+  `SectionKind::Main` through `parse_main_binding`, so a `j+k` line on `[nav]` would be a phantom key
+  matching no board slot; per-layer chords are a later increment. The UI gates the section on
+  `chord_editable` (main/base only). **Core** (`parser.rs`): `canonical_chord` (split/trim/sort/rejoin)
+  for order-independent `a+b == b+a` matching — purely lexical so `equal+a` and `=+a` stay distinct;
+  `is_chord_key` made `pub`. **Board** (`board.rs`): general combos were parsed but rendered *nowhere*
+  — added `in_combo` + a `⊕` `badge_right` on both constituent keys so a freshly-added `j+k = esc`
+  shows immediately, with the louder toggle `⇧⇧` taking precedence (single badge slot). **Session**
+  (`editing.rs`): `chords_for_key` (lists a key's chords from the `[main]` entries, verbatim spelling,
+  dedup-by-canonical keep-last), `set_chord` (rejects equal keys / empty action / no `[main]`;
+  rewrites the existing canonical line **in place** preserving its LHS spelling, else appends — so
+  editing `k+j` updates the existing `j+k`), `remove_chord` (clears every canonical-matching spelling
+  across all `[main]` sections, mirroring `clear_binding`; missing = no-op). All mutation flows through
+  the existing line model → byte-exact round-trip + dirty tracking unchanged. **App** (`main.rs`):
+  `chord_rows_for`/`refresh_chords` helpers, `on_add_chord`/`on_edit_chord`/`on_remove_chord` callbacks
+  on the standard borrow→mutate→snapshot→drop→refresh pattern, picker routing for new
+  `chord_key2`/`chord_action` targets, chord seeding on select / layer-switch / enter / exit.
+  `on_edit_chord` is fill-only (seeds the builder; "add" rewrites via canonical match). **UI**
+  (`app.slint`): `ChordRow` struct, chord sub-section in the selection row, picker header labels.
+  **Adversarial review (correctness angle)**: no bugs — verified canonical match drives set-in-place
+  + remove-both-spellings, RefCell borrows drop before refresh, no stale builder/badge state, toggle
+  precedence holds; removed one dead `Config::chords_for_key` left over from the plan (the board uses
+  `in_combo`; the app uses the session method). Workspace tests green (+9: 2 canonical, 1 board badge,
+  6 session), clippy `-D warnings` clean; GUI click-through left for manual verification (can't drive
+  Slint on live Wayland). **Known limitation (documented):** editing an existing 3+-key chord through
+  the 2-key builder collapses it to two keys; display and delete handle 3+-key chords fully.
+  **Remaining for E2**: `[global]` options editing (next), the duplicate-id load-time warning,
+  one-level include closure scan (deferred, §5.3); composite-`[a+b]`-overlay *rendering* (§12) is a
+  separate viewer item.

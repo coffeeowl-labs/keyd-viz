@@ -1028,6 +1028,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let layer = win.get_edit_layer().to_string();
             let cur = s.current_binding(&layer, &phys).unwrap_or_default();
             seed_tap_hold(&win, s, &layer, &phys);
+            refresh_chords(&win, s, &layer, &phys);
             win.set_selected_phys(phys);
             win.set_edit_current(cur.clone().into());
             win.set_edit_value(cur.into());
@@ -1051,13 +1052,15 @@ fn main() -> Result<(), slint::PlatformError> {
             win.set_can_rename(renameable(&name));
             win.set_edit_layer(name.clone());
             let phys = win.get_selected_phys().to_string();
-            if !phys.is_empty() {
-                if let Some(s) = session.borrow().as_ref() {
+            if let Some(s) = session.borrow().as_ref() {
+                if !phys.is_empty() {
                     let cur = s.current_binding(&name, &phys).unwrap_or_default();
                     seed_tap_hold(&win, s, &name, &phys);
                     win.set_edit_current(cur.clone().into());
                     win.set_edit_value(cur.into());
                 }
+                // Show/hide the chord section as we move on/off [main].
+                refresh_chords(&win, s, &name, &phys);
             }
             render_board(&win);
         });
@@ -1406,10 +1409,108 @@ fn main() -> Result<(), slint::PlatformError> {
             // Route to the field the picker was opened for; never auto-apply.
             match win.get_picker_target().as_str() {
                 "tap" => win.set_th_tap(name),
+                "chord_key2" => win.set_chord_key2(name),
+                "chord_action" => win.set_chord_action(name),
                 _ => win.set_edit_value(name),
             }
             win.set_picker_open(false);
             win.set_picker_query("".into());
+        });
+    }
+
+    // ---- chords (E2): selected key (key 1) + picked key 2 → action, on [main] ----
+    // Add or edit a chord: an existing chord for the two keys (any order) is rewritten
+    // in place, else a new line is appended. The combo/toggle badge appears on both keys.
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        win.on_add_chord(move || {
+            let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
+            let key1 = win.get_selected_phys().to_string();
+            let key2 = win.get_chord_key2().to_string();
+            let action = win.get_chord_action().to_string();
+            let mut sb = session.borrow_mut();
+            let Some(s) = sb.as_mut() else { return };
+            match s.set_chord(&key1, &key2, &action) {
+                Ok(()) => {
+                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    refresh_warnings(&win, s); // a toggle chord can target a missing layer
+                    let rows = chord_rows_for(s, &key1);
+                    drop(sb);
+                    win.set_chord_rows(model(rows));
+                    win.set_chord_key2("".into());
+                    win.set_chord_action("".into());
+                    win.set_edit_dirty(dirty);
+                    win.set_capture_armed(false);
+                    refresh_preview(&win, &srcs, &path, cfg);
+                }
+                Err(e) => {
+                    drop(sb);
+                    win.set_edit_banner(format!("\u{26a0} {e}").into());
+                }
+            }
+        });
+    }
+
+    // Edit a chord: fill the builder from the existing row (other key → key 2, current
+    // action → the field). The user then presses "add", whose canonical match rewrites
+    // the existing line. (Fill-only, like the key picker — it does not itself apply.)
+    {
+        let weak = win.as_weak();
+        let session = session.clone();
+        win.on_edit_chord(move |chord| {
+            let Some(win) = weak.upgrade() else { return };
+            let phys = win.get_selected_phys().to_string();
+            // The other constituent key → key 2 (first non-selected part; a 3+-key chord
+            // edited this way collapses to two keys — a documented limitation).
+            let other =
+                chord.split('+').map(str::trim).find(|p| *p != phys).unwrap_or("").to_string();
+            win.set_chord_key2(other.into());
+            if let Some(s) = session.borrow().as_ref() {
+                let canon = keydviz_core::canonical_chord(&chord);
+                if let Some((_, act)) = s
+                    .chords_for_key(&phys)
+                    .into_iter()
+                    .find(|(k, _)| keydviz_core::canonical_chord(k) == canon)
+                {
+                    win.set_chord_action(act.into());
+                }
+            }
+        });
+    }
+
+    // Delete a chord (canonical match clears either spelling). The badge disappears.
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        win.on_remove_chord(move |chord| {
+            let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
+            let phys = win.get_selected_phys().to_string();
+            let mut sb = session.borrow_mut();
+            let Some(s) = sb.as_mut() else { return };
+            match s.remove_chord(&chord) {
+                Ok(()) => {
+                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    refresh_warnings(&win, s);
+                    let rows = chord_rows_for(s, &phys);
+                    drop(sb);
+                    win.set_chord_rows(model(rows));
+                    win.set_edit_dirty(dirty);
+                    refresh_preview(&win, &srcs, &path, cfg);
+                }
+                Err(e) => {
+                    drop(sb);
+                    win.set_edit_banner(format!("\u{26a0} {e}").into());
+                }
+            }
         });
     }
 
@@ -1722,6 +1823,30 @@ fn edit_layer_choices(s: &editing::EditSession) -> Vec<EditLayer> {
         .collect()
 }
 
+/// The chords the selected key participates in, as UI rows: `chord` is the verbatim
+/// LHS (used to edit/delete), `display` the pretty `j + k` form, `action` the RHS.
+fn chord_rows_for(s: &editing::EditSession, phys: &str) -> Vec<ChordRow> {
+    s.chords_for_key(phys)
+        .into_iter()
+        .map(|(chord, action)| {
+            let display = chord.split('+').map(str::trim).collect::<Vec<_>>().join(" + ");
+            ChordRow { chord: chord.into(), display: display.into(), action: action.into() }
+        })
+        .collect()
+}
+
+/// Seed the chord sub-section for the selected key. Chords are modeled on `[main]`
+/// only (the parser doesn't populate per-layer chords), so the section is shown there
+/// (or on the base board) and hidden on other layers. Also resets the builder fields.
+fn refresh_chords(win: &MainWindow, s: &editing::EditSession, layer: &str, phys: &str) {
+    let editable = layer == "main" || layer.is_empty();
+    win.set_chord_editable(editable);
+    let rows = if editable && !phys.is_empty() { chord_rows_for(s, phys) } else { Vec::new() };
+    win.set_chord_rows(model(rows));
+    win.set_chord_key2("".into());
+    win.set_chord_action("".into());
+}
+
 /// Layers offered as tap/hold "when held" targets. Excludes:
 /// - the base (`main`) — you hold *into* a layer, never onto the base board;
 /// - any layer whose name is a modifier (`[shift]` etc.) — `overload(shift, …)`
@@ -1833,8 +1958,13 @@ fn enter_edit_session(
     let (apply_ok, apply_hint) = apply_gate(&s);
     win.set_edit_layers(model(choices));
     win.set_hold_layers(model(hold_layer_choices(&s)));
+    let chord_editable = default_layer.as_str() == "main" || default_layer.is_empty();
     win.set_can_rename(renameable(&default_layer));
     win.set_edit_layer(default_layer);
+    win.set_chord_editable(chord_editable);
+    win.set_chord_rows(model(Vec::<ChordRow>::new()));
+    win.set_chord_key2("".into());
+    win.set_chord_action("".into());
     win.set_rename_target("".into());
     win.set_rename_name("".into());
     win.set_selected_phys("".into());
@@ -1882,6 +2012,10 @@ fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &Shar
     win.set_rename_target("".into());
     win.set_rename_name("".into());
     win.set_can_rename(false);
+    win.set_chord_editable(false);
+    win.set_chord_rows(model(Vec::<ChordRow>::new()));
+    win.set_chord_key2("".into());
+    win.set_chord_action("".into());
     win.set_apply_available(false);
     win.set_apply_hint("".into());
     reset_apply_ui(win);

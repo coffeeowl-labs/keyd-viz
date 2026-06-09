@@ -15,8 +15,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use keydviz_core::edit::{starter_config, EditConfig, SectionKind};
-use keydviz_core::{parser, round_trips, Behavior, Config, TapHold};
+use keydviz_core::edit::{starter_config, EditConfig, EntryKind, SectionKind};
+use keydviz_core::{canonical_chord, is_chord_key, parser, round_trips, Behavior, Config, TapHold};
 
 /// Why a config can't be opened for editing (it remains viewable as before).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,6 +169,102 @@ impl EditSession {
             .target_section_mut(layer)
             .ok_or_else(|| format!("this config has no [{layer}] section"))?;
         section.set_or_add_binding(key, &th.serialize());
+        Ok(())
+    }
+
+    /// Every chord in `[main]` that includes `key` as one of its `+`-joined parts,
+    /// as `(chord_key, action)` in file order — the verbatim LHS spelling and RHS
+    /// value. A chord `j+k` is returned for both `j` and `k`, so the editor can list
+    /// it under either constituent key. Chords are `[main]`-only (the parser doesn't
+    /// model per-layer chords); duplicate spellings of the same chord collapse to the
+    /// last (keyd is last-wins). See [`keydviz_core::canonical_chord`].
+    pub fn chords_for_key(&self, key: &str) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = Vec::new();
+        for s in &self.edit.sections {
+            if s.kind != SectionKind::Main {
+                continue;
+            }
+            for e in &s.entries {
+                let EntryKind::Binding { key: k, val: Some(v), .. } = &e.kind else { continue };
+                if is_chord_key(k) && k.split('+').any(|p| p.trim() == key) {
+                    let canon = canonical_chord(k);
+                    out.retain(|(ek, _)| canonical_chord(ek) != canon);
+                    out.push((k.clone(), v.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    /// Bind `key1+key2 = action` in `[main]`. If a chord for these two keys already
+    /// exists in any order (canonical match), its line is rewritten in place — its
+    /// original LHS spelling preserved, only the action changed (so editing `k+j`
+    /// updates the existing `j+k`). Otherwise a new `key1+key2` line is appended.
+    /// `Err` on: no `[main]` section, the two keys equal, or an empty key/action.
+    pub fn set_chord(&mut self, key1: &str, key2: &str, action: &str) -> Result<(), String> {
+        let (key1, key2, action) = (key1.trim(), key2.trim(), action.trim());
+        if key1.is_empty() || key2.is_empty() {
+            return Err("pick two keys for the chord".into());
+        }
+        if key1 == key2 {
+            return Err("a chord needs two different keys".into());
+        }
+        if action.is_empty() {
+            return Err("enter an action for the chord".into());
+        }
+        let new_key = format!("{key1}+{key2}");
+        let canon = canonical_chord(&new_key);
+        let section = self
+            .edit
+            .target_section_mut("main")
+            .ok_or_else(|| "this config has no [main] section".to_string())?;
+        // Rewrite an existing chord line (any order) in place, else append a new one.
+        let existing = section.entries.iter().find_map(|e| match &e.kind {
+            EntryKind::Binding { key: k, .. } if is_chord_key(k) && canonical_chord(k) == canon => {
+                Some(k.clone())
+            }
+            _ => None,
+        });
+        match existing {
+            Some(k) => {
+                section.set_binding(&k, action);
+            }
+            None => section.set_or_add_binding(&new_key, action),
+        }
+        Ok(())
+    }
+
+    /// Remove the chord whose key matches `chord_key` (canonical, order-independent)
+    /// from `[main]` — clearing every spelling across every `[main]` section so a
+    /// leftover `k+j` can't keep it bound (mirrors [`Self::clear_binding`]). `Err`
+    /// only when there is no `[main]` section; a missing chord is a no-op `Ok`.
+    pub fn remove_chord(&mut self, chord_key: &str) -> Result<(), String> {
+        let canon = canonical_chord(chord_key.trim());
+        let mut found_main = false;
+        for s in &mut self.edit.sections {
+            if s.kind != SectionKind::Main {
+                continue;
+            }
+            found_main = true;
+            let keys: Vec<String> = s
+                .entries
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    EntryKind::Binding { key: k, .. }
+                        if is_chord_key(k) && canonical_chord(k) == canon =>
+                    {
+                        Some(k.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            for k in keys {
+                s.remove_binding(&k);
+            }
+        }
+        if !found_main {
+            return Err("this config has no [main] section".into());
+        }
         Ok(())
     }
 
@@ -793,6 +889,84 @@ mod tests {
         assert!(s.stale_warning().is_none());
         std::fs::write(td.0.join("test.conf"), "[ids]\n*\n[main]\na = b\n").unwrap();
         assert!(s.stale_warning().is_some());
+    }
+
+    #[test]
+    fn chords_for_key_lists_under_both_keys() {
+        let td = TempDir::new("chord-list");
+        let p = td.0.join("test.conf");
+        std::fs::write(&p, "[ids]\n*\n\n[main]\nj+k = esc\n").unwrap();
+        let s = EditSession::open(&p).unwrap();
+        // The same chord appears under either constituent key; an unrelated key has none.
+        assert_eq!(s.chords_for_key("j"), vec![("j+k".to_string(), "esc".to_string())]);
+        assert_eq!(s.chords_for_key("k"), vec![("j+k".to_string(), "esc".to_string())]);
+        assert!(s.chords_for_key("z").is_empty());
+    }
+
+    #[test]
+    fn set_chord_appends_then_edits_in_canonical_order() {
+        let td = TempDir::new("chord-set");
+        let mut s = session(&td);
+        // First time: a new line is appended to [main].
+        s.set_chord("j", "k", "esc").unwrap();
+        assert!(s.dirty());
+        assert_eq!(s.chords_for_key("j"), vec![("j+k".to_string(), "esc".to_string())]);
+        // Editing the reversed spelling rewrites the SAME line (LHS preserved, value changed).
+        s.set_chord("k", "j", "tab").unwrap();
+        let chords = s.chords_for_key("j");
+        assert_eq!(chords, vec![("j+k".to_string(), "tab".to_string())], "one line, rewritten");
+        assert!(s.serialized().contains("j+k = tab"));
+        assert!(!s.serialized().contains("k+j"), "no duplicate reversed line");
+    }
+
+    #[test]
+    fn set_chord_rejects_bad_input() {
+        let td = TempDir::new("chord-bad");
+        let mut s = session(&td);
+        assert!(s.set_chord("j", "j", "esc").unwrap_err().contains("different"));
+        assert!(s.set_chord("j", "k", "  ").unwrap_err().contains("action"));
+        // No [main] section at all → a named error.
+        let p = td.0.join("nomain.conf");
+        std::fs::write(&p, "[ids]\n*\n\n[nav]\nh = left\n").unwrap();
+        let mut s2 = EditSession::open(&p).unwrap();
+        assert!(s2.set_chord("j", "k", "esc").unwrap_err().contains("[main]"));
+    }
+
+    #[test]
+    fn remove_chord_clears_either_spelling() {
+        let td = TempDir::new("chord-rm");
+        let p = td.0.join("test.conf");
+        std::fs::write(&p, "[ids]\n*\n\n[main]\nj+k = esc\n").unwrap();
+        let mut s = EditSession::open(&p).unwrap();
+        // Remove via the reversed spelling — canonical match still finds it.
+        s.remove_chord("k+j").unwrap();
+        assert!(s.dirty());
+        assert!(s.chords_for_key("j").is_empty());
+        assert!(!s.serialized().contains("j+k"));
+        // Removing a chord that isn't there is a no-op; no [main] is an error.
+        let mut s2 = EditSession::open(&p).unwrap();
+        s2.remove_chord("a+b").unwrap();
+        let p3 = td.0.join("nomain.conf");
+        std::fs::write(&p3, "[ids]\n*\n\n[nav]\nh = left\n").unwrap();
+        let mut s3 = EditSession::open(&p3).unwrap();
+        assert!(s3.remove_chord("j+k").unwrap_err().contains("[main]"));
+    }
+
+    #[test]
+    fn toggle_chord_flows_to_config_and_orphan_warning() {
+        let td = TempDir::new("chord-toggle");
+        let mut s = session(&td); // SRC defines [nav]
+        // A toggle chord onto an existing layer lands in config().chords, no orphan.
+        s.set_chord("leftshift", "rightshift", "toggle(nav)").unwrap();
+        assert!(s
+            .config()
+            .chords
+            .contains(&("leftshift+rightshift".to_string(), "nav".to_string())));
+        assert!(s.orphan_warnings().is_empty());
+        // Retargeting it at a missing layer raises an orphan warning (the value, not
+        // the '+'-joined key, is what the orphan scan reads).
+        s.set_chord("leftshift", "rightshift", "toggle(missing)").unwrap();
+        assert!(s.orphan_warnings().iter().any(|w| w.contains("missing")));
     }
 
     #[test]
