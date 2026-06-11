@@ -1210,5 +1210,19 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   overlap. `BoardView` gained `chord_mode`/`chord_k1`/`chord_k2` for the dual highlight. No
   core/session logic changed (chord set/remove/list in `EditSession` untouched); pure UI/state
   rewiring. Build + tests green, clippy `-D warnings` clean; GUI click-through manual.
+- *(Phase 6 E2 — global-exit fix + per-layer chords, 2026-06-10)* Two fixes from user testing of the
+  re-grouping. **(1) Global-exit bug:** with the board hidden in `[global]` mode there was no way back
+  to key editing (only Save) — the `⚙ global` chip now *toggles* (clicking it while open returns to the
+  board) and shows a `✕` when open so that's discoverable. **(2) Per-layer chords:** user asked whether
+  chords work on layers other than `main`; **verified with `keyd check` (v2.6.0)** that `j+k = esc`
+  inside `[nav]` is accepted exactly like a `[main]` chord — keyd scopes a chord to the layer it's
+  declared in. The `[main]`-only limitation was keyd-viz's, not keyd's, so lifted it: `Layer` gained a
+  `combos` field; `derive()` routes a layer's chord-lines there (off `keys`, which is slot-addressable —
+  they'd otherwise be invisible) ; `build_layer` badges each member `⊕` on that layer's own board;
+  `EditSession::{chords,set_chord,remove_chord}` take a `layer` param (new `section_is_layer` helper,
+  `"main"`→`SectionKind::Main`, else base-name match incl. `[nav:C]`); the `mode` toggle now shows on
+  any selected layer (`edit_layer != ""`) and the chord list/ops follow `edit_layer`, reloading on layer
+  switch. Round-trip untouched (only `derive()` changed, not the line model). +3 tests
+  (parser routing, board badge, layer-scoped session round-trip); build + tests green, clippy clean.
   **Remaining for E2**: the duplicate-id load-time warning, one-level include closure scan
   (deferred, §5.3); composite-`[a+b]`-overlay *rendering* (§12) is a separate viewer item.

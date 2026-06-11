@@ -88,7 +88,14 @@ pub fn derive(edit: &EditConfig) -> Config {
                 }
                 for (key, val) in bindings(section) {
                     let layer = ensure_layer(&mut cfg, &name);
-                    layer.keys.push((key.to_string(), val.to_string()));
+                    // A chord line (`j+k = …`) is layer-scoped in keyd, but isn't a
+                    // single-key slot binding — keep it off `keys` (which build_layer
+                    // looks up per slot) and render it as a member badge instead.
+                    if is_chord_key(key) {
+                        layer.combos.push((key.to_string(), val.to_string()));
+                    } else {
+                        layer.keys.push((key.to_string(), val.to_string()));
+                    }
                 }
             }
         }
@@ -374,6 +381,19 @@ mod tests {
         // Toggle chords keep their dedicated slot (rendered as chord badges).
         let cfg = parse_text("[main]\nx+c = toggle(game)\n");
         assert_eq!(cfg.chords, vec![("x+c".to_string(), "game".to_string())]);
+    }
+
+    #[test]
+    fn layer_chords_go_to_layer_combos_not_keys() {
+        // keyd scopes a chord to its layer: a `j+k` line under [nav] belongs to that
+        // layer's combos (rendered as a member badge), never `keys` (which is
+        // single-key, slot-addressable) — else it'd be an invisible phantom binding.
+        let cfg = parse_text("[main]\ncapslock = layer(nav)\n\n[nav]\nh = left\nj+k = esc\n");
+        let nav = cfg.layers.iter().find(|l| l.name == "nav").unwrap();
+        assert_eq!(nav.combos, vec![("j+k".to_string(), "esc".to_string())]);
+        assert_eq!(nav.keys, vec![("h".to_string(), "left".to_string())]);
+        // Base combos are unaffected by a layer chord.
+        assert!(cfg.combos.is_empty());
     }
 
     #[test]

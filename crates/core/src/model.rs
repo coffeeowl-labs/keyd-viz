@@ -26,6 +26,11 @@ pub struct Hold {
 pub struct Layer {
     pub name: String,
     pub keys: Vec<(String, String)>,
+    /// Chords defined *within this layer* (`j+k = esc` under `[nav]`): keyd scopes a
+    /// chord to the layer it's declared in, so they're kept off `keys` (which is
+    /// single-key, slot-addressable) and rendered as a `⊕` badge on each member key.
+    /// `(chord_key, action)` verbatim, mirroring [`Config::combos`] for the base.
+    pub combos: Vec<(String, String)>,
     /// The `:` modset qualifier from the section header (`[caps:C]` → `Some("C")`):
     /// the layer behaves as those modifiers while held. `None` for plain layers and
     /// for `:layout` sections. A hold onto a modset-qualified layer classifies as a

@@ -1221,7 +1221,9 @@ export component MainWindow inherits Window {
                             gbl := Text {
                                 x: 8px;
                                 y: 4px;
-                                text: "\u{2699} global";
+                                // when open, show a ✕ so it's clear the chip also closes
+                                // the form (the form hides the board, so it's the way out).
+                                text: sel ? "\u{2699} global \u{2715}" : "\u{2699} global";
                                 color: sel ? #11151c : #cfd6df;
                                 font-size: 12px;
                                 font-weight: sel ? 700 : 400;
@@ -1432,13 +1434,13 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // board interaction mode (main layer only — chords are a [main]
-                    // construct). "single key" edits one key's binding (click a key →
-                    // remap or tap/hold below); "chord" turns the board into a two-key
-                    // picker (click two keys → one action). Exactly one is active, so a
-                    // key's tap/hold and chord-building can never overlap. Hidden while
-                    // editing globals (no board then) or on any non-main layer.
-                    if !root.editing_global && root.edit_layer == "main": HorizontalLayout {
+                    // board interaction mode. "single key" edits one key's binding (click
+                    // a key → remap or tap/hold below); "chord" turns the board into a
+                    // two-key picker (click two keys → one action), scoped to the selected
+                    // layer (keyd scopes a chord to the layer it's declared in). Exactly
+                    // one is active, so a key's tap/hold and chord-building never overlap.
+                    // Hidden while editing globals (no board then).
+                    if !root.editing_global && root.edit_layer != "": HorizontalLayout {
                         spacing: 8px;
                         alignment: start;
                         Text {
@@ -1688,7 +1690,7 @@ export component MainWindow inherits Window {
                     if !root.editing_global && root.board_mode == "chord": VerticalLayout {
                         spacing: 6px;
                         Text {
-                            text: "chords (main) \u{2014} click two keys on the board, then set an action";
+                            text: "chords (" + root.edit_layer + ") \u{2014} click two keys on the board, then set an action";
                             color: #7d8694;
                             font-size: 11px;
                         }

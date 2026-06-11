@@ -322,6 +322,12 @@ fn in_combo(cfg: &Config, key: &str) -> bool {
     cfg.combos.iter().any(|(chord, _)| chord.split('+').any(|p| p.trim() == key))
 }
 
+/// Whether `key` is a member of any chord declared *within this layer* — gets the
+/// same `⊕` badge as a base combo, on the layer's own board.
+fn in_layer_combo(layer: &Layer, key: &str) -> bool {
+    layer.combos.iter().any(|(chord, _)| chord.split('+').any(|p| p.trim() == key))
+}
+
 fn build_base(cfg: &Config, geom: &Geometry) -> Board {
     let mut keys = Vec::new();
     for slot in &geom.slots {
@@ -468,6 +474,14 @@ fn build_layer(cfg: &Config, layer: &Layer, geom: &Geometry) -> Board {
             cap.label = base_legend(nm);
             cap.state = KeyState::Dim;
         }
+        // A chord declared in this layer (`j+k = esc` under `[nav]`): badge each member
+        // so it's visible on the layer's own board, just like a base combo.
+        if in_layer_combo(layer, nm) {
+            cap.badge_right = Some(Badge {
+                text: "\u{2295}".to_string(), // ⊕
+                color: accent.clone(),
+            });
+        }
         keys.push(cap);
     }
 
@@ -519,5 +533,27 @@ mod tests {
             let badge = cap_named(&board, k).badge_right.as_ref().expect("toggle badge");
             assert_eq!(badge.text, "\u{21e7}\u{21e7}", "{k} should wear the toggle badge");
         }
+    }
+
+    #[test]
+    fn layer_combo_badges_members_on_layer_board() {
+        // A chord declared in a layer (`j+k = esc` under [nav]) badges its members on
+        // that layer's own board — the same ⊕ as a base combo, so per-layer chords are
+        // visible exactly where they apply.
+        let geom = Geometry::from_rows(&[&[("h", 1.0), ("j", 1.0), ("k", 1.0)]]);
+        let layer = Layer {
+            name: "nav".into(),
+            keys: vec![("h".into(), "left".into())],
+            combos: vec![("j+k".into(), "esc".into())],
+            mods: None,
+        };
+        let cfg = Config { layers: vec![layer.clone()], ..Config::default() };
+        let board = build_layer(&cfg, &layer, &geom);
+        for k in ["j", "k"] {
+            let badge = cap_named(&board, k).badge_right.as_ref().expect("layer combo badge");
+            assert_eq!(badge.text, "\u{2295}", "{k} should wear the layer combo badge");
+        }
+        // A non-member key on the same layer carries no combo badge.
+        assert!(cap_named(&board, "h").badge_right.is_none());
     }
 }
