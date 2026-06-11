@@ -26,7 +26,7 @@ pub use edit::{round_trips, EditConfig};
 pub use geometry::{Geometry, Slot};
 pub use globals::{is_known_global, GlobalOption, GLOBAL_OPTIONS};
 pub use qmk::{import as import_qmk, QmkImport};
-pub use ids::{DeviceFlags, Ids, MatchKind};
+pub use ids::{find_conflicts, DeviceFlags, IdConflict, Ids, MatchKind};
 pub use keycodes::keycode_name;
 pub use live::{
     parse_listen_line, parse_monitor_line, ActiveLayers, KeyAction, KeyEvent, LayerEvent,

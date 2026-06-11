@@ -1226,3 +1226,33 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   (parser routing, board badge, layer-scoped session round-trip); build + tests green, clippy clean.
   **Remaining for E2**: the duplicate-id load-time warning, one-level include closure scan
   (deferred, §5.3); composite-`[a+b]`-overlay *rendering* (§12) is a separate viewer item.
+- *(Phase 6 E2 — duplicate-`[ids]` load-time warning, 2026-06-10)* The §5.5 completion of the
+  create-config correctness story: the create flow already *prevents authoring* a colliding id
+  (governed keyboards are excluded as candidates); this *detects* a pre-existing one. Two config
+  files claiming the **same** id at the **same rank** are a misconfiguration keyd resolves
+  nondeterministically by `readdir` order — so warn on load instead of silently inheriting keyd's
+  file-order pick. **Core** (`ids.rs`): `find_conflicts(&[Ids]) -> Vec<IdConflict>`, pure and
+  reusing the tested `match_device`, so prefix matching, `k:`/`m:` type filters, and excludes all
+  behave exactly as keyd does. Two clash kinds: **Explicit** — for every concrete id any file
+  declares (probed as a keyboard via the new private `explicit_candidates`), the files whose match
+  ties at `Explicit` strength (≥2); **Wildcard** — two or more files with a bare `*`, which both
+  claim any keyboard no specific config carves out. **Precision over recall** per the editor-lint
+  rule: probes keyboards only (a keyboard tool — synthesizing hypothetical mice would false-alarm,
+  since a `k:` id incidentally matches a button-bearing mouse via the KEY bit), and an
+  explicit-beats-wildcard *layering* (the normal `specific + catch-all` setup) is never flagged.
+  10 core unit cases (same-id, distinct-ids-clean, explicit-vs-wildcard-clean, two-wildcards,
+  exclude-neutralizes, k:-vs-plain, m:-not-probed, 3-way, single-file-self, ordering). **App**
+  (`main.rs`): `format_id_conflicts` phrases each structured conflict into one human line naming the
+  contesting files (base names) + the contested id; `gather_sheets` computes it over the full
+  `/etc/keyd` set (a property of the *files*, so independent of what's connected — runs on both the
+  matched and no-keyboard-matched paths) and carries it on `Detection.id_warnings`. Surfaced in
+  `--list` (printed under the subtitle) and the GUI (new `load_warnings` Slint prop → an amber
+  viewer-level banner mirroring the edit-mode `edit_warnings` box, gated `!edit_mode && !compact`).
+  5 app glue tests (file-name mapping, wildcard phrasing, clean-set-silent, comma-join, OOB-index
+  graceful). Verified no false alarm on the real `/etc/keyd` (HHKB + laptop → clean). **Known
+  limitation (documented):** the banner is set once at load — editing a config to fix the clash
+  clears it on next restart, not live (the reload watcher re-derives edited content but doesn't
+  re-run detection); acceptable for a load-time hygiene warning. Workspace 75 core + app tests
+  added-to and green, clippy `-D warnings` clean; GUI click-through left for manual verification.
+  **Remaining for E2**: one-level include closure scan (deferred, §5.3); composite-`[a+b]`-overlay
+  *rendering* (§12) is a separate viewer item.

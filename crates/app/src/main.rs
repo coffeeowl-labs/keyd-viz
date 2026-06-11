@@ -22,8 +22,8 @@ use std::rc::Rc;
 use devices::InputDevice;
 use keydviz_core::board::{KeyCap, KeyState};
 use keydviz_core::{
-    catalog, import_qmk, parse_file, parse_text, Behavior, Config, DeviceFlags, Geometry, Ids,
-    MatchKind, Sheet, MODIFIERS,
+    catalog, find_conflicts, import_qmk, parse_file, parse_text, Behavior, Config, DeviceFlags,
+    Geometry, IdConflict, Ids, MatchKind, Sheet, MODIFIERS,
 };
 use slint::{Brush, Color, ModelRc, VecModel};
 
@@ -255,13 +255,61 @@ struct Detection {
     /// the device map on hotplug)? True for the auto-detect paths; false for explicit path
     /// args and QMK import, which show exactly what was asked for.
     live_devices: bool,
+    /// Load-time `[ids]` collision warnings: human lines for any device id (or the
+    /// wildcard) two `/etc/keyd` configs claim at the same rank — a misconfiguration
+    /// keyd resolves nondeterministically by file order (edit-mode design §5.5). Empty
+    /// for the non-`/etc/keyd` paths (args/examples/QMK), which aren't the user's live set.
+    id_warnings: Vec<String>,
 }
 
 impl Detection {
     /// An auto-detect result that keeps following devices (used by the detection fallbacks).
     fn new(srcs: Vec<SheetSrc>, subtitle: String) -> Self {
-        Detection { srcs, device_map: Vec::new(), subtitle, live_devices: true }
+        Detection {
+            srcs,
+            device_map: Vec::new(),
+            subtitle,
+            live_devices: true,
+            id_warnings: Vec::new(),
+        }
     }
+}
+
+/// Turn the core's structured `[ids]` conflicts into one human warning line each,
+/// naming the contesting files (by base name) and the contested id. The core finds
+/// the clashes (pure, tested); this just phrases them.
+fn format_id_conflicts(configs: &[(PathBuf, Config)], conflicts: &[IdConflict]) -> Vec<String> {
+    let file_name = |i: &usize| -> String {
+        configs
+            .get(*i)
+            .map(|(p, _)| {
+                p.file_name()
+                    .map(|f| f.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "(unknown)".to_string())
+    };
+    conflicts
+        .iter()
+        .map(|c| {
+            let files: Vec<String> = c.configs.iter().map(file_name).collect();
+            let joined = match files.len() {
+                0 | 1 => files.first().cloned().unwrap_or_default(),
+                2 => format!("{} and {}", files[0], files[1]),
+                n => format!("{} and {}", files[..n - 1].join(", "), files[n - 1]),
+            };
+            let what = match c.kind {
+                MatchKind::Wildcard => {
+                    "the wildcard `[ids] *` (any keyboard no other config claims)".to_string()
+                }
+                _ => format!("device id {}", c.id),
+            };
+            format!(
+                "\u{26a0} {joined} both claim {what} — keyd picks one by file order \
+                 (nondeterministic); remove the duplicate."
+            )
+        })
+        .collect()
 }
 
 /// The value following `--flag` on the command line, if present.
@@ -312,7 +360,13 @@ fn qmk_detection(info_path: &str) -> Result<Detection, String> {
         layout_id: String::new(),
         qmk: Some((imp.geometry, profile)),
     };
-    Ok(Detection { srcs: vec![src], device_map: Vec::new(), subtitle, live_devices: false })
+    Ok(Detection {
+        srcs: vec![src],
+        device_map: Vec::new(),
+        subtitle,
+        live_devices: false,
+        id_warnings: Vec::new(),
+    })
 }
 
 /// Decide which sheets to render, the device→sheet map, and a subtitle.
@@ -351,6 +405,7 @@ fn gather_sheets() -> Detection {
             device_map: Vec::new(),
             subtitle: format!("{n} config(s) from arguments"),
             live_devices: false,
+            id_warnings: Vec::new(),
         };
     }
 
@@ -370,6 +425,10 @@ fn gather_sheets() -> Detection {
 
     let configs = parse_configs(&conf_paths);
     let matchers: Vec<Ids> = configs.iter().map(|(_, c)| Ids::parse(&c.ids)).collect();
+    // Same-rank `[ids]` clashes across the live config set — surface on load rather
+    // than silently inheriting keyd's file-order pick (§5.5). A property of the files,
+    // so computed whether or not a keyboard is currently connected.
+    let id_warnings = format_id_conflicts(&configs, &find_conflicts(&matchers));
     let devices = devices::connected_devices();
 
     // Assign each connected device to its best-matching config (explicit > wildcard).
@@ -394,7 +453,10 @@ fn gather_sheets() -> Detection {
         let srcs: Vec<SheetSrc> =
             configs.iter().map(|(p, c)| SheetSrc::catalog(p, c, "", Vec::new())).collect();
         let n = srcs.len();
-        return Detection::new(srcs, format!("{n} config(s) \u{2014} no connected keyboard detected"));
+        let mut det =
+            Detection::new(srcs, format!("{n} config(s) \u{2014} no connected keyboard detected"));
+        det.id_warnings = id_warnings;
+        return det;
     }
 
     let mut srcs = Vec::new();
@@ -427,6 +489,7 @@ fn gather_sheets() -> Detection {
         device_map,
         subtitle: format!("{n} connected keyboard(s) detected"),
         live_devices: true,
+        id_warnings,
     }
 }
 
@@ -734,6 +797,9 @@ fn main() -> Result<(), slint::PlatformError> {
     // debugging device detection and for scripting.
     if std::env::args().any(|a| a == "--list") {
         println!("{}", det.subtitle);
+        for w in &det.id_warnings {
+            println!("{w}");
+        }
         for s in &sheets_data {
             let dev = if s.device.is_empty() {
                 String::new()
@@ -790,6 +856,9 @@ fn main() -> Result<(), slint::PlatformError> {
         .collect();
     win.set_sheets(model(sheets_data));
     win.set_device_map(model(device_map));
+    // Load-time `[ids]` collision warnings (§5.5) — a static property of the config
+    // set, so set once and shown in the viewer (outside edit mode) until restart.
+    win.set_load_warnings(det.id_warnings.join("\n").into());
     win.set_active_index(0);
     if let Some(active) = first {
         win.set_active_sheet(active);
@@ -3155,5 +3224,64 @@ mod create_tests {
         let s = sanitize_config_name(&long);
         assert_eq!(s.len(), 64);
         assert!(keydviz_apply::valid_name(&s));
+    }
+}
+
+#[cfg(test)]
+mod id_conflict_tests {
+    use super::format_id_conflicts;
+    use keydviz_core::{find_conflicts, parse_text, Config, Ids, MatchKind, IdConflict};
+    use std::path::PathBuf;
+
+    fn cfg(ids_block: &str) -> Config {
+        parse_text(&format!("[ids]\n{ids_block}\n\n[main]\n"))
+    }
+
+    /// Build the `(path, Config)` list + run the real detector, mirroring gather_sheets.
+    fn run(files: &[(&str, &str)]) -> Vec<String> {
+        let configs: Vec<(PathBuf, Config)> =
+            files.iter().map(|(name, ids)| (PathBuf::from(name), cfg(ids))).collect();
+        let matchers: Vec<Ids> = configs.iter().map(|(_, c)| Ids::parse(&c.ids)).collect();
+        format_id_conflicts(&configs, &find_conflicts(&matchers))
+    }
+
+    #[test]
+    fn names_the_files_and_the_contested_id() {
+        let w = run(&[("/etc/keyd/a.conf", "04fe:0021"), ("/etc/keyd/b.conf", "04fe:0021")]);
+        assert_eq!(w.len(), 1);
+        // Base file names only (not the full path), and the contested id.
+        assert!(w[0].contains("a.conf and b.conf"), "{}", w[0]);
+        assert!(w[0].contains("device id 04fe:0021"), "{}", w[0]);
+        assert!(w[0].contains("file order"), "{}", w[0]);
+    }
+
+    #[test]
+    fn wildcard_clash_phrasing() {
+        let w = run(&[("a.conf", "*"), ("b.conf", "04fe:0021"), ("c.conf", "*")]);
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("a.conf and c.conf"), "{}", w[0]);
+        assert!(w[0].contains("wildcard"), "{}", w[0]);
+    }
+
+    #[test]
+    fn clean_config_set_warns_nothing() {
+        // The normal layering: one specific config + one wildcard catch-all.
+        assert!(run(&[("hhkb.conf", "04fe:0021"), ("default.conf", "*")]).is_empty());
+    }
+
+    #[test]
+    fn three_way_clash_joins_with_commas() {
+        let w = run(&[("a.conf", "aa:bb"), ("b.conf", "aa:bb"), ("c.conf", "aa:bb")]);
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("a.conf, b.conf and c.conf"), "{}", w[0]);
+    }
+
+    #[test]
+    fn out_of_range_index_degrades_gracefully() {
+        // Defensive: a stale index can't panic, just labels "(unknown)".
+        let configs: Vec<(PathBuf, Config)> = vec![(PathBuf::from("a.conf"), cfg("*"))];
+        let bogus = vec![IdConflict { id: "x".into(), kind: MatchKind::Explicit, configs: vec![0, 9] }];
+        let w = format_id_conflicts(&configs, &bogus);
+        assert!(w[0].contains("a.conf and (unknown)"), "{}", w[0]);
     }
 }

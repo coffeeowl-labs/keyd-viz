@@ -173,6 +173,110 @@ impl Ids {
     pub fn has_wildcard(&self) -> bool {
         self.wildcard
     }
+
+    /// Concrete (non-wildcard, non-exclude) keyboard-matching ids this section
+    /// claims. Used by [`find_conflicts`] to synthesize the device ids a clash
+    /// could happen on. We probe keyboards only — keyd-viz is a keyboard tool, and
+    /// probing hypothetical mice would risk false alarms (a `k:` id incidentally
+    /// matches a button-bearing mouse via the KEY bit). `m:`-only entries and empty
+    /// patterns are skipped.
+    fn explicit_candidates(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|e| {
+                !e.exclude && !e.pattern.is_empty() && e.flags.intersects(DeviceFlags::KEYBOARD)
+            })
+            .map(|e| e.pattern.clone())
+            .collect()
+    }
+}
+
+/// A device id that two or more configs claim at the same *winning* match strength.
+/// keyd resolves such a clash nondeterministically by `readdir` order (it picks the
+/// first file the directory scan yields), so we surface it as a misconfiguration
+/// rather than silently picking a side (edit-mode design §5.5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdConflict {
+    /// The contested id (`vendor:product`), or `*` for the wildcard clash.
+    pub id: String,
+    /// `Explicit` for a concrete-id clash, `Wildcard` for two bare-`*` configs.
+    pub kind: MatchKind,
+    /// Indices into the input slice of the configs that tie at the top rank
+    /// (so the caller can map them back to file names), in input order.
+    pub configs: Vec<usize>,
+}
+
+/// Find device ids that two or more of `configs` claim at the same winning rank —
+/// the cases keyd resolves by file order. `configs` is each file's parsed `[ids]`,
+/// in the caller's order. Pure (reuses [`Ids::match_device`]); precision-favoring,
+/// so it flags only genuine same-rank ties, never a clean explicit-beats-wildcard
+/// layering.
+///
+/// Two kinds are reported:
+/// - **Explicit:** for every concrete id any file declares, the files whose match
+///   for that id ties at `Explicit` strength (≥2). Honors prefix matching, type
+///   filters (`k:`/`m:`), and excludes exactly as keyd does, since it routes through
+///   `match_device`.
+/// - **Wildcard:** two or more files with a bare `*`, which both claim any keyboard
+///   no specific config carves out.
+pub fn find_conflicts(configs: &[Ids]) -> Vec<IdConflict> {
+    let mut out = Vec::new();
+
+    // Explicit clashes — probe each declared concrete id (as a keyboard) and see
+    // who wins on it.
+    let mut candidates: Vec<String> = Vec::new();
+    for ids in configs {
+        for cand in ids.explicit_candidates() {
+            if !candidates.contains(&cand) {
+                candidates.push(cand);
+            }
+        }
+    }
+    for devid in &candidates {
+        let mut top = 0u8;
+        let mut winners: Vec<usize> = Vec::new();
+        for (ci, ids) in configs.iter().enumerate() {
+            let r = ids.match_device(devid, DeviceFlags::keyboard()).rank();
+            if r == 0 {
+                continue;
+            }
+            match r.cmp(&top) {
+                std::cmp::Ordering::Greater => {
+                    top = r;
+                    winners.clear();
+                    winners.push(ci);
+                }
+                std::cmp::Ordering::Equal => winners.push(ci),
+                std::cmp::Ordering::Less => {}
+            }
+        }
+        // Only an explicit tie is a clash worth naming per-id; a wildcard tie would
+        // fire on every keyboard, so it's reported once below instead.
+        if top == MatchKind::Explicit.rank() && winners.len() >= 2 {
+            out.push(IdConflict {
+                id: devid.clone(),
+                kind: MatchKind::Explicit,
+                configs: winners,
+            });
+        }
+    }
+
+    // Wildcard clash — two or more files both claim every unclaimed keyboard.
+    let wild: Vec<usize> = configs
+        .iter()
+        .enumerate()
+        .filter(|(_, ids)| ids.has_wildcard())
+        .map(|(i, _)| i)
+        .collect();
+    if wild.len() >= 2 {
+        out.push(IdConflict {
+            id: "*".to_string(),
+            kind: MatchKind::Wildcard,
+            configs: wild,
+        });
+    }
+
+    out
 }
 
 #[cfg(test)]
@@ -258,6 +362,76 @@ mod tests {
         // A prefix hit with non-overlapping flags must not stop the scan.
         let i = ids(&["m:04fe:0021", "04fe:0021"]);
         assert_eq!(i.match_device("04fe:0021", kbd()), MatchKind::Explicit);
+    }
+
+    fn conflicts(sections: &[&[&str]]) -> Vec<IdConflict> {
+        let parsed: Vec<Ids> = sections.iter().map(|s| ids(s)).collect();
+        find_conflicts(&parsed)
+    }
+
+    #[test]
+    fn same_explicit_id_in_two_files_conflicts() {
+        let c = conflicts(&[&["04fe:0021"], &["04fe:0021"]]);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].id, "04fe:0021");
+        assert_eq!(c[0].kind, MatchKind::Explicit);
+        assert_eq!(c[0].configs, vec![0, 1]);
+    }
+
+    #[test]
+    fn distinct_ids_do_not_conflict() {
+        assert!(conflicts(&[&["04fe:0021"], &["1234:5678"]]).is_empty());
+    }
+
+    #[test]
+    fn explicit_beats_wildcard_is_not_a_conflict() {
+        // The normal, intended layering: a specific config + a catch-all wildcard.
+        assert!(conflicts(&[&["04fe:0021"], &["*"]]).is_empty());
+    }
+
+    #[test]
+    fn two_wildcards_conflict() {
+        let c = conflicts(&[&["*"], &["04fe:0021"], &["*"]]);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].id, "*");
+        assert_eq!(c[0].kind, MatchKind::Wildcard);
+        assert_eq!(c[0].configs, vec![0, 2]);
+    }
+
+    #[test]
+    fn exclude_neutralizes_a_duplicate_id() {
+        // File 1 excludes the very id it also lists, so it never claims it → no tie.
+        assert!(conflicts(&[&["04fe:0021"], &["-04fe:0021", "04fe:0021"]]).is_empty());
+    }
+
+    #[test]
+    fn k_prefix_and_plain_same_id_conflict_on_a_keyboard() {
+        let c = conflicts(&[&["k:04fe:0021"], &["04fe:0021"]]);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].id, "04fe:0021");
+        assert_eq!(c[0].configs, vec![0, 1]);
+    }
+
+    #[test]
+    fn mouse_only_entry_is_not_probed() {
+        // We probe keyboards only: a `k:` keyboard entry and an `m:` mouse entry for
+        // the same id don't clash on a keyboard, and we don't synthesize a mouse to
+        // chase the hypothetical (precision over recall).
+        assert!(conflicts(&[&["k:04fe:0021"], &["m:04fe:0021"]]).is_empty());
+    }
+
+    #[test]
+    fn three_files_same_id_all_named() {
+        let c = conflicts(&[&["aaaa:bbbb"], &["aaaa:bbbb"], &["aaaa:bbbb"]]);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].configs, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn single_file_never_conflicts_with_itself() {
+        // Even a file that lists the same id twice is just keyd's last-wins, not a
+        // cross-file clash.
+        assert!(conflicts(&[&["04fe:0021", "04fe:0021"]]).is_empty());
     }
 
     #[test]
