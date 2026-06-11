@@ -254,6 +254,33 @@ fn device_label(devices: &[InputDevice], idxs: &[usize]) -> String {
     }
 }
 
+/// The board-header label for a config: the real keyboard(s) it *explicitly* governs,
+/// or the static "all keyboards" when it only matched via the `*` wildcard. A wildcard
+/// config's matched devices are arbitrary leftovers — every real keyboard is claimed by
+/// its specific config, so only pseudo-devices fall through to the catch-all (Video Bus,
+/// the ydotoold virtual device, WMI hotkeys, power/lid switches) — and naming the board
+/// after whichever one the rescan happened to pick is misleading. So a wildcard config
+/// gets a stable name, not a device of the day.
+fn config_label(ids: &Ids, devices: &[InputDevice], idxs: &[usize]) -> String {
+    let explicit: Vec<usize> = idxs
+        .iter()
+        .copied()
+        .filter(|&i| {
+            ids.match_device(&devices[i].devid(), devices[i].flags) == MatchKind::Explicit
+        })
+        .collect();
+    if !explicit.is_empty() {
+        device_label(devices, &explicit)
+    } else if ids.has_wildcard() {
+        WILDCARD_LABEL.to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Stable board-header label for a wildcard (`[ids] *`) config.
+const WILDCARD_LABEL: &str = "all keyboards";
+
 /// The result of deciding what to show: the sheet sources (rebuildable so the picker
 /// can change geometry), a `vendor:product → sheet-index` map for following the
 /// last-pressed keyboard, and a subtitle.
@@ -477,7 +504,7 @@ fn gather_sheets() -> Detection {
             continue;
         }
         let idx = srcs.len() as i32;
-        let label = device_label(&devices, &per_config[ci]);
+        let label = config_label(&matchers[ci], &devices, &per_config[ci]);
         // Concrete ids of the keyboards that matched this config (deduped) — drives both
         // the device→sheet map and the "which [ids] entry is plugged in" highlight.
         let mut matched_ids: Vec<String> = Vec::new();
@@ -533,7 +560,7 @@ fn rescan(srcs: &[SheetSrc]) -> DeviceMatching {
     let mut out = Vec::with_capacity(srcs.len());
     let mut device_map: Vec<(String, i32)> = Vec::new();
     for (ci, idxs) in per_src.iter().enumerate() {
-        let label = device_label(&devices, idxs);
+        let label = config_label(&matchers[ci], &devices, idxs);
         let mut ids: Vec<String> = Vec::new();
         for &di in idxs {
             let devid = devices[di].devid();
@@ -1079,7 +1106,8 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             let matched_ids =
                 if id == "*" { vec!["*".to_string()] } else { vec![id.clone()] };
-            let device_label = device.unwrap_or_default();
+            let device_label =
+                if id == "*" { WILDCARD_LABEL.to_string() } else { device.unwrap_or_default() };
             // Add the new config as a board and select it.
             let new_idx = {
                 let mut srcs = srcs.borrow_mut();
