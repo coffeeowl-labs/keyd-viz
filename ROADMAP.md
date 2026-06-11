@@ -1194,5 +1194,21 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   `⌨ chords` → chord manager; picking any one exits the others (and a board click returns to keys).
   No core/session logic changed beyond `chords()`; pure UI/state reorganization. Tests green, clippy
   `-D warnings` clean; GUI click-through manual.
+- *(Phase 6 E2 — chord/global re-grouping, 2026-06-10)* Follow-up to the restructure: the chooser
+  row conflated two different axes — real file *sections* (layers, `[global]`) and a *binding-type
+  view* (chords, which actually live inside `[main]`). User flagged that `⚙ global`, `⌨ chords`, and
+  the layer chips don't belong in one row, and that **chords are built from keys**, so a flat chord
+  chip that hides the board is backwards. Re-grouped along the right axes: (1) **`⚙ global` moved to
+  its own row above the layers** (daemon options belong to no key — selecting it now also *hides the
+  board*). (2) **Chords became a mode of the main board**, not a sibling panel: a `mode: single key |
+  chord` segmented toggle (new `board_mode` prop replacing `editing_chords`) shown only when `main`
+  is selected (chords are `[main]`-only). In `chord` mode a board click fills the two chord-member
+  slots (first-empty-wins; re-click once full restarts) and lights those caps — the old pick-key-1/2
+  picker *dialogs* are gone; you click the keys you're already looking at. The per-key behavior
+  toggle (`simple | tap/hold`) now lives *inside* single-key mode, so the two levels (board-mode →
+  per-key behavior) make every state mutually exclusive — tap/hold and chord-building can never
+  overlap. `BoardView` gained `chord_mode`/`chord_k1`/`chord_k2` for the dual highlight. No
+  core/session logic changed (chord set/remove/list in `EditSession` untouched); pure UI/state
+  rewiring. Build + tests green, clippy `-D warnings` clean; GUI click-through manual.
   **Remaining for E2**: the duplicate-id load-time warning, one-level include closure scan
   (deferred, §5.3); composite-`[a+b]`-overlay *rendering* (§12) is a separate viewer item.

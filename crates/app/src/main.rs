@@ -1023,6 +1023,23 @@ fn main() -> Result<(), slint::PlatformError> {
         let session = session.clone();
         win.on_select_key(move |phys| {
             let Some(win) = weak.upgrade() else { return };
+            // In chord mode a board click fills the chord builder's two key slots
+            // instead of selecting a key to edit. First empty slot wins; a click once
+            // both are full (or a re-click of key 1) starts a fresh chord from that key.
+            if win.get_board_mode().as_str() == "chord" {
+                let phys = phys.to_string();
+                let k1 = win.get_chord_key1().to_string();
+                let k2 = win.get_chord_key2().to_string();
+                if k1.is_empty() {
+                    win.set_chord_key1(phys.into());
+                } else if k2.is_empty() && phys != k1 {
+                    win.set_chord_key2(phys.into());
+                } else {
+                    win.set_chord_key1(phys.into());
+                    win.set_chord_key2("".into());
+                }
+                return;
+            }
             let sb = session.borrow();
             let Some(s) = sb.as_ref() else { return };
             let layer = win.get_edit_layer().to_string();
@@ -1032,9 +1049,8 @@ fn main() -> Result<(), slint::PlatformError> {
             // tap/hold opens in tap/hold mode, anything else in simple mode.
             let mode = if win.get_selected_is_tap_hold() { "taphold" } else { "simple" };
             win.set_key_mode(mode.into());
-            // Clicking a key returns from the global / chords panels.
+            // Clicking a key returns from the global options form.
             win.set_editing_global(false);
-            win.set_editing_chords(false);
             win.set_selected_phys(phys);
             win.set_edit_current(cur.clone().into());
             win.set_edit_value(cur.into());
@@ -1055,8 +1071,15 @@ fn main() -> Result<(), slint::PlatformError> {
             win.set_delete_detail("".into());
             win.set_rename_target("".into());
             win.set_rename_name("".into());
-            win.set_editing_global(false); // picking a layer leaves the global / chords panels
-            win.set_editing_chords(false);
+            win.set_editing_global(false); // picking a layer leaves the global options form
+            // Chords are [main]-only, so leaving main forces single-key mode and clears any
+            // half-built chord (the mode toggle is hidden off-main).
+            if name.as_str() != "main" {
+                win.set_board_mode("single".into());
+                win.set_chord_key1("".into());
+                win.set_chord_key2("".into());
+                win.set_chord_action("".into());
+            }
             win.set_can_rename(renameable(&name));
             win.set_edit_layer(name.clone());
             let phys = win.get_selected_phys().to_string();
@@ -1417,8 +1440,6 @@ fn main() -> Result<(), slint::PlatformError> {
             // Route to the field the picker was opened for; never auto-apply.
             match win.get_picker_target().as_str() {
                 "tap" => win.set_th_tap(name),
-                "chord_key1" => win.set_chord_key1(name),
-                "chord_key2" => win.set_chord_key2(name),
                 "chord_action" => win.set_chord_action(name),
                 _ => win.set_edit_value(name),
             }
@@ -1437,21 +1458,25 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // ---- chords (E2): the ⌨ chords manager — a panel listing every [main] chord ----
-    // Enter the manager: deselect any key (hides the per-key editors), clear the builder.
+    // ---- chords (E2): chord-building is a mode of the main board ----
+    // Switch the board between "single" (edit one key) and "chord" (click two keys → one
+    // action). Either switch clears the other mode's transient selection so the highlights
+    // never overlap; entering chord mode refreshes the [main] chord list.
     {
         let weak = win.as_weak();
         let session = session.clone();
-        win.on_edit_chords(move || {
+        win.on_set_board_mode(move |mode| {
             let Some(win) = weak.upgrade() else { return };
-            let Some(rows) = session.borrow().as_ref().map(chord_rows_all) else { return };
             win.set_selected_phys("".into());
-            win.set_editing_global(false);
-            win.set_chord_rows(model(rows));
             win.set_chord_key1("".into());
             win.set_chord_key2("".into());
             win.set_chord_action("".into());
-            win.set_editing_chords(true);
+            if mode.as_str() == "chord" {
+                if let Some(rows) = session.borrow().as_ref().map(chord_rows_all) {
+                    win.set_chord_rows(model(rows));
+                }
+            }
+            win.set_board_mode(mode);
         });
     }
 
@@ -1555,7 +1580,6 @@ fn main() -> Result<(), slint::PlatformError> {
             let Some(win) = weak.upgrade() else { return };
             let Some(s) = session.borrow().as_ref().map(global_rows_for) else { return };
             win.set_selected_phys("".into());
-            win.set_editing_chords(false);
             win.set_global_rows(model(s));
             win.set_editing_global(true);
         });
@@ -2079,7 +2103,7 @@ fn enter_edit_session(
     win.set_can_rename(renameable(&default_layer));
     win.set_edit_layer(default_layer);
     win.set_key_mode("simple".into());
-    win.set_editing_chords(false);
+    win.set_board_mode("single".into());
     win.set_chord_rows(model(chord_rows_all(&s)));
     win.set_chord_key1("".into());
     win.set_chord_key2("".into());
@@ -2134,7 +2158,7 @@ fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &Shar
     win.set_rename_name("".into());
     win.set_can_rename(false);
     win.set_key_mode("simple".into());
-    win.set_editing_chords(false);
+    win.set_board_mode("single".into());
     win.set_chord_rows(model(Vec::<ChordRow>::new()));
     win.set_chord_key1("".into());
     win.set_chord_key2("".into());

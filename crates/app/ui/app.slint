@@ -191,6 +191,11 @@ component BoardView inherits VerticalLayout {
     // click callback back up to the window.
     in property <bool> editing: false;
     in property <string> selected_phys;
+    // chord-building mode: instead of one selected key, up to two keys (the chord's
+    // members) are highlighted as they're clicked.
+    in property <bool> chord_mode: false;
+    in property <string> chord_k1;
+    in property <string> chord_k2;
     callback key_clicked(string);
     // zoom multiplier for the whole board (1.0 = native size). Scroll over the panel
     // adjusts it; the window auto-fits to the scaled extent.
@@ -237,7 +242,10 @@ component BoardView inherits VerticalLayout {
                     data: key;
                     scale: root.zoom;
                     editing: root.editing;
-                    selected: root.editing && key.phys != "" && key.phys == root.selected_phys;
+                    selected: root.editing && key.phys != ""
+                        && (root.chord_mode
+                            ? (key.phys == root.chord_k1 || key.phys == root.chord_k2)
+                            : key.phys == root.selected_phys);
                     clicked => {
                         root.key_clicked(key.phys);
                     }
@@ -597,7 +605,7 @@ export component MainWindow inherits Window {
     callback arm_capture();
     // A selected key's binding is remap XOR tap/hold — one binding line, never both.
     // `key_mode` ("simple" | "taphold") picks which editor shows; Rust seeds it from
-    // the current binding on select. (Chords are a SEPARATE construct — see editing_chords.)
+    // the current binding on select. (Chords are a SEPARATE construct — see board_mode.)
     in-out property <string> key_mode: "simple";
     callback set_key_mode(string);
     // ---- tap/hold (dual-function) editor: VIA's Mod-Tap / Layer-Tap ----
@@ -614,24 +622,29 @@ export component MainWindow inherits Window {
     // A shared overlay; `picker_target` routes the pick to the binding or the tap field.
     // Fill-only: picking sets the field, it does not apply — the user still hits "set".
     in-out property <bool> picker_open: false;
-    in-out property <string> picker_target: "";   // "binding" | "tap" | "chord_key1" | "chord_key2" | "chord_action"
+    in-out property <string> picker_target: "";   // "binding" | "tap" | "chord_action"
     in-out property <string> picker_query: "";
     in property <[string]> picker_results;         // ranked slice (Rust holds the full list)
     in property <int> picker_truncated: 0;         // matches dropped past the cap (0 = all shown)
     in property <string> picker_source;            // "keyd list-keys (N)" | "built-in list"
     callback filter_keys(string);
-    callback open_picker(string);   // arg = target ("binding" | "tap" | "chord_key1" | "chord_key2" | "chord_action")
+    callback open_picker(string);   // arg = target ("binding" | "tap" | "chord_action")
     callback pick_key(string);
     // ---- chords (E2): two keys pressed together → one action. A SEPARATE construct
-    // from a key's own binding (keyd disambiguates by timing), so it lives in its own
-    // `⌨ chords` panel (editing_chords), not under a selected key. `chord_rows` lists
-    // every chord in [main]; the builder picks two keys + an action.
-    in property <bool> editing_chords: false;
+    // from a key's own binding (keyd disambiguates by timing). Chord-building is a
+    // *mode of the main board* (`board_mode == "chord"`): the two keys are picked by
+    // clicking them on the board, not from a dialog. `board_mode` ("single" | "chord")
+    // is the board's interaction mode — "single" edits one key's binding, "chord"
+    // turns the board into a two-key picker. The two are mutually exclusive, so a key's
+    // tap/hold editor and chord-building never overlap. Chords are [main]-only, so the
+    // mode toggle is offered only when the main layer is selected. `chord_rows` lists
+    // every chord in [main]; `chord_key1`/`chord_key2` are the two clicked keys.
+    in-out property <string> board_mode: "single";
+    callback set_board_mode(string);  // switch the board between "single" and "chord"
     in property <[ChordRow]> chord_rows;
-    in-out property <string> chord_key1: "";    // first key of the builder ("" = none picked)
+    in-out property <string> chord_key1: "";    // first key of the builder ("" = none clicked)
     in-out property <string> chord_key2: "";    // second key of the builder
     in-out property <string> chord_action: "";  // action for the builder
-    callback edit_chords();           // enter the chord manager panel
     callback add_chord();             // commit chord_key1 + chord_key2 → chord_action
     callback edit_chord(string);      // arg = chord LHS → seed the builder from it
     callback remove_chord(string);    // arg = chord LHS → delete it
@@ -1186,43 +1199,12 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // section chooser: which file section the edit lands in. Picking one
-                    // also shows that layer's board (live morphing is frozen while editing).
-                    // The "+ layer" / "delete" chips create and remove layer sections.
+                    // ⚙ global lives on its own row above the layers: it edits keyd's
+                    // daemon-wide options, which belong to no layer (and no key). Selecting
+                    // it swaps in the options form and hides the board.
                     HorizontalLayout {
                         spacing: 6px;
                         alignment: start;
-                        Text {
-                            text: "section";
-                            color: #7d8694;
-                            font-size: 12px;
-                            vertical-alignment: center;
-                        }
-                        for lay in root.edit_layers: Rectangle {
-                            property <bool> sel: lay.name == root.edit_layer && !root.editing_global && !root.editing_chords;
-                            width: elt.preferred-width + 16px;
-                            height: elt.preferred-height + 8px;
-                            border-radius: 7px;
-                            background: sel ? #f0b429 : (elta.has-hover ? #1b2129 : #161b22);
-                            border-width: 1px;
-                            border-color: sel ? #f0b429 : #2a3340;
-                            elta := TouchArea {
-                                clicked => {
-                                    root.pick_edit_layer(lay.name);
-                                }
-                            }
-                            elt := Text {
-                                x: 8px;
-                                y: 4px;
-                                text: lay.display;
-                                color: sel ? #11151c : #cfd6df;
-                                font-size: 12px;
-                                font-weight: sel ? 700 : 400;
-                                font-family: "JetBrains Mono";
-                            }
-                        }
-                        // ⚙ global: edit keyd's daemon-wide options (not a layer). Always
-                        // available; selecting it swaps in the options form.
                         Rectangle {
                             property <bool> sel: root.editing_global;
                             width: gbl.preferred-width + 16px;
@@ -1246,25 +1228,38 @@ export component MainWindow inherits Window {
                                 font-family: "JetBrains Mono";
                             }
                         }
-                        // ⌨ chords: manage two-key chords (a separate construct, not a
-                        // per-key binding). Selecting it swaps in the chord manager.
-                        Rectangle {
-                            property <bool> sel: root.editing_chords;
-                            width: chd.preferred-width + 16px;
-                            height: chd.preferred-height + 8px;
+                    }
+
+                    // layer chooser: which layer section the key edits land in, plus the
+                    // create / rename / delete layer ops. (Global is its own row above;
+                    // chords are a mode of the main board — see the mode toggle below — not
+                    // a section.) Picking a layer freezes the board to it.
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Text {
+                            text: "layer";
+                            color: #7d8694;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                        for lay in root.edit_layers: Rectangle {
+                            property <bool> sel: lay.name == root.edit_layer && !root.editing_global;
+                            width: elt.preferred-width + 16px;
+                            height: elt.preferred-height + 8px;
                             border-radius: 7px;
-                            background: sel ? #f0b429 : (chdta.has-hover ? #1b2129 : #161b22);
+                            background: sel ? #f0b429 : (elta.has-hover ? #1b2129 : #161b22);
                             border-width: 1px;
                             border-color: sel ? #f0b429 : #2a3340;
-                            chdta := TouchArea {
+                            elta := TouchArea {
                                 clicked => {
-                                    root.edit_chords();
+                                    root.pick_edit_layer(lay.name);
                                 }
                             }
-                            chd := Text {
+                            elt := Text {
                                 x: 8px;
                                 y: 4px;
-                                text: "\u{2328} chords";
+                                text: lay.display;
                                 color: sel ? #11151c : #cfd6df;
                                 font-size: 12px;
                                 font-weight: sel ? 700 : 400;
@@ -1274,7 +1269,7 @@ export component MainWindow inherits Window {
                         // + layer: open the inline name field below the chooser. Hidden
                         // while a delete confirm or rename field is pending (resolve first),
                         // or while editing globals (no layer context then).
-                        if !root.editing_global && !root.editing_chords && !root.new_layer_open && root.delete_prompt == "" && root.rename_target == "": Rectangle {
+                        if !root.editing_global && !root.new_layer_open && root.delete_prompt == "" && root.rename_target == "": Rectangle {
                             width: addl.preferred-width + 16px;
                             height: addl.preferred-height + 8px;
                             border-radius: 7px;
@@ -1301,7 +1296,7 @@ export component MainWindow inherits Window {
                         // every reference on commit). Offered only for a real named layer —
                         // `can_rename` excludes the `main` base and composites. Hidden while
                         // another layer dialog is up.
-                        if root.can_rename && !root.editing_global && !root.editing_chords && !root.new_layer_open && root.delete_prompt == "" && root.rename_target == "": Rectangle {
+                        if root.can_rename && !root.editing_global && !root.new_layer_open && root.delete_prompt == "" && root.rename_target == "": Rectangle {
                             width: renl.preferred-width + 16px;
                             height: renl.preferred-height + 8px;
                             border-radius: 7px;
@@ -1327,7 +1322,7 @@ export component MainWindow inherits Window {
                         }
                         // delete the selected layer (confirm-gated). Hidden once the
                         // confirm bar (or rename field) is up, so it can't re-target.
-                        if root.edit_layer != "" && !root.editing_global && !root.editing_chords && !root.new_layer_open && root.delete_prompt == "" && root.rename_target == "": Rectangle {
+                        if root.edit_layer != "" && !root.editing_global && !root.new_layer_open && root.delete_prompt == "" && root.rename_target == "": Rectangle {
                             width: dell.preferred-width + 16px;
                             height: dell.preferred-height + 8px;
                             border-radius: 7px;
@@ -1437,6 +1432,47 @@ export component MainWindow inherits Window {
                         }
                     }
 
+                    // board interaction mode (main layer only — chords are a [main]
+                    // construct). "single key" edits one key's binding (click a key →
+                    // remap or tap/hold below); "chord" turns the board into a two-key
+                    // picker (click two keys → one action). Exactly one is active, so a
+                    // key's tap/hold and chord-building can never overlap. Hidden while
+                    // editing globals (no board then) or on any non-main layer.
+                    if !root.editing_global && root.edit_layer == "main": HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Text {
+                            text: "mode:";
+                            color: #7d8694;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                        IconButton {
+                            wide: true;
+                            text: "single key";
+                            active: root.board_mode != "chord";
+                            clicked => {
+                                root.set_board_mode("single");
+                            }
+                        }
+                        IconButton {
+                            wide: true;
+                            text: "\u{2328} chord";
+                            active: root.board_mode == "chord";
+                            clicked => {
+                                root.set_board_mode("chord");
+                            }
+                        }
+                        Text {
+                            text: root.board_mode == "chord"
+                                ? "click two keys on the board"
+                                : "click a key on the board";
+                            color: #5a6673;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                    }
+
                     // [global] daemon options form: a typed editor for keyd's documented
                     // globals (timeouts, layer_indicator, default_layout, …). Shown when the
                     // ⚙ global chip is selected; the per-key editors below are hidden then.
@@ -1497,13 +1533,13 @@ export component MainWindow inherits Window {
                     // selection: the picked key, its current binding, and a behavior
                     // toggle (remap XOR tap/hold — one binding line, never both). Chords
                     // are a separate construct (the ⌨ chords panel), so nothing stacks here.
-                    if !root.editing_global && !root.editing_chords && root.selected_phys == "": Text {
+                    if !root.editing_global && root.board_mode != "chord" && root.selected_phys == "": Text {
                         text: "click a key on the board to edit its binding";
                         color: #7d8694;
                         font-size: 12px;
                     }
                     // header row: key chip + current binding + simple/tap-hold toggle
-                    if !root.editing_global && !root.editing_chords && root.selected_phys != "": HorizontalLayout {
+                    if !root.editing_global && root.board_mode != "chord" && root.selected_phys != "": HorizontalLayout {
                         spacing: 8px;
                         alignment: start;
                         Rectangle {
@@ -1563,7 +1599,7 @@ export component MainWindow inherits Window {
                     }
                     // simple remap editor — shown in "simple" mode (a plain key→key,
                     // disable, or unbind). Tap/hold lives in its own panel below.
-                    if !root.editing_global && !root.editing_chords && root.selected_phys != "" && root.key_mode == "simple": HorizontalLayout {
+                    if !root.editing_global && root.board_mode != "chord" && root.selected_phys != "" && root.key_mode == "simple": HorizontalLayout {
                         spacing: 8px;
                         alignment: start;
                         Text {
@@ -1646,13 +1682,13 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // chord manager (⌨ chords) — two keys struck together emit one action;
-                    // a separate construct from a key's own binding (keyd splits by timing),
-                    // so it gets its own panel rather than stacking under a selected key.
-                    if root.editing_chords: VerticalLayout {
+                    // chord editor (board "chord" mode) — two keys struck together emit one
+                    // action. The two keys are picked by clicking them on the main board
+                    // above; this panel shows the running build + every existing [main] chord.
+                    if !root.editing_global && root.board_mode == "chord": VerticalLayout {
                         spacing: 6px;
                         Text {
-                            text: "chords (main) \u{2014} two keys pressed together \u{2192} one action";
+                            text: "chords (main) \u{2014} click two keys on the board, then set an action";
                             color: #7d8694;
                             font-size: 11px;
                         }
@@ -1690,7 +1726,8 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
-                        // + add: pick two keys → an action
+                        // build row: the two keys are filled by clicking the board above
+                        // (the picked keys also light up there); set an action and add.
                         HorizontalLayout {
                             spacing: 8px;
                             alignment: start;
@@ -1704,18 +1741,11 @@ export component MainWindow inherits Window {
                                 ck1 := Text {
                                     x: 7px;
                                     y: (parent.height - self.height) / 2;
-                                    text: root.chord_key1 != "" ? root.chord_key1 : "pick key 1";
+                                    text: root.chord_key1 != "" ? root.chord_key1 : "click key 1\u{2026}";
                                     color: root.chord_key1 != "" ? #f0b429 : #7d8694;
                                     font-size: 13px;
                                     font-weight: root.chord_key1 != "" ? 700 : 400;
                                     font-family: "JetBrains Mono";
-                                }
-                            }
-                            IconButton {
-                                wide: true;
-                                text: "pick\u{2026}";
-                                clicked => {
-                                    root.open_picker("chord_key1");
                                 }
                             }
                             Text {
@@ -1734,18 +1764,20 @@ export component MainWindow inherits Window {
                                 ck2 := Text {
                                     x: 7px;
                                     y: (parent.height - self.height) / 2;
-                                    text: root.chord_key2 != "" ? root.chord_key2 : "pick key 2";
+                                    text: root.chord_key2 != "" ? root.chord_key2 : "click key 2\u{2026}";
                                     color: root.chord_key2 != "" ? #f0b429 : #7d8694;
                                     font-size: 13px;
                                     font-weight: root.chord_key2 != "" ? 700 : 400;
                                     font-family: "JetBrains Mono";
                                 }
                             }
-                            IconButton {
+                            // clear the two picked keys to start the chord over.
+                            if root.chord_key1 != "" || root.chord_key2 != "": IconButton {
                                 wide: true;
-                                text: "pick\u{2026}";
+                                text: "\u{2715} clear";
                                 clicked => {
-                                    root.open_picker("chord_key2");
+                                    root.chord_key1 = "";
+                                    root.chord_key2 = "";
                                 }
                             }
                             Text {
@@ -1785,7 +1817,7 @@ export component MainWindow inherits Window {
                     // "When held" picks a layer or modifier; "when tapped" is a key
                     // (or none, for a momentary hold). keyd's per-key timeouts aren't
                     // exposed; an existing key's timings are preserved on the Rust side.
-                    if !root.editing_global && !root.editing_chords && root.selected_phys != "" && root.key_mode == "taphold": Rectangle {
+                    if !root.editing_global && root.board_mode != "chord" && root.selected_phys != "" && root.key_mode == "taphold": Rectangle {
                         background: #11151c;
                         border-radius: 8px;
                         border-width: 1px;
@@ -2295,13 +2327,19 @@ export component MainWindow inherits Window {
             }
 
             // The active keyboard's one morphing board (swapped by the keyd listen stream
-            // as layers change; frozen to the chosen section while editing).
-            BoardView {
+            // as layers change; frozen to the chosen section while editing). Hidden while
+            // editing [global] — those daemon options belong to no key, so the board has
+            // nothing to show or pick.
+            if !(root.edit_mode && root.editing_global): BoardView {
                 data: root.active_board;
                 active_layer: root.active_layer;
                 live: root.live_connected && !root.edit_mode;
                 editing: root.edit_mode;
                 selected_phys: root.selected_phys;
+                // in chord mode a board click picks a chord member, not a binding target.
+                chord_mode: root.edit_mode && root.board_mode == "chord";
+                chord_k1: root.chord_key1;
+                chord_k2: root.chord_key2;
                 key_clicked(phys) => {
                     root.select_key(phys);
                 }
