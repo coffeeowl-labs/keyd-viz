@@ -243,22 +243,37 @@ fn map_exit(code: Option<i32>) -> ApplyEvent {
     }
 }
 
+/// Which privileged operation a run performs. Both share the tool's reload +
+/// dead-man's-switch tail and the same verdict events — they differ only in the
+/// request line (and whether a payload follows).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ApplyOp {
+    /// Write `<dir>/<name>.conf` with `bytes`.
+    Apply,
+    /// Remove `<dir>/<name>.conf` (no payload, no scan).
+    Delete,
+}
+
 /// The request line, exactly as the tool's `read_line` expects it.
-fn request_header(name: &str, len: usize, sensitive_ok: bool) -> String {
-    if sensitive_ok {
-        format!("apply {name} {len} sensitive-ok\n")
-    } else {
-        format!("apply {name} {len}\n")
+fn request_header(req: &ApplyRequest) -> String {
+    match req.op {
+        ApplyOp::Delete => format!("delete {}\n", req.name),
+        ApplyOp::Apply if req.sensitive_ok => {
+            format!("apply {} {} sensitive-ok\n", req.name, req.bytes.len())
+        }
+        ApplyOp::Apply => format!("apply {} {}\n", req.name, req.bytes.len()),
     }
 }
 
 /// Everything `start` needs. The caller has already gated (`apply_target`),
 /// scanned (`keydviz_apply::scan`, `sensitive_ok` only after an explicit click),
-/// size-checked, and `keyd check`ed the bytes.
+/// size-checked, and `keyd check`ed the bytes. For [`ApplyOp::Delete`], `bytes` is
+/// empty and `sensitive_ok` is ignored.
 pub struct ApplyRequest {
     pub name: String,
     pub bytes: Vec<u8>,
     pub sensitive_ok: bool,
+    pub op: ApplyOp,
     pub how: Invocation,
 }
 
@@ -342,9 +357,11 @@ pub fn start(
         // EOF + wait()'s exit code classify the outcome.
         if let Ok(mut g) = stdin.lock() {
             if let Some(w) = g.as_mut() {
+                // Delete carries no payload; apply follows the header with its bytes.
+                let payload: &[u8] = if req.op == ApplyOp::Apply { &req.bytes } else { &[] };
                 let _ = w
-                    .write_all(request_header(&req.name, req.bytes.len(), req.sensitive_ok).as_bytes())
-                    .and_then(|()| w.write_all(&req.bytes))
+                    .write_all(request_header(&req).as_bytes())
+                    .and_then(|()| w.write_all(payload))
                     .and_then(|()| w.flush());
             }
         }
@@ -471,8 +488,20 @@ mod tests {
 
     #[test]
     fn request_header_matches_the_tool_grammar() {
-        assert_eq!(request_header("hhkb", 120, false), "apply hhkb 120\n");
-        assert_eq!(request_header("hhkb", 120, true), "apply hhkb 120 sensitive-ok\n");
+        let mk = |op, sensitive_ok, len: usize| ApplyRequest {
+            name: "hhkb".into(),
+            bytes: vec![0u8; len],
+            sensitive_ok,
+            op,
+            how: Invocation::Pkexec { tool: PathBuf::from("/x") },
+        };
+        assert_eq!(request_header(&mk(ApplyOp::Apply, false, 120)), "apply hhkb 120\n");
+        assert_eq!(
+            request_header(&mk(ApplyOp::Apply, true, 120)),
+            "apply hhkb 120 sensitive-ok\n"
+        );
+        // Delete: no length, no payload, sensitive-ok ignored.
+        assert_eq!(request_header(&mk(ApplyOp::Delete, true, 999)), "delete hhkb\n");
     }
 
     // ---- one-level include closure scan (§5.3) ----

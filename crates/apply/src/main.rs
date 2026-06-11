@@ -4,17 +4,22 @@
 //!
 //! ```text
 //! GUI → tool   "apply <name> <len>[ sensitive-ok]\n"  then exactly <len> raw bytes
-//! tool → GUI   "finding <desc>"        zero or more scan findings (advisory)
+//!              "delete <name>\n"       remove an existing config (no payload)
+//! tool → GUI   "finding <desc>"        zero or more scan findings (advisory; apply)
 //!              "error <reason>"        refused; exits 2, nothing written
-//!              "applied <secs>"        written + reloaded; dead-man window open
+//!              "applied <secs>"        written/removed + reloaded; dead-man window open
 //! GUI → tool   "keep\n"                within <secs>, after the user confirms
 //! tool → GUI   "kept"                  exit 0
 //!              "reverted <reason>"     exit 3 — prior state restored + reloaded
-//!              "revert-failed <why>"   exit 4 — LOUD: the new config is still
+//!              "revert-failed <why>"   exit 4 — LOUD: the new state is still
 //!                                      live and the prior could not be restored;
 //!                                      recover from the timestamped backup, or
 //!                                      Backspace+Escape+Enter to kill keyd
 //! ```
+//!
+//! `delete` shares the whole post-transaction path with `apply` — same backup,
+//! reload, dead-man's-switch revert, and `applied`/`kept`/`reverted` verdicts — so
+//! removing a config is as recoverable as writing one (§5.5).
 //!
 //! The destination is always `/etc/keyd/<name>.conf` — the caller supplies a *name*
 //! (strictly validated), never a path. `keyd` itself is invoked by **absolute path
@@ -107,57 +112,62 @@ fn run(opts: &Opts) -> io::Result<ExitCode> {
     let mut input =
         FdReader::new(libc::STDIN_FILENO, Duration::from_secs(REQUEST_TIMEOUT_SECS));
 
-    // ---- request line + payload ------------------------------------------------
+    // ---- request line ----------------------------------------------------------
     let req = read_line(&mut input)?;
     let mut parts = req.split_whitespace();
     let (cmd, name) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
-    let len: usize = parts.next().and_then(|s| s.parse().ok()).unwrap_or(usize::MAX);
-    let sensitive_ok = parts.next() == Some("sensitive-ok");
 
-    if cmd != "apply" {
-        return Ok(refuse("expected: apply <name> <len> [sensitive-ok]"));
-    }
     if !valid_name(name) {
         return Ok(refuse("invalid config name"));
     }
-    if len > MAX_CONFIG_BYTES {
-        return Ok(refuse("config too large"));
-    }
-    let mut content = vec![0u8; len];
-    input.read_exact(&mut content)?;
-
-    // ---- safety scan on the exact bytes (§5.3) ----------------------------------
-    let findings = scan(&content);
-    for f in &findings {
-        say(&format!("finding {}", f.describe()));
-    }
-    if findings.iter().any(|f| f.needs_ack()) && !sensitive_ok {
-        return Ok(refuse("sensitive constructs need explicit confirmation"));
-    }
-
-    // ---- validate environment (never fall open, §5.3) ----------------------------
+    // keyd is needed by both verbs (apply: check + reload; delete: reload).
     let Some(keyd) = keyd_bin() else {
         return Ok(refuse("keyd binary not found in any system location"));
     };
-    if !keyd_check_works(keyd) {
-        return Ok(refuse("keyd check unavailable; refusing to persist"));
-    }
-
-    // ---- transactional write + keyd check + reload -------------------------------
     let dir = Dir::open(&opts.dir)?;
     let stamp = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let ops = vec![WriteOp { name: format!("{name}.conf"), content }];
-    let txn = txn::apply(&dir, ops, stamp, |p| keyd_check(keyd, p))?;
 
+    // ---- build the transaction per verb ----------------------------------------
+    let txn = match cmd {
+        "apply" => {
+            let len: usize = parts.next().and_then(|s| s.parse().ok()).unwrap_or(usize::MAX);
+            let sensitive_ok = parts.next() == Some("sensitive-ok");
+            if len > MAX_CONFIG_BYTES {
+                return Ok(refuse("config too large"));
+            }
+            let mut content = vec![0u8; len];
+            input.read_exact(&mut content)?;
+
+            // Safety scan on the exact bytes (§5.3).
+            let findings = scan(&content);
+            for f in &findings {
+                say(&format!("finding {}", f.describe()));
+            }
+            if findings.iter().any(|f| f.needs_ack()) && !sensitive_ok {
+                return Ok(refuse("sensitive constructs need explicit confirmation"));
+            }
+            // keyd check must itself work before we trust it as the gate (§5.3).
+            if !keyd_check_works(keyd) {
+                return Ok(refuse("keyd check unavailable; refusing to persist"));
+            }
+            let ops = vec![WriteOp { name: format!("{name}.conf"), content }];
+            txn::apply(&dir, ops, stamp, |p| keyd_check(keyd, p))?
+        }
+        // Remove an existing config. No payload, no scan, no keyd check (nothing is
+        // being validated — a deletion cannot introduce a syntax error); the same
+        // backup + reload + dead-man's-switch protect it (§5.4, §5.5).
+        "delete" => txn::delete(&dir, &format!("{name}.conf"), stamp)?,
+        _ => return Ok(refuse("expected: apply <name> <len> [sensitive-ok] | delete <name>")),
+    };
+
+    // ---- reload + dead-man's switch (shared tail, §5.4) -------------------------
     if opts.reload {
         if let Err(e) = keyd_reload(keyd) {
             return Ok(revert_and_report(txn, opts, &format!("reload-failed: {e}")));
         }
     }
-
-    // ---- dead-man's switch (§5.4) -------------------------------------------------
     say(&format!("applied {}", opts.timeout.as_secs()));
     let verdict = deadman::await_keep(&input, opts.timeout);
     if verdict == deadman::Verdict::Keep {

@@ -1285,3 +1285,36 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   82 app unit tests + 124 integration green, clippy `-D warnings` clean; GUI confirm click-through
   left for manual verification. **E2 is now functionally complete.** The only open edit-mode item is
   composite-`[a+b]`-overlay *rendering* (§12) — a separate viewer concern, not E2.
+- *(Phase 6 E2 — delete-config + wildcard-label fix, 2026-06-11)* Found during the manual E2
+  click-through. **(1) delete-config** — the create/delete symmetry gap: you could create a config
+  from the GUI but not remove one. Built as a privileged, recoverable counterpart to create.
+  **Apply tool** (`keydviz-apply`): a new `delete <name>` verb (no payload, no scan) + `txn::delete`
+  — capture the prior bytes (timestamped backup), `unlinkat`, and a `Txn` that reverts by recreating
+  the file from the prior. So a deletion is just an `Existed → Absent` transition in the existing
+  write-set model: the drop backstop, dead-man's switch, and `applied`/`kept`/`reverted`/`revert-
+  failed` verdicts all protect it identically to a write. `run()` refactored to share the
+  reload + dead-man's tail between both verbs; `O_NOFOLLOW` read means a symlinked config aborts
+  rather than deleting through it; deleting an absent config errors cleanly with zero debris. 5 new
+  txn tests + E2E-verified unprivileged via `--dev-dir` (keep→removed, EOF→restored, missing→error).
+  **GUI engine** (`applying.rs`): `ApplyOp{Apply,Delete}` + `op` on `ApplyRequest`; the header/spawn
+  skip the payload for a delete. **GUI** (`main.rs`/`app.slint`): a confirm-gated "delete config…"
+  button in the edit action row (shown only when one-click apply can reach the file); `on_delete_config`
+  routes a never-saved phantom to `exit_edit` (just drop the board, no privilege) and a persisted
+  config through `launch_delete` (auth → countdown → KEEP/revert, same dialog as apply). `ApplyCtx`
+  gained a `deleting: Option<PathBuf>` marker so the shared `handle_apply_event` knows a `kept` means
+  *remove the board + leave edit mode* (`remove_config_after_delete`) rather than re-base the session;
+  cleared on every terminal event. Extracted `reset_edit_ui` (shared by `exit_edit` and the post-delete
+  cleanup so they can't drift) — and `remove_config_after_delete` deliberately skips `teardown_apply`
+  (it runs inside the `APPLY` thread-local borrow; the run has already ended on `kept` anyway). A kept
+  delete keeps the timestamped `.keydviz-bak` as a recovery artifact. The reload watcher needed no
+  change (it iterates the live `srcs`, skips missing files, and exempts the edited path).
+  **(2) wildcard-label fix** — a `[ids] *` config's board header showed "Video Bus (+3)": keyd's
+  wildcard matches everything keyboard-*capable*, and keyd counts media-key pseudo-devices (Video Bus,
+  WMI hotkeys, lid/power) as keyboard-ish, so with all real keyboards claimed by specific configs the
+  wildcard's only leftovers are that junk, and the hotplug rescan headlined the first one. `device_label`
+  now filters to real keyboards (`full_keyboard && !keyd-virtual`) — a combo keyboard+touchpad node still
+  passes, but media-only pseudo-devices and keyd's own virtual board never headline a board; the wildcard
+  then gets an empty label and the header falls back to the config name (the banner already says "applies
+  to all keyboards not claimed by another config"). Workspace green, clippy `-D warnings` clean; both
+  changes' GUI click-through left for manual verification. **E2 functional surface unchanged (still
+  complete); this is symmetry + polish from real-use testing.**

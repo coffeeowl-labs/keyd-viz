@@ -207,6 +207,31 @@ fn apply_one(
     Ok(())
 }
 
+/// Transactionally delete `name`: capture its prior bytes (backed up to a
+/// timestamped sibling, same scheme as [`apply`]), then unlink it. The returned
+/// [`Txn`] reverts by recreating the file from the captured prior — so a delete is
+/// just an `Existed → Absent` transition in the same write-set model, and the drop
+/// backstop / dead-man's switch protect it identically. Errors (touching nothing
+/// persisted) if the config is absent — there is nothing to delete — or if `name`
+/// is a symlink (`O_NOFOLLOW` read aborts rather than deleting through it).
+pub fn delete<'d>(dir: &'d Dir, name: &str, stamp: u64) -> io::Result<Txn<'d>> {
+    let Some(bytes) = dir.read(name)? else {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "config does not exist"));
+    };
+    // Back up before unlinking; if the unlink fails, drop the backup so a failed
+    // delete leaves zero debris (mirrors apply's temp-then-backup discipline).
+    let bak = format!(".{name}.keydviz-bak.{stamp}.{}", std::process::id());
+    dir.write_new(&bak, &bytes)?;
+    if let Err(e) = dir.unlink(name) {
+        let _ = dir.unlink(&bak);
+        return Err(e);
+    }
+    Ok(Txn {
+        dir,
+        applied: vec![Applied { name: name.to_string(), prior: Prior::Existed(bytes), backup: Some(bak) }],
+    })
+}
+
 impl Txn<'_> {
     /// Restore every prior, most recent first: rewrite the saved bytes over the
     /// target (via temp + rename, same discipline), or delete a file that did not
@@ -408,6 +433,74 @@ mod tests {
         // some kernels) — either way, the open must refuse.
         let errno = Dir::open(&link).unwrap_err().raw_os_error();
         assert!(matches!(errno, Some(libc::ENOTDIR) | Some(libc::ELOOP)), "got {errno:?}");
+    }
+
+    #[test]
+    fn delete_then_keep_removes_file_and_keeps_backup() {
+        let td = TempDir::new("del-keep");
+        std::fs::write(td.0.join("a.conf"), "live").unwrap();
+        let dir = Dir::open(&td.0).unwrap();
+
+        let txn = delete(&dir, "a.conf", 7).unwrap();
+        assert!(!td.0.join("a.conf").exists(), "file should be gone");
+        let bak = format!(".a.conf.keydviz-bak.7.{}", std::process::id());
+        assert_eq!(std::fs::read(td.0.join(&bak)).unwrap(), b"live");
+        txn.keep();
+        // keep() defuses the drop backstop: the deletion survives.
+        assert!(!td.0.join("a.conf").exists());
+    }
+
+    #[test]
+    fn delete_then_revert_restores_the_file() {
+        let td = TempDir::new("del-revert");
+        std::fs::write(td.0.join("a.conf"), "live").unwrap();
+        let dir = Dir::open(&td.0).unwrap();
+
+        let mut txn = delete(&dir, "a.conf", 1).unwrap();
+        assert!(!td.0.join("a.conf").exists());
+        txn.revert().unwrap();
+        assert_eq!(std::fs::read(td.0.join("a.conf")).unwrap(), b"live");
+    }
+
+    #[test]
+    fn dropping_an_unkept_delete_restores_the_file() {
+        let td = TempDir::new("del-drop");
+        std::fs::write(td.0.join("a.conf"), "live").unwrap();
+        let dir = Dir::open(&td.0).unwrap();
+
+        let txn = delete(&dir, "a.conf", 1).unwrap();
+        assert!(!td.0.join("a.conf").exists());
+        drop(txn);
+        assert_eq!(std::fs::read(td.0.join("a.conf")).unwrap(), b"live");
+    }
+
+    #[test]
+    fn deleting_an_absent_config_errors_cleanly() {
+        let td = TempDir::new("del-absent");
+        let dir = Dir::open(&td.0).unwrap();
+        let err = delete(&dir, "ghost.conf", 1).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        // No backup debris from a no-op delete.
+        let leftovers: Vec<_> = std::fs::read_dir(&td.0)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("keydviz"))
+            .collect();
+        assert!(leftovers.is_empty(), "debris: {leftovers:?}");
+    }
+
+    #[test]
+    fn delete_does_not_follow_a_symlink() {
+        let td = TempDir::new("del-symlink");
+        let outside = td.0.join("outside.txt");
+        std::fs::write(&outside, "precious").unwrap();
+        std::os::unix::fs::symlink(&outside, td.0.join("a.conf")).unwrap();
+        let dir = Dir::open(&td.0).unwrap();
+
+        let err = delete(&dir, "a.conf", 1).unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(libc::ELOOP));
+        assert_eq!(std::fs::read(&outside).unwrap(), b"precious");
+        assert!(td.0.join("a.conf").is_symlink(), "symlink itself untouched");
     }
 
     #[test]

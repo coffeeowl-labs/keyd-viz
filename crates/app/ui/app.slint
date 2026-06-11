@@ -680,6 +680,13 @@ export component MainWindow inherits Window {
     callback cancel_apply();   // leave confirm / cancel auth / dismiss a terminal state
     // KEEP / revert during the countdown live on ApplyDialog, not here.
 
+    // ---- delete config (Phase 6 E2: remove a whole config file, §5.5) ----
+    // A destructive, confirm-gated counterpart to create-config. For a persisted
+    // config it runs the privileged delete (same auth → countdown → KEEP/revert as
+    // apply); for a never-saved one Rust just drops the phantom board.
+    in-out property <bool> delete_config_prompt: false;  // the confirm bar is showing
+    callback delete_config();  // confirmed: delete this config (or drop the phantom)
+
     // ---- create config (Phase 6 E2: a starter config for an unconfigured keyboard, §5.5) ----
     in-out property <bool> create_open: false;          // the create panel is showing (only outside edit mode)
     in property <[CreateCandidateData]> create_candidates;  // connected keyboards no specific config governs
@@ -2052,11 +2059,58 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
+                        // delete this whole config (destructive — confirm-gated).
+                        // Only when one-click apply can reach it and nothing's in flight.
+                        if root.apply_available && root.apply_state == "idle" && !root.delete_config_prompt: IconButton {
+                            wide: true;
+                            text: "delete config\u{2026}";
+                            active: true;
+                            clicked => {
+                                root.delete_config_prompt = true;
+                            }
+                        }
                         if root.apply_hint != "": Text {
                             text: root.apply_hint;
                             color: #4a525e;
                             font-size: 11px;
                             vertical-alignment: center;
+                        }
+                    }
+                    // delete-config confirm: destructive, so an explicit second step.
+                    if root.delete_config_prompt: Rectangle {
+                        height: dcbar.preferred-height + 12px;
+                        border-radius: 8px;
+                        background: #2a1d1d;
+                        border-width: 1px;
+                        border-color: #e5534b;
+                        dcbar := HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 10px;
+                            Text {
+                                text: "\u{26a0} Delete this config from /etc/keyd? The keyboard returns to its default mapping. A timestamped backup is kept.";
+                                color: #ff8b82;
+                                font-size: 12px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                            }
+                            IconButton {
+                                wide: true;
+                                text: "cancel";
+                                active: true;
+                                clicked => {
+                                    root.delete_config_prompt = false;
+                                }
+                            }
+                            IconButton {
+                                wide: true;
+                                text: "delete";
+                                clicked => {
+                                    root.delete_config();
+                                }
+                            }
                         }
                     }
                     if root.draft_info != "": Rectangle {

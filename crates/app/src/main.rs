@@ -225,6 +225,17 @@ fn device_label(devices: &[InputDevice], idxs: &[usize]) -> String {
     let mut groups: Vec<(String, &str, bool)> = Vec::new();
     for &i in idxs {
         let d = &devices[i];
+        // Only a real keyboard headlines a board. Media-only pseudo-devices (Video Bus,
+        // WMI hotkeys, lid/power switches) are keyboard-*capable* in keyd's eyes — so a
+        // `[ids] *` wildcard genuinely matches them — but labeling the board "Video Bus"
+        // is alarming and wrong. Drop anything lacking the full alphanumeric block, plus
+        // keyd's own virtual keyboard. (A combo keyboard+touchpad node still passes — its
+        // keyboard half is real.) A wildcard config whose only leftovers are pseudo-
+        // devices thus gets an empty label; the header falls back to the config name and
+        // the banner explains the catch-all.
+        if !d.full_keyboard || d.vendor == KEYD_VIRTUAL_VENDOR {
+            continue;
+        }
         let devid = d.devid();
         if let Some(g) = groups.iter_mut().find(|g| g.0 == devid) {
             if (d.full_keyboard && !g.2) || g.1.is_empty() {
@@ -748,6 +759,10 @@ struct ApplyCtx {
     /// alive only while a run is in `countdown`. Held so `finish`/`teardown_apply`
     /// can close it and the timer can drive its seconds.
     dialog: RefCell<Option<ApplyDialog>>,
+    /// `Some(path)` while a *delete* run is in flight (vs. an apply). On `kept` it
+    /// tells the event handler to remove that config's board and leave edit mode
+    /// instead of re-opening the session; cleared on every terminal event.
+    deleting: RefCell<Option<PathBuf>>,
 }
 
 thread_local! {
@@ -883,6 +898,7 @@ fn main() -> Result<(), slint::PlatformError> {
             run: RefCell::new(None),
             timer: RefCell::new(None),
             dialog: RefCell::new(None),
+            deleting: RefCell::new(None),
         });
     });
     {
@@ -1851,6 +1867,45 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
+    // Delete this config (the confirm bar's "delete" — already a second click). A
+    // never-persisted config is just a phantom board: drop it like a discard. A real
+    // one routes through the privileged delete tool (auth → countdown → KEEP/revert),
+    // the same recoverable path as apply (§5.5).
+    {
+        let weak = win.as_weak();
+        let session = session.clone();
+        let srcs = srcs.clone();
+        win.on_delete_config(move || {
+            let Some(win) = weak.upgrade() else { return };
+            win.set_delete_config_prompt(false);
+            if apply_busy(&win) {
+                return;
+            }
+            let sb = session.borrow();
+            let Some(s) = sb.as_ref() else { return };
+            if s.is_new() {
+                drop(sb);
+                exit_edit(&win, &srcs, &session);
+                return;
+            }
+            // A persisted config: it must be a `<dir>/<name>.conf` the tool can reach.
+            let target = applying::one_click().and_then(|how| s.apply_target(how.config_dir()));
+            let Some(name) = target else {
+                drop(sb);
+                win.set_apply_state("failed".into());
+                win.set_apply_info(
+                    "can't delete this config here \u{2014} it isn't a /etc/keyd file the \
+                     apply tool manages; remove it manually"
+                        .into(),
+                );
+                return;
+            };
+            let path = s.path.clone();
+            drop(sb);
+            launch_delete(&win, name, path);
+        });
+    }
+
     // Universal back-out/dismiss. In `auth` we only drop our stdin and *wait*: the
     // run isn't over until the tool (or pkexec's exit code) says how it ended —
     // never report an outcome the privileged side hasn't confirmed.
@@ -2229,17 +2284,11 @@ fn enter_edit_session(
     render_board(win); // freeze the board to the chosen section
 }
 
-/// Leave edit mode: drop the session, clear the edit chrome, and discard the unsaved
-/// preview by re-deriving the sheet from the file on disk.
-fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &SharedSession) {
-    let Some(s) = session.borrow_mut().take() else { return };
-    // Unconditionally tear down any in-flight apply, so leaving edit mode is safe
-    // even on a path that didn't pre-check (the discard-guard's confirm reaches
-    // here mid-flight): drop our stdin → the tool sees EOF and reverts, and stop
-    // the cosmetic countdown timer. Reverting a live change the user is walking
-    // away from is the correct outcome (nothing persists without KEEP).
-    teardown_apply();
-    win.set_edit_mode(false);
+/// Clear every edit-mode UI property back to its resting state. Shared by
+/// `exit_edit` (the normal leave) and `remove_config_after_delete` (the config was
+/// just deleted) so the two can't drift. Does NOT touch the session, the sheet
+/// sources, or `edit_mode` — the caller owns those.
+fn reset_edit_ui(win: &MainWindow) {
     win.set_capture_armed(false);
     win.set_selected_phys("".into());
     win.set_edit_banner("".into());
@@ -2251,6 +2300,7 @@ fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &Shar
     win.set_new_layer_name("".into());
     win.set_delete_prompt("".into());
     win.set_delete_detail("".into());
+    win.set_delete_config_prompt(false);
     win.set_rename_target("".into());
     win.set_rename_name("".into());
     win.set_can_rename(false);
@@ -2265,6 +2315,20 @@ fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &Shar
     win.set_apply_available(false);
     win.set_apply_hint("".into());
     reset_apply_ui(win);
+}
+
+/// Leave edit mode: drop the session, clear the edit chrome, and discard the unsaved
+/// preview by re-deriving the sheet from the file on disk.
+fn exit_edit(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, session: &SharedSession) {
+    let Some(s) = session.borrow_mut().take() else { return };
+    // Unconditionally tear down any in-flight apply, so leaving edit mode is safe
+    // even on a path that didn't pre-check (the discard-guard's confirm reaches
+    // here mid-flight): drop our stdin → the tool sees EOF and reverts, and stop
+    // the cosmetic countdown timer. Reverting a live change the user is walking
+    // away from is the correct outcome (nothing persists without KEEP).
+    teardown_apply();
+    win.set_edit_mode(false);
+    reset_edit_ui(win);
     let mut srcs = srcs.borrow_mut();
     if let Some(idx) = srcs.iter().position(|x| x.path == s.path) {
         if s.is_new() && !s.path.exists() {
@@ -2482,7 +2546,13 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
         win.set_capture_armed(false);
         win.set_apply_state("auth".into());
         let weak = win.as_weak();
-        let req = applying::ApplyRequest { name, bytes, sensitive_ok, how };
+        let req = applying::ApplyRequest {
+            name,
+            bytes,
+            sensitive_ok,
+            op: applying::ApplyOp::Apply,
+            how,
+        };
         match applying::start(req, move |ev| {
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
@@ -2500,6 +2570,81 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
     });
 }
 
+/// Spawn the apply tool to *delete* `<dir>/<name>.conf` (the caller has confirmed
+/// and verified `name` is an allow-listed target). Mirrors `launch_apply`: the same
+/// auth → countdown → KEEP/revert flow, but a `delete` request with no payload. The
+/// `deleting` marker tells `handle_apply_event` to drop the board on `kept`.
+fn launch_delete(win: &MainWindow, name: String, path: PathBuf) {
+    APPLY.with(|a| {
+        let actx = a.borrow();
+        let Some(ctx) = actx.as_ref() else { return };
+        let Some(how) = applying::one_click() else {
+            win.set_apply_state("failed".into());
+            win.set_apply_info(
+                "one-click apply is no longer available (keydviz-apply or pkexec \
+                 missing) \u{2014} remove the file manually"
+                    .into(),
+            );
+            return;
+        };
+        win.set_capture_armed(false);
+        *ctx.deleting.borrow_mut() = Some(path);
+        win.set_apply_state("auth".into());
+        let weak = win.as_weak();
+        let req = applying::ApplyRequest {
+            name,
+            bytes: Vec::new(),
+            sensitive_ok: false,
+            op: applying::ApplyOp::Delete,
+            how,
+        };
+        match applying::start(req, move |ev| {
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(win) = weak.upgrade() {
+                    handle_apply_event(&win, ev);
+                }
+            });
+        }) {
+            Ok(h) => *ctx.run.borrow_mut() = Some(h),
+            Err(e) => {
+                *ctx.deleting.borrow_mut() = None;
+                win.set_apply_state("failed".into());
+                win.set_apply_info(format!("couldn't launch the apply tool: {e}").into());
+            }
+        }
+    });
+}
+
+/// After a `kept` *delete*: the file is gone from disk. Drop the session, remove the
+/// config's board, leave edit mode, and reselect a surviving board. Runs inside the
+/// apply event handler, so — unlike `exit_edit` — it must NOT call `teardown_apply`
+/// (that would re-borrow the `APPLY` thread-local we're already inside); the run has
+/// already ended on `kept`, so there is nothing to tear down anyway.
+fn remove_config_after_delete(win: &MainWindow, ctx: &ApplyCtx, path: &Path) {
+    *ctx.session.borrow_mut() = None;
+    win.set_edit_mode(false);
+    reset_edit_ui(win);
+    let mut srcs = ctx.srcs.borrow_mut();
+    if let Some(idx) = srcs.iter().position(|x| x.path == path) {
+        srcs.remove(idx);
+    }
+    let data: Vec<SheetData> = srcs.iter().map(build_sheet_data).collect();
+    win.set_sheets(model(data));
+    if !srcs.is_empty() {
+        let active = win.get_active_index().max(0).min(srcs.len() as i32 - 1);
+        win.set_active_index(active);
+        use slint::Model;
+        if let Some(row) = win.get_sheets().row_data(active as usize) {
+            win.set_active_sheet(row);
+        }
+    } else {
+        win.set_active_index(0);
+    }
+    drop(srcs);
+    render_board(win);
+}
+
 /// Apply protocol events, on the UI thread. Terminal events stop the countdown
 /// and release the handle; `Kept` additionally re-bases the session on the new
 /// on-disk state. The countdown timer is cosmetic — only the tool's verdict
@@ -2512,6 +2657,7 @@ fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
         let finish = |state: &str, info: Option<String>| {
             *ctx.timer.borrow_mut() = None;
             *ctx.run.borrow_mut() = None;
+            *ctx.deleting.borrow_mut() = None;
             if let Some(d) = ctx.dialog.borrow_mut().take() {
                 let _ = d.hide();
             }
@@ -2544,9 +2690,18 @@ fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
                 }
             }
             E::Kept => {
-                let path = ctx.session.borrow().as_ref().map(|s| s.path.display().to_string());
-                finish("kept", path.map(|p| format!("{p} updated")));
-                reopen_after_kept(win, ctx);
+                // A kept *delete* removes the board and leaves edit mode; a kept
+                // *apply* re-bases the session on the new on-disk bytes.
+                let deleted = ctx.deleting.borrow().clone();
+                if let Some(path) = deleted {
+                    finish("idle", None);
+                    remove_config_after_delete(win, ctx, &path);
+                } else {
+                    let path =
+                        ctx.session.borrow().as_ref().map(|s| s.path.display().to_string());
+                    finish("kept", path.map(|p| format!("{p} updated")));
+                    reopen_after_kept(win, ctx);
+                }
             }
             E::Reverted(reason) => {
                 let why = match reason.as_str() {
