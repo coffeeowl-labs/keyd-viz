@@ -48,6 +48,73 @@ pub fn prod_config_dir() -> &'static Path {
     Path::new("/etc/keyd")
 }
 
+/// keyd's secondary include search dir (`DATA_DIR`), tried after the config's own
+/// directory when resolving an `include`. Both are root-owned, which is exactly why
+/// included content is already privilege-gated — the closure scan below is an
+/// advisory footgun-catcher, not a security boundary (design §5.3).
+pub fn keyd_data_dir() -> &'static Path {
+    Path::new("/usr/share/keyd")
+}
+
+/// A `command(`/`macro(` found inside a file an `include` directive pulls in. The
+/// inline byte scan ([`keydviz_apply::scan`]) can't see across the include boundary,
+/// so the one-click apply path reads **one level** of includes and surfaces these for
+/// the same explicit confirmation as an inline sensitive action (design §5.3). The
+/// content is root-gated, so this is a heads-up — not an escalation gate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncludedFinding {
+    /// The `include <arg>` argument that pulled the file in.
+    pub include_arg: String,
+    /// The resolved file that was scanned.
+    pub file: PathBuf,
+    /// The sensitive construct found inside it (always `needs_ack`).
+    pub finding: keydviz_apply::scan::Finding,
+}
+
+impl IncludedFinding {
+    /// A pre-flight line naming the include, the resolved file, and the construct.
+    pub fn describe(&self) -> String {
+        format!(
+            "included `{}` ({}) {}",
+            self.include_arg,
+            self.file.display(),
+            self.finding.describe(),
+        )
+    }
+}
+
+/// Resolve an `include` argument the way keyd does for the lookup — the config's own
+/// directory first, then `DATA_DIR` — returning the first existing regular file. Only
+/// plain relative args reach here; absolute / `..` ones are flagged `SuspectInclude`
+/// and ignored by keyd, so they're never followed.
+fn resolve_include(arg: &str, config_dir: &Path, data_dir: &Path) -> Option<PathBuf> {
+    [config_dir, data_dir].into_iter().map(|d| d.join(arg)).find(|p| p.is_file())
+}
+
+/// One-level include closure scan (design §5.3): for each `Include` directive in
+/// `base_findings`, read the file keyd would include and scan it, keeping only the
+/// `command(`/`macro(` findings (the footgun). **Non-recursive** — an included file's
+/// own `include` lines are dead to keyd, so they're neither followed nor flagged.
+/// Reads against the given search dirs; a missing / unreadable include is silently
+/// skipped (keyd only warns on those, and `keyd check` is the real syntax gate).
+pub fn scan_includes(
+    base_findings: &[keydviz_apply::scan::Finding],
+    config_dir: &Path,
+    data_dir: &Path,
+) -> Vec<IncludedFinding> {
+    use keydviz_apply::scan::{scan, Finding};
+    let mut out = Vec::new();
+    for f in base_findings {
+        let Finding::Include { arg, .. } = f else { continue };
+        let Some(path) = resolve_include(arg, config_dir, data_dir) else { continue };
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        for inner in scan(&bytes).into_iter().filter(Finding::needs_ack) {
+            out.push(IncludedFinding { include_arg: arg.clone(), file: path.clone(), finding: inner });
+        }
+    }
+    out
+}
+
 /// How an apply run reaches the tool.
 pub enum Invocation {
     /// Production: `pkexec /usr/bin/keydviz-apply --timeout N`. The absolute tool
@@ -406,5 +473,108 @@ mod tests {
     fn request_header_matches_the_tool_grammar() {
         assert_eq!(request_header("hhkb", 120, false), "apply hhkb 120\n");
         assert_eq!(request_header("hhkb", 120, true), "apply hhkb 120 sensitive-ok\n");
+    }
+
+    // ---- one-level include closure scan (§5.3) ----
+
+    use keydviz_apply::scan::scan;
+
+    /// A throwaway unique dir under the temp dir (pid + seq, like the pre-flight
+    /// check) holding two subdirs that play config-dir and DATA_DIR.
+    struct Sandbox {
+        root: PathBuf,
+    }
+    impl Sandbox {
+        fn new() -> Sandbox {
+            static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let root =
+                std::env::temp_dir().join(format!("keyd-viz-inc-{}-{seq}", std::process::id()));
+            std::fs::create_dir_all(root.join("conf")).unwrap();
+            std::fs::create_dir_all(root.join("data")).unwrap();
+            Sandbox { root }
+        }
+        fn conf_dir(&self) -> PathBuf {
+            self.root.join("conf")
+        }
+        fn data_dir(&self) -> PathBuf {
+            self.root.join("data")
+        }
+        fn write(&self, rel: &str, body: &str) {
+            std::fs::write(self.root.join(rel), body).unwrap();
+        }
+        fn run(&self, config: &str) -> Vec<IncludedFinding> {
+            let base = scan(config.as_bytes());
+            scan_includes(&base, &self.conf_dir(), &self.data_dir())
+        }
+    }
+    impl Drop for Sandbox {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn flags_command_inside_an_included_file() {
+        let sb = Sandbox::new();
+        sb.write("conf/common", "[main]\nx = command(rm -rf /)\n");
+        let found = sb.run("include common\n[main]\na = b\n");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].include_arg, "common");
+        assert!(found[0].file.ends_with("conf/common"));
+        assert!(found[0].describe().contains("command line 2"), "{}", found[0].describe());
+    }
+
+    #[test]
+    fn resolves_from_data_dir_when_absent_beside_config() {
+        let sb = Sandbox::new();
+        sb.write("data/shared", "[main]\nx = macro(C-a hi)\n");
+        let found = sb.run("include shared\n");
+        assert_eq!(found.len(), 1);
+        assert!(found[0].file.ends_with("data/shared"));
+        assert!(matches!(found[0].finding, keydviz_apply::scan::Finding::Macro { .. }));
+    }
+
+    #[test]
+    fn config_dir_wins_over_data_dir() {
+        let sb = Sandbox::new();
+        sb.write("conf/dup", "[main]\nx = command(local)\n");
+        sb.write("data/dup", "[main]\nx = command(shared)\n");
+        let found = sb.run("include dup\n");
+        assert_eq!(found.len(), 1);
+        assert!(found[0].file.ends_with("conf/dup"));
+    }
+
+    #[test]
+    fn clean_included_file_flags_nothing() {
+        let sb = Sandbox::new();
+        sb.write("conf/safe", "[main]\nx = y\ncapslock = esc\n");
+        assert!(sb.run("include safe\n").is_empty());
+    }
+
+    #[test]
+    fn missing_include_is_silently_skipped() {
+        let sb = Sandbox::new();
+        assert!(sb.run("include nope\n[main]\na = b\n").is_empty());
+    }
+
+    #[test]
+    fn non_recursive_does_not_follow_includes_of_includes() {
+        let sb = Sandbox::new();
+        // `mid` only *includes* `deep`; it has no direct sensitive construct. keyd
+        // wouldn't expand `mid`'s own include (non-recursive), so neither do we.
+        sb.write("conf/mid", "include deep\n[main]\nx = y\n");
+        sb.write("conf/deep", "[main]\nx = command(hidden)\n");
+        assert!(sb.run("include mid\n").is_empty());
+    }
+
+    #[test]
+    fn absolute_and_dotdot_includes_are_never_followed() {
+        let sb = Sandbox::new();
+        // These parse as SuspectInclude (not Include), so the closure scan ignores
+        // them — keyd ignores them too. Even if a matching file existed, no finding.
+        sb.write("conf/evil", "[main]\nx = command(x)\n");
+        let base = scan(b"include /etc/evil\ninclude ../evil\n");
+        assert!(scan_includes(&base, &sb.conf_dir(), &sb.data_dir()).is_empty());
     }
 }

@@ -1809,6 +1809,16 @@ fn main() -> Result<(), slint::PlatformError> {
             for f in &findings {
                 info.push_str(&format!("\u{26a0} {}\n", f.describe()));
             }
+            // One-level include closure scan (§5.3): a command()/macro() hiding in an
+            // included file is invisible to the inline byte scan — read one level of
+            // includes (relative to the config's own dir, then DATA_DIR) and require
+            // the same confirmation. Advisory: the content is already root-gated.
+            let config_dir = s.path.parent().unwrap_or_else(|| Path::new("."));
+            let included =
+                applying::scan_includes(&findings, config_dir, applying::keyd_data_dir());
+            for inc in &included {
+                info.push_str(&format!("\u{26a0} {}\n", inc.describe()));
+            }
             if let Some(w) = s.stale_warning() {
                 info.push_str(&format!("\u{26a0} {w}\n"));
             }
@@ -1821,7 +1831,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 info.push_str(diff.trim_end());
             }
             win.set_apply_info(info.into());
-            if findings.iter().any(|f| f.needs_ack()) {
+            if findings.iter().any(|f| f.needs_ack()) || !included.is_empty() {
                 win.set_apply_state("confirm".into());
             } else {
                 launch_apply(&win, false);

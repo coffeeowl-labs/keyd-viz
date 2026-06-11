@@ -1256,3 +1256,32 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   added-to and green, clippy `-D warnings` clean; GUI click-through left for manual verification.
   **Remaining for E2**: one-level include closure scan (deferred, §5.3); composite-`[a+b]`-overlay
   *rendering* (§12) is a separate viewer item.
+- *(Phase 6 E2 — one-level include closure scan, 2026-06-11)* The last functional E2 item (design
+  §5.3). keyd configs can `include` another file; the inline byte-scan (`keydviz_apply::scan`)
+  already flags inline `command(`/`macro(` and echoes `Include`/`SuspectInclude` advisories, but it
+  can't see *across* the include boundary — a `command(` hiding in an included file would slip past
+  the one-click apply confirmation. Now the apply pre-flight reads **one level** of includes and
+  routes any `command(`/`macro(` it finds there to the *same* explicit-confirmation flow as an inline
+  one. **Security framing (per the design): footgun, not escalation** — keyd confines includes to the
+  root-owned config dir + `DATA_DIR`, so included content is already privilege-gated; an attacker
+  can't control it without already being root. So this is GUI-advisory only; **the privileged
+  `keydviz-apply` tool needed zero changes** (it writes the config, never the root-owned included
+  files, so there's nothing new to enforce — the inline-bytes scan + `sensitive-ok` gate are
+  unchanged). **App** (`applying.rs`): `scan_includes(&[Finding], config_dir, data_dir) ->
+  Vec<IncludedFinding>` resolves each `Include` arg keyd's way (config's own dir first, then
+  `/usr/share/keyd` via `keyd_data_dir()`), reads the file, and keeps only its `needs_ack` findings;
+  **non-recursive** — an included file's own `include` lines are dead to keyd (verified: keyd only
+  expands one level), so they're a non-ack `Include` finding and get filtered, never followed.
+  Absolute / `..` args parse as `SuspectInclude` (not `Include`) so they're never resolved — keyd
+  ignores them too. `main.rs` pre-flight appends the included findings to `apply_info` (`included
+  \`foo\` (/path) command line N`) and ORs them into the confirm decision; the confirm-bar headline
+  generalized to "command()/macro() will run … (here, or in an included file)". **Verified `keyd
+  check` (v2.6.0) behavior** so the feature is reachable: a missing/unresolvable include is a
+  *warning, exit 0*, not an error — so the unprivileged pre-flight `keyd_check_bytes` (temp dir, no
+  sibling includes) won't false-reject an include-using config before the scan runs; the closure
+  scan resolves against the *real* `/etc/keyd` dir, which is what keyd reads at reload. 7 unit cases
+  (command-in-include, macro via DATA_DIR fallback, config-dir-wins, clean-include-silent,
+  missing-skipped, non-recursive, absolute/`..`-never-followed) over a temp-dir sandbox. Workspace
+  82 app unit tests + 124 integration green, clippy `-D warnings` clean; GUI confirm click-through
+  left for manual verification. **E2 is now functionally complete.** The only open edit-mode item is
+  composite-`[a+b]`-overlay *rendering* (§12) — a separate viewer concern, not E2.
