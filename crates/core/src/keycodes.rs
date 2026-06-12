@@ -272,9 +272,104 @@ pub fn keycode_name(code: u16) -> Option<&'static str> {
     }
 }
 
+/// Every valid keyd key *name*, sorted (the 315 unique names `keyd list-keys`
+/// prints, captured from keyd v2.6.0). Unlike [`keycode_name`] — which maps an
+/// evdev code to its single *primary* name — this is the full name set keyd
+/// accepts as a key token, including alt/shifted aliases (`escape`, `Q`, `!`,
+/// `+`, `-`, `,`, `iso-level3-shift`) that `keycode_name` never returns. The macro
+/// tokenizer needs exactly this set: keyd types a macro token as a key iff the
+/// token is one of these names, otherwise it types the token literally — so
+/// [`is_keycode`] must mirror keyd's decision or a valid key would serialize as
+/// text. Sorted for binary search (ASCII-only, so byte order == `keyd list-keys`).
+static KEY_NAMES: &[&str] = &[
+    "!", "\"", "#", "$", "%", "&",
+    "'", "(", ")", "*", "+", ",",
+    "-", ".", "/", "0", "1", "102nd",
+    "2", "3", "4", "5", "6", "7",
+    "8", "9", ":", ";", "<", "=",
+    ">", "?", "@", "A", "B", "C",
+    "D", "E", "F", "G", "H", "I",
+    "J", "K", "L", "M", "N", "O",
+    "P", "Q", "R", "S", "T", "U",
+    "V", "W", "X", "Y", "Z", "[",
+    "\\", "]", "^", "_", "`", "a",
+    "again", "apostrophe", "auto", "b", "back", "backslash",
+    "backspace", "bassboost", "battery", "bluetooth", "bookmarks", "brightnessdown",
+    "brightnessup", "c", "calc", "camera", "cancel", "capslock",
+    "chat", "close", "closecd", "coffee", "comma", "compose",
+    "computer", "config", "connect", "copy", "cut", "cycle",
+    "cyclewindows", "d", "dashboard", "delete", "deletefile", "display",
+    "documents", "dot", "down", "e", "edit", "ejectcd",
+    "ejectclosecd", "email", "end", "enter", "equal", "esc",
+    "escape", "exit", "f", "f1", "f10", "f11",
+    "f12", "f13", "f14", "f15", "f16", "f17",
+    "f18", "f19", "f2", "f20", "f21", "f22",
+    "f23", "f24", "f3", "f4", "f5", "f6",
+    "f7", "f8", "f9", "fastforward", "favorites", "file",
+    "finance", "find", "fn", "forward", "forwardmail", "front",
+    "g", "grave", "h", "hangeul", "hanja", "help",
+    "henkan", "hiragana", "home", "homepage", "hp", "i",
+    "insert", "iso", "iso-level3-shift", "j", "k", "katakana",
+    "katakanahiragana", "kbdillumdown", "kbdillumtoggle", "kbdillumup", "kp0", "kp1",
+    "kp2", "kp3", "kp4", "kp5", "kp6", "kp7",
+    "kp8", "kp9", "kpasterisk", "kpcomma", "kpdot", "kpenter",
+    "kpequal", "kpjpcomma", "kpleftparen", "kpminus", "kpplus", "kpplusminus",
+    "kprightparen", "kpslash", "l", "left", "leftalt", "leftbrace",
+    "leftcontrol", "leftmeta", "leftmouse", "leftshift", "linefeed", "m",
+    "macro", "mail", "media", "menu", "micmute", "middlemouse",
+    "minus", "mouse1", "mouse2", "mouseback", "mouseforward", "move",
+    "msdos", "muhenkan", "mute", "n", "new", "next",
+    "nextsong", "noop", "numlock", "o", "off", "open",
+    "p", "pagedown", "pageup", "paste", "pause", "pausecd",
+    "phone", "play", "playcd", "playpause", "power", "prev",
+    "previoussong", "print", "prog1", "prog2", "prog3", "prog4",
+    "props", "q", "question", "r", "record", "redo",
+    "refresh", "reply", "rewind", "rfkill", "right", "rightalt",
+    "rightbrace", "rightcontrol", "rightmeta", "rightmouse", "rightshift", "ro",
+    "s", "save", "scale", "scrolldown", "scrollleft", "scrolllock",
+    "scrollright", "scrollup", "search", "semicolon", "send", "sendfile",
+    "setup", "shop", "slash", "sleep", "sound", "space",
+    "sport", "stop", "stopcd", "suspend", "switchvideomode", "sysrq",
+    "t", "tab", "u", "undo", "unknown", "up",
+    "uwb", "v", "voicecommand", "volumedown", "volumeup", "w",
+    "wakeup", "wlan", "wwan", "www", "x", "xfer",
+    "y", "yen", "z", "zenkakuhankaku", "zoom", "{",
+    "|", "}", "~",
+];
+
+/// True when `name` is a key keyd recognizes (a member of [`KEY_NAMES`]). This is
+/// the macro tokenizer's Key-vs-Text decision: a token keyd would press as a key
+/// vs. one it types literally. Mirrors keyd's own lookup exactly.
+pub fn is_keycode(name: &str) -> bool {
+    KEY_NAMES.binary_search(&name).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::keycode_name;
+    use super::{is_keycode, keycode_name, KEY_NAMES};
+
+    #[test]
+    fn key_names_is_sorted_for_binary_search() {
+        let mut sorted = KEY_NAMES.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(sorted, KEY_NAMES, "KEY_NAMES must be sorted");
+    }
+
+    #[test]
+    fn is_keycode_matches_keyd_decision() {
+        // Alt/shifted aliases keyd accepts but keycode_name never returns.
+        for k in ["escape", "Q", "!", "+", "-", ",", "iso-level3-shift", "space", "enter", "\\"] {
+            assert!(is_keycode(k), "{k} should be a keycode");
+        }
+        // Modifier aliases are NOT keys (they're shorthand, typed literally in a macro).
+        for k in ["control", "shift", "alt", "meta", "altgr"] {
+            assert!(!is_keycode(k), "{k} is a modifier alias, not a key");
+        }
+        // Plain text / unknown tokens.
+        for k in ["Hello", "google.com", "C-a", "notakey123", ""] {
+            assert!(!is_keycode(k), "{k:?} should not be a keycode");
+        }
+    }
 
     #[test]
     fn known_keys_map_to_keyd_primary_names() {

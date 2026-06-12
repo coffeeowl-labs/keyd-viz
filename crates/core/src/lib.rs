@@ -13,6 +13,7 @@ pub mod ids;
 pub mod keycodes;
 pub mod live;
 pub mod layout;
+pub mod macros;
 pub mod model;
 pub mod parser;
 pub mod prettify;
@@ -33,6 +34,7 @@ pub use live::{
     LiveEvent, MonitorEvent,
 };
 pub use layout::layout_for;
+pub use macros::{Macro, MacroToken};
 pub use model::{Config, Hold, HoldKind, Layer};
 pub use parser::{canonical_chord, is_chord_key, parse_file, parse_text};
 pub use prettify::{base_legend, prettify};
