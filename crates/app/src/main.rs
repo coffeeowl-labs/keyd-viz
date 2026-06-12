@@ -1835,7 +1835,8 @@ fn main() -> Result<(), slint::PlatformError> {
                 win.set_apply_state("failed".into());
                 win.set_apply_info(
                     format!(
-                        "config is {} bytes — keyd's own limit is {}",
+                        "this config is too large to apply \u{2014} {} bytes, and the limit \
+                         is {}. remove some bindings and try again.",
                         bytes.len(),
                         keydviz_apply::MAX_CONFIG_BYTES
                     )
@@ -1849,7 +1850,8 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(Err(e)) = editing::keyd_check_bytes(&bytes) {
                 win.set_apply_state("failed".into());
                 win.set_apply_info(
-                    format!("keyd check rejects this config — fix it first:\n{e}").into(),
+                    format!("this config has an error and can't be applied \u{2014} fix it first:\n{e}")
+                        .into(),
                 );
                 return;
             }
@@ -1931,8 +1933,8 @@ fn main() -> Result<(), slint::PlatformError> {
                 drop(sb);
                 win.set_apply_state("failed".into());
                 win.set_apply_info(
-                    "can't delete this config here \u{2014} it isn't a /etc/keyd file the \
-                     apply tool manages; remove it manually"
+                    "this config lives outside keyd's config folder, so keyd-viz can't \
+                     remove it for you \u{2014} delete the file manually"
                         .into(),
                 );
                 return;
@@ -1957,7 +1959,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
                 "auth" => {
                     with_apply_run(|h| h.revert());
-                    win.set_apply_info("cancelling \u{2014} waiting for the tool to exit".into());
+                    win.set_apply_info("cancelling \u{2014} finishing up\u{2026}".into());
                 }
                 _ => {}
             }
@@ -2535,8 +2537,8 @@ fn apply_gate(s: &editing::EditSession) -> (bool, String) {
         Some(inv) => (s.apply_target(inv.config_dir()).is_some(), String::new()),
         None => {
             let hint = if s.apply_target(applying::prod_config_dir()).is_some() {
-                "one-click apply needs the packaged keydviz-apply tool \
-                 (AUR/source install) \u{2014} use save draft's install steps"
+                "applying changes directly needs keyd-viz installed (AUR or source) \
+                 \u{2014} for now, use 'save draft' and follow its install steps"
                     .to_string()
             } else {
                 String::new()
@@ -2562,8 +2564,8 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
         let Some(how) = applying::one_click() else {
             win.set_apply_state("failed".into());
             win.set_apply_info(
-                "one-click apply is no longer available (keydviz-apply or pkexec \
-                 missing) \u{2014} use save draft instead"
+                "can't apply changes directly right now \u{2014} keyd-viz isn't fully \
+                 installed. use 'save draft' instead"
                     .into(),
             );
             return;
@@ -2573,7 +2575,7 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
         let Some(name) = s.apply_target(how.config_dir()) else {
             drop(sb);
             win.set_apply_state("failed".into());
-            win.set_apply_info("this config is no longer a one-click apply target".into());
+            win.set_apply_info("keyd-viz can't apply this config directly anymore".into());
             return;
         };
         let bytes = s.serialized().into_bytes();
@@ -2601,7 +2603,7 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
             Ok(h) => *ctx.run.borrow_mut() = Some(h),
             Err(e) => {
                 win.set_apply_state("failed".into());
-                win.set_apply_info(format!("couldn't launch the apply tool: {e}").into());
+                win.set_apply_info(format!("couldn't start applying: {e}").into());
             }
         }
     });
@@ -2618,8 +2620,8 @@ fn launch_delete(win: &MainWindow, name: String, path: PathBuf) {
         let Some(how) = applying::one_click() else {
             win.set_apply_state("failed".into());
             win.set_apply_info(
-                "one-click apply is no longer available (keydviz-apply or pkexec \
-                 missing) \u{2014} remove the file manually"
+                "can't delete this config directly right now \u{2014} keyd-viz isn't fully \
+                 installed. remove the file manually"
                     .into(),
             );
             return;
@@ -2647,7 +2649,7 @@ fn launch_delete(win: &MainWindow, name: String, path: PathBuf) {
             Err(e) => {
                 *ctx.deleting.borrow_mut() = None;
                 win.set_apply_state("failed".into());
-                win.set_apply_info(format!("couldn't launch the apply tool: {e}").into());
+                win.set_apply_info(format!("couldn't start applying: {e}").into());
             }
         }
     });
@@ -2720,7 +2722,7 @@ fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
                         // can't keep — revert immediately rather than strand it.
                         with_apply_run(|h| h.revert());
                         win.set_apply_info(
-                            format!("couldn't open the confirm window: {e} \u{2014} reverting")
+                            format!("couldn't open the test window: {e} \u{2014} reverting")
                                 .into(),
                         );
                     }
@@ -2819,7 +2821,8 @@ fn reopen_after_kept(win: &MainWindow, ctx: &ApplyCtx) {
             // construction. Keep the old session rather than yank the user out of
             // edit mode, but say so.
             win.set_edit_banner(
-                format!("\u{26a0} session re-open after apply failed: {}", v.describe()).into(),
+                format!("\u{26a0} couldn't reload the config after applying: {}", v.describe())
+                    .into(),
             );
         }
     }
