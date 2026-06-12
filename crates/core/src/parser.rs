@@ -266,6 +266,13 @@ pub(crate) fn parse_fn(s: &str) -> Option<(&str, Vec<&str>)> {
     }
 }
 
+/// The leading keyd function name of a binding RHS (`overload`, `overloadi`, `macro`,
+/// …), or `None` when the value isn't a `name(...)` call. Lets the editor tell apart
+/// the tap/hold forms it can decompose from exotic ones (`overloadi`) it must leave raw.
+pub fn leading_fn(rhs: &str) -> Option<&str> {
+    parse_fn(rhs.trim()).map(|(name, _)| name)
+}
+
 /// Find-or-create a layer by name, returning a mutable reference to it.
 fn ensure_layer<'a>(cfg: &'a mut Config, name: &str) -> &'a mut Layer {
     if let Some(idx) = cfg.layers.iter().position(|l| l.name == name) {

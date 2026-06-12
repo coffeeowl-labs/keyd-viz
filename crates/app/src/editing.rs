@@ -174,6 +174,19 @@ impl EditSession {
         tap: Option<String>,
         feel: Option<Behavior>,
     ) -> Result<(), String> {
+        // Refuse to recompose over keyd's `overloadi(...)` — its tap-first/descriptor-hold
+        // form. The viewer badges it as a tap/hold (the parser routes it to `holds`), but
+        // `current_tap_hold` can't decompose it, so the panel opens empty; re-setting would
+        // silently discard the original's nested hold descriptor + tuned timeouts. `keyd
+        // check` wouldn't catch the loss (the result is valid), so guard it here — the user
+        // edits these as raw text in simple mode instead.
+        if let Some(cur) = self.current_binding(layer, key) {
+            if parser::leading_fn(&cur) == Some("overloadi") {
+                return Err("this key uses keyd's advanced overloadi() form \u{2014} switch \
+                            to simple mode to edit it as text"
+                    .to_string());
+            }
+        }
         // Read the existing binding (immutable) before taking the mutable borrow.
         let existing = self.current_tap_hold(layer, key);
         let th = TapHold::compose(existing.as_ref(), target.to_string(), tap, feel);
@@ -726,6 +739,30 @@ mod tests {
         assert_eq!(s.diff(), "- capslock = esc\n+ capslock = layer(nav)\n");
         let th = s.current_tap_hold("main", "capslock").unwrap();
         assert_eq!(th.tap, None);
+    }
+
+    #[test]
+    fn tap_hold_refuses_to_clobber_an_overloadi() {
+        // overloadi is badged as a tap/hold by the viewer but can't be decomposed by
+        // the panel — re-setting it must NOT silently discard the original. The user
+        // edits it as raw text in simple mode (set_binding) instead.
+        let td = TempDir::new("th-overloadi");
+        let p = td.0.join("test.conf");
+        let orig = "overloadi(a, overloadt2(nav, a, 500), 200)";
+        std::fs::write(&p, format!("[ids]\n*\n\n[main]\na = {orig}\n\n[nav]\nh = left\n")).unwrap();
+        let mut s = EditSession::open(&p).unwrap();
+        // The panel can't read it (None) — that's exactly the trap.
+        assert!(s.current_tap_hold("main", "a").is_none());
+        // Applying the tap/hold panel over it is refused, with a steer to simple mode.
+        let err = s.set_tap_hold("main", "a", "num", Some("a".into()), Some(Behavior::Responsive))
+            .unwrap_err();
+        assert!(err.contains("overloadi") && err.contains("simple"), "{err}");
+        // The original is untouched and the session stays clean.
+        assert_eq!(s.current_binding("main", "a").as_deref(), Some(orig));
+        assert!(!s.dirty());
+        // Editing it as raw text in simple mode still works (the supported path).
+        s.set_binding("main", "a", "b").unwrap();
+        assert_eq!(s.current_binding("main", "a").as_deref(), Some("b"));
     }
 
     #[test]
