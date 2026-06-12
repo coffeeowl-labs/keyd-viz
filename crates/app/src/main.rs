@@ -77,6 +77,7 @@ fn to_keycap(k: &KeyCap) -> KeyCapData {
             KeyState::Hold => 2,
         },
         pressed: false,
+        chord_pick: false,
         badge_left: bl_text.into(),
         badge_left_color: brush(if bl_color.is_empty() { "#000000" } else { &bl_color }),
         has_badge_left: k.badge_left.is_some(),
@@ -1141,21 +1142,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let macro_draft = macro_draft.clone();
         win.on_select_key(move |phys| {
             let Some(win) = weak.upgrade() else { return };
-            // In chord mode a board click fills the chord builder's two key slots
-            // instead of selecting a key to edit. First empty slot wins; a click once
-            // both are full (or a re-click of key 1) starts a fresh chord from that key.
+            // In chord mode a board click adds (or, if already picked, removes) the key
+            // from the chord builder's member list — any number of keys, not a fixed pair.
             if win.get_board_mode().as_str() == "chord" {
-                let phys = phys.to_string();
-                let k1 = win.get_chord_key1().to_string();
-                let k2 = win.get_chord_key2().to_string();
-                if k1.is_empty() {
-                    win.set_chord_key1(phys.into());
-                } else if k2.is_empty() && phys != k1 {
-                    win.set_chord_key2(phys.into());
-                } else {
-                    win.set_chord_key1(phys.into());
-                    win.set_chord_key2("".into());
-                }
+                toggle_chord_member(&win, phys.as_str());
                 return;
             }
             // Re-clicking the currently-selected key deselects it — back to the
@@ -1208,10 +1198,9 @@ fn main() -> Result<(), slint::PlatformError> {
             win.set_can_rename(renameable(&name));
             win.set_edit_layer(name.clone());
             // Chords are layer-scoped: switching layers in chord mode reloads that layer's
-            // chord list and clears any half-built pair (it belonged to the old layer).
+            // chord list and clears any half-built member set (it belonged to the old layer).
             if win.get_board_mode().as_str() == "chord" {
-                win.set_chord_key1("".into());
-                win.set_chord_key2("".into());
+                win.set_chord_keys(model(Vec::<slint::SharedString>::new()));
                 win.set_chord_action("".into());
                 if let Some(rows) =
                     session.borrow().as_ref().map(|s| chord_rows_for_layer(s, name.as_str()))
@@ -1270,8 +1259,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     // The focused layer changed: refresh the chord list and drop any
                     // half-built chord pair (it belonged to the previous layer's board).
                     win.set_chord_rows(model(chords));
-                    win.set_chord_key1("".into());
-                    win.set_chord_key2("".into());
+                    win.set_chord_keys(model(Vec::<slint::SharedString>::new()));
                     win.set_chord_action("".into());
                     win.set_can_rename(renameable(&created));
                     win.set_edit_layer(created.into());
@@ -1358,8 +1346,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_hold_layers(model(holds));
                     // Focused layer changed: refresh chords, drop any half-built pair.
                     win.set_chord_rows(model(chords));
-                    win.set_chord_key1("".into());
-                    win.set_chord_key2("".into());
+                    win.set_chord_keys(model(Vec::<slint::SharedString>::new()));
                     win.set_chord_action("".into());
                     win.set_can_rename(renameable(&next));
                     win.set_edit_layer(next.into());
@@ -1420,8 +1407,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     // The layer's name changed: refresh its chord list under the new name
                     // and drop any half-built pair from before the rename.
                     win.set_chord_rows(model(chords));
-                    win.set_chord_key1("".into());
-                    win.set_chord_key2("".into());
+                    win.set_chord_keys(model(Vec::<slint::SharedString>::new()));
                     win.set_chord_action("".into());
                     win.set_edit_layer(renamed.clone().into());
                     win.set_can_rename(renameable(&renamed));
@@ -1826,8 +1812,7 @@ fn main() -> Result<(), slint::PlatformError> {
         win.on_set_board_mode(move |mode| {
             let Some(win) = weak.upgrade() else { return };
             win.set_selected_phys("".into());
-            win.set_chord_key1("".into());
-            win.set_chord_key2("".into());
+            clear_chord_builder(&win);
             win.set_chord_action("".into());
             if mode.as_str() == "chord" {
                 let layer = win.get_edit_layer().to_string();
@@ -1853,23 +1838,25 @@ fn main() -> Result<(), slint::PlatformError> {
                 return;
             }
             let layer = win.get_edit_layer().to_string();
-            let key1 = win.get_chord_key1().to_string();
-            let key2 = win.get_chord_key2().to_string();
+            let keys: Vec<String> = {
+                use slint::Model;
+                win.get_chord_keys().iter().map(|s| s.to_string()).collect()
+            };
             let action = win.get_chord_action().to_string();
             let mut sb = session.borrow_mut();
             let Some(s) = sb.as_mut() else { return };
-            match s.set_chord(&layer, &key1, &key2, &action) {
+            match s.set_chord(&layer, &keys, &action) {
                 Ok(()) => {
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
-                    refresh_warnings(&win, s); // a toggle chord can target a missing layer
+                    refresh_warnings(&win, s); // a chord can target a missing layer
                     let rows = chord_rows_for_layer(s, &layer);
                     drop(sb);
                     win.set_chord_rows(model(rows));
-                    win.set_chord_key1("".into());
-                    win.set_chord_key2("".into());
+                    clear_chord_builder(&win);
                     win.set_chord_action("".into());
                     win.set_edit_dirty(dirty);
                     refresh_preview(&win, &srcs, &path, cfg);
+                    render_board(&win); // clear the now-committed members' highlight
                 }
                 Err(e) => {
                     drop(sb);
@@ -1879,18 +1866,18 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // Edit a chord: fill the builder from the existing row (its two keys + action). The
+    // Edit a chord: fill the builder from the existing row (all its members + action). The
     // user then presses "add", whose canonical match rewrites the existing line.
-    // (Fill-only, like the key picker — it does not itself apply.) A 3+-key chord
-    // collapses to its first two keys here — a documented limitation; delete handles 3+.
+    // (Fill-only, like the key picker — it does not itself apply.) Any number of members
+    // is preserved, so editing a 3+-key chord no longer drops keys.
     {
         let weak = win.as_weak();
         let session = session.clone();
         win.on_edit_chord(move |chord| {
             let Some(win) = weak.upgrade() else { return };
-            let parts: Vec<&str> = chord.split('+').map(str::trim).collect();
-            win.set_chord_key1(parts.first().copied().unwrap_or("").into());
-            win.set_chord_key2(parts.get(1).copied().unwrap_or("").into());
+            let parts: Vec<slint::SharedString> =
+                chord.split('+').map(|p| p.trim().into()).collect();
+            win.set_chord_keys(model(parts));
             if let Some(s) = session.borrow().as_ref() {
                 let layer = win.get_edit_layer().to_string();
                 let canon = keydviz_core::canonical_chord(&chord);
@@ -1902,6 +1889,24 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_chord_action(act.into());
                 }
             }
+            render_board(&win); // light up the loaded members on the board
+        });
+    }
+
+    // Toggle a clicked board key in/out of the chord builder's member list, and reset it.
+    {
+        let weak = win.as_weak();
+        win.on_toggle_chord_key(move |phys| {
+            let Some(win) = weak.upgrade() else { return };
+            toggle_chord_member(&win, phys.as_str());
+        });
+    }
+    {
+        let weak = win.as_weak();
+        win.on_clear_chord_keys(move || {
+            let Some(win) = weak.upgrade() else { return };
+            clear_chord_builder(&win);
+            render_board(&win); // drop the members' highlight
         });
     }
 
@@ -2319,7 +2324,56 @@ fn render_board(win: &MainWindow) {
     let pressed: std::collections::HashSet<String> =
         win.get_pressed_keys().iter().map(|s| s.to_string()).collect();
     stamp_glow(&mut board, &pressed);
+    // In chord-building mode, light up the picked members (any count). Reads the live
+    // `chord_keys` model so the highlight survives glow/layer re-renders.
+    if win.get_edit_mode() && win.get_board_mode() == "chord" {
+        let picks: std::collections::HashSet<String> =
+            win.get_chord_keys().iter().map(|s| s.to_string()).collect();
+        stamp_chord_picks(&mut board, &picks);
+    }
     win.set_active_board(board);
+}
+
+/// Empty the chord-builder member list (board chord-mode).
+fn clear_chord_builder(win: &MainWindow) {
+    win.set_chord_keys(model(Vec::<slint::SharedString>::new()));
+}
+
+/// Add `phys` to the chord-builder member list, or remove it if already present (a
+/// re-click drops it). Empty `phys` is ignored. Re-renders the board so the highlight
+/// follows the change.
+fn toggle_chord_member(win: &MainWindow, phys: &str) {
+    use slint::Model;
+    if phys.is_empty() {
+        return;
+    }
+    let cur: Vec<slint::SharedString> = win.get_chord_keys().iter().collect();
+    let next: Vec<slint::SharedString> = if cur.iter().any(|k| k.as_str() == phys) {
+        cur.into_iter().filter(|k| k.as_str() != phys).collect()
+    } else {
+        let mut v = cur;
+        v.push(phys.into());
+        v
+    };
+    win.set_chord_keys(model(next));
+    render_board(win);
+}
+
+/// Mark the caps whose `phys` is a current chord member (board chord-mode) so they
+/// highlight like a selection. Mirrors [`stamp_glow`] (rebuilds the board's key model, so
+/// the shared sheet model is left pristine) and is reapplied on every render, so picks
+/// survive a board rebuild.
+fn stamp_chord_picks(board: &mut BoardData, picks: &std::collections::HashSet<String>) {
+    use slint::Model;
+    let keys: Vec<KeyCapData> = board
+        .keys
+        .iter()
+        .map(|mut k| {
+            k.chord_pick = !k.phys.is_empty() && picks.contains(k.phys.as_str());
+            k
+        })
+        .collect();
+    board.keys = model(keys);
 }
 
 /// The one optional edit session, shared by the UI callbacks that need to know
@@ -2608,8 +2662,7 @@ fn enter_edit_session(
     win.set_edit_layer(default_layer);
     win.set_key_mode("simple".into());
     win.set_board_mode("single".into());
-    win.set_chord_key1("".into());
-    win.set_chord_key2("".into());
+    win.set_chord_keys(model(Vec::<slint::SharedString>::new()));
     win.set_chord_action("".into());
     win.set_selected_is_macro(false);
     win.set_macro_rows(model(Vec::<MacroRow>::new()));
@@ -2671,8 +2724,7 @@ fn reset_edit_ui(win: &MainWindow) {
     win.set_key_mode("simple".into());
     win.set_board_mode("single".into());
     win.set_chord_rows(model(Vec::<ChordRow>::new()));
-    win.set_chord_key1("".into());
-    win.set_chord_key2("".into());
+    win.set_chord_keys(model(Vec::<slint::SharedString>::new()));
     win.set_chord_action("".into());
     win.set_selected_is_macro(false);
     win.set_macro_rows(model(Vec::<MacroRow>::new()));

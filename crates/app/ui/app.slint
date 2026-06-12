@@ -22,6 +22,7 @@ export struct KeyCapData {
     accent: brush,
     state: int,              // 0 normal, 1 dim, 2 hold
     pressed: bool,           // currently held down (live keypress glow)
+    chord_pick: bool,        // picked as a member of the chord being built (board chord-mode)
     badge_left: string,
     badge_left_color: brush,
     has_badge_left: bool,
@@ -191,11 +192,10 @@ component BoardView inherits VerticalLayout {
     // click callback back up to the window.
     in property <bool> editing: false;
     in property <string> selected_phys;
-    // chord-building mode: instead of one selected key, up to two keys (the chord's
-    // members) are highlighted as they're clicked.
+    // chord-building mode: instead of one selected key, every clicked chord member is
+    // highlighted. Membership rides on each cap (`chord_pick`, stamped in `render_board`),
+    // so an arbitrary number of keys can light up — not a fixed pair.
     in property <bool> chord_mode: false;
-    in property <string> chord_k1;
-    in property <string> chord_k2;
     callback key_clicked(string);
     // zoom multiplier for the whole board (1.0 = native size). Scroll over the panel
     // adjusts it; the window auto-fits to the scaled extent.
@@ -243,9 +243,7 @@ component BoardView inherits VerticalLayout {
                     scale: root.zoom;
                     editing: root.editing;
                     selected: root.editing && key.phys != ""
-                        && (root.chord_mode
-                            ? (key.phys == root.chord_k1 || key.phys == root.chord_k2)
-                            : key.phys == root.selected_phys);
+                        && (root.chord_mode ? key.chord_pick : key.phys == root.selected_phys);
                     clicked => {
                         root.key_clicked(key.phys);
                     }
@@ -663,22 +661,23 @@ export component MainWindow inherits Window {
     callback filter_keys(string);
     callback open_picker(string);   // arg = target ("binding" | "tap" | "chord_action")
     callback pick_key(string);
-    // ---- chords (E2): two keys pressed together → one action. A SEPARATE construct
-    // from a key's own binding (keyd disambiguates by timing). Chord-building is a
-    // *mode of the main board* (`board_mode == "chord"`): the two keys are picked by
-    // clicking them on the board, not from a dialog. `board_mode` ("single" | "chord")
-    // is the board's interaction mode — "single" edits one key's binding, "chord"
-    // turns the board into a two-key picker. The two are mutually exclusive, so a key's
-    // tap/hold editor and chord-building never overlap. Chords are [main]-only, so the
-    // mode toggle is offered only when the main layer is selected. `chord_rows` lists
-    // every chord in [main]; `chord_key1`/`chord_key2` are the two clicked keys.
+    // ---- chords (E2): two or more keys pressed together → one action. A SEPARATE
+    // construct from a key's own binding (keyd disambiguates by timing). Chord-building is
+    // a *mode of the main board* (`board_mode == "chord"`): members are picked by clicking
+    // them on the board, not from a dialog. `board_mode` ("single" | "chord") is the
+    // board's interaction mode — "single" edits one key's binding, "chord" turns the board
+    // into a member picker. The two are mutually exclusive, so a key's tap/hold editor and
+    // chord-building never overlap. The mode toggle is offered on any selected layer.
+    // `chord_rows` lists every chord on it; `chord_keys` are the clicked members (any
+    // count ≥ 2 — re-click a member to drop it).
     in-out property <string> board_mode: "single";
     callback set_board_mode(string);  // switch the board between "single" and "chord"
     in property <[ChordRow]> chord_rows;
-    in-out property <string> chord_key1: "";    // first key of the builder ("" = none clicked)
-    in-out property <string> chord_key2: "";    // second key of the builder
+    in-out property <[string]> chord_keys;      // members of the builder, in click order
     in-out property <string> chord_action: "";  // action for the builder
-    callback add_chord();             // commit chord_key1 + chord_key2 → chord_action
+    callback toggle_chord_key(string);  // arg = phys clicked on the board → add/remove member
+    callback clear_chord_keys();        // reset the builder's member list
+    callback add_chord();               // commit chord_keys → chord_action
     callback edit_chord(string);      // arg = chord LHS → seed the builder from it
     callback remove_chord(string);    // arg = chord LHS → delete it
     // ---- [global] daemon options (E2): a typed form for keyd's documented globals.
@@ -1755,13 +1754,13 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // chord editor (board "chord" mode) — two keys struck together emit one
-                    // action. The two keys are picked by clicking them on the main board
-                    // above; this panel shows the running build + every existing [main] chord.
+                    // chord editor (board "chord" mode) — two or more keys struck together
+                    // emit one action. Members are picked by clicking them on the main board
+                    // above; this panel shows the running build + every existing chord.
                     if !root.editing_global && root.board_mode == "chord": VerticalLayout {
                         spacing: 6px;
                         Text {
-                            text: "chords (" + root.edit_layer + ") \u{2014} click two keys on the board, then set an action";
+                            text: "chords (" + root.edit_layer + ") \u{2014} click 2+ keys on the board, then set an action";
                             color: #7d8694;
                             font-size: 11px;
                         }
@@ -1799,60 +1798,77 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
-                        // build row: the two keys are filled by clicking the board above
-                        // (the picked keys also light up there); set an action and add.
+                        // build row: members are filled by clicking keys on the board above
+                        // (they light up there); click a member chip — or the same board key
+                        // again — to drop it. Set an action and add.
                         HorizontalLayout {
-                            spacing: 8px;
+                            spacing: 6px;
                             alignment: start;
-                            Rectangle {
-                                width: ck1.preferred-width + 14px;
+                            if root.chord_keys.length == 0: Rectangle {
+                                width: chint.preferred-width + 14px;
                                 height: 28px;
                                 border-radius: 6px;
-                                background: root.chord_key1 != "" ? #3a2f14 : #11191d;
+                                background: #11191d;
                                 border-width: 1px;
-                                border-color: root.chord_key1 != "" ? #f0b429 : #2a3340;
-                                ck1 := Text {
+                                border-color: #2a3340;
+                                chint := Text {
                                     x: 7px;
                                     y: (parent.height - self.height) / 2;
-                                    text: root.chord_key1 != "" ? root.chord_key1 : "click key 1\u{2026}";
-                                    color: root.chord_key1 != "" ? #f0b429 : #7d8694;
+                                    text: "click 2+ keys on the board\u{2026}";
+                                    color: #7d8694;
                                     font-size: 13px;
-                                    font-weight: root.chord_key1 != "" ? 700 : 400;
-                                    font-family: "JetBrains Mono";
                                 }
                             }
-                            Text {
-                                text: "+";
-                                color: #7d8694;
-                                font-size: 14px;
-                                vertical-alignment: center;
-                            }
-                            Rectangle {
-                                width: ck2.preferred-width + 14px;
-                                height: 28px;
-                                border-radius: 6px;
-                                background: root.chord_key2 != "" ? #3a2f14 : #11191d;
-                                border-width: 1px;
-                                border-color: root.chord_key2 != "" ? #f0b429 : #2a3340;
-                                ck2 := Text {
-                                    x: 7px;
-                                    y: (parent.height - self.height) / 2;
-                                    text: root.chord_key2 != "" ? root.chord_key2 : "click key 2\u{2026}";
-                                    color: root.chord_key2 != "" ? #f0b429 : #7d8694;
-                                    font-size: 13px;
-                                    font-weight: root.chord_key2 != "" ? 700 : 400;
-                                    font-family: "JetBrains Mono";
+                            for k[i] in root.chord_keys: HorizontalLayout {
+                                spacing: 6px;
+                                if i > 0: Text {
+                                    text: "+";
+                                    color: #7d8694;
+                                    font-size: 14px;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle {
+                                    width: ckk.preferred-width + 28px;
+                                    height: 28px;
+                                    border-radius: 6px;
+                                    background: #3a2f14;
+                                    border-width: 1px;
+                                    border-color: #f0b429;
+                                    ckk := Text {
+                                        x: 7px;
+                                        y: (parent.height - self.height) / 2;
+                                        text: k;
+                                        color: #f0b429;
+                                        font-size: 13px;
+                                        font-weight: 700;
+                                        font-family: "JetBrains Mono";
+                                    }
+                                    Text {
+                                        x: parent.width - 16px;
+                                        y: (parent.height - self.height) / 2;
+                                        text: "\u{2715}";
+                                        color: #c98a2b;
+                                        font-size: 11px;
+                                    }
+                                    // click the chip (or the board key again) to drop it.
+                                    TouchArea {
+                                        clicked => {
+                                            root.toggle_chord_key(k);
+                                        }
+                                    }
                                 }
                             }
-                            // clear the two picked keys to start the chord over.
-                            if root.chord_key1 != "" || root.chord_key2 != "": IconButton {
+                            if root.chord_keys.length > 0: IconButton {
                                 wide: true;
                                 text: "\u{2715} clear";
                                 clicked => {
-                                    root.chord_key1 = "";
-                                    root.chord_key2 = "";
+                                    root.clear_chord_keys();
                                 }
                             }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
                             Text {
                                 text: "\u{2192}";
                                 color: #7d8694;
@@ -2597,8 +2613,6 @@ export component MainWindow inherits Window {
                                 }
                                 Text {
                                     text: root.picker_target == "tap" ? "\u{2192} tap"
-                                        : root.picker_target == "chord_key1" ? "\u{2192} chord key 1"
-                                        : root.picker_target == "chord_key2" ? "\u{2192} chord key 2"
                                         : root.picker_target == "chord_action" ? "\u{2192} chord action"
                                         : "\u{2192} binding";
                                     color: #6fc3cf;
@@ -2710,10 +2724,9 @@ export component MainWindow inherits Window {
                 live: root.live_connected && !root.edit_mode;
                 editing: root.edit_mode;
                 selected_phys: root.selected_phys;
-                // in chord mode a board click picks a chord member, not a binding target.
+                // in chord mode a board click picks a chord member, not a binding target;
+                // membership lights up via each cap's `chord_pick` (stamped in render_board).
                 chord_mode: root.edit_mode && root.board_mode == "chord";
-                chord_k1: root.chord_key1;
-                chord_k2: root.chord_key2;
                 key_clicked(phys) => {
                     root.select_key(phys);
                 }
