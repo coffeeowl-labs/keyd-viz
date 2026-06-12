@@ -358,13 +358,16 @@ impl EditSession {
     /// these with [`keydviz_core::GLOBAL_OPTIONS`] to render the options form, and shows
     /// any key not in that table as a generic row so nothing in the file is hidden.
     pub fn global_entries(&self) -> Vec<(String, String)> {
-        let Some(section) = self.edit.section("global") else { return Vec::new() };
         let mut out: Vec<(String, String)> = Vec::new();
-        for e in &section.entries {
-            if let EntryKind::Binding { key, val: Some(v), .. } = &e.kind {
-                // last-wins: a later assignment to the same key replaces the earlier.
-                out.retain(|(k, _)| k != key);
-                out.push((key.clone(), v.clone()));
+        // Fold across EVERY `[global]` block in file order (keyd is last-wins both within
+        // and across blocks), so a value set in a later block isn't hidden by an earlier.
+        for section in self.edit.sections.iter().filter(|s| s.name == "global") {
+            for e in &section.entries {
+                if let EntryKind::Binding { key, val: Some(v), .. } = &e.kind {
+                    // last-wins: a later assignment to the same key replaces the earlier.
+                    out.retain(|(k, _)| k != key);
+                    out.push((key.clone(), v.clone()));
+                }
             }
         }
         out
@@ -1185,6 +1188,27 @@ mod tests {
         // Missing name is rejected; clearing an absent option is a no-op.
         assert!(s.set_global("", "1").unwrap_err().contains("name"));
         assert!(!s.clear_global("oneshot_timeout"));
+    }
+
+    #[test]
+    fn global_folds_across_duplicate_sections_and_edits_the_last() {
+        // keyd is last-wins across [global] blocks too: reads fold all blocks, and an
+        // edit must land on the LAST block or it stays shadowed (a review finding).
+        let td = TempDir::new("global-dup");
+        let p = td.0.join("test.conf");
+        std::fs::write(
+            &p,
+            "[global]\nmacro_timeout = 100\n[global]\nmacro_timeout = 200\n[main]\na = b\n",
+        )
+        .unwrap();
+        let mut s = EditSession::open(&p).unwrap();
+        // The later block wins on read.
+        assert_eq!(s.global_entries(), vec![("macro_timeout".to_string(), "200".to_string())]);
+        // The edit lands on the winning (last) block, not the shadowed first one.
+        s.set_global("macro_timeout", "300").unwrap();
+        assert_eq!(s.global_entries(), vec![("macro_timeout".to_string(), "300".to_string())]);
+        assert!(s.diff().contains("+ macro_timeout = 300"));
+        assert!(s.diff().contains("- macro_timeout = 200"));
     }
 
     #[test]

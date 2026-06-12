@@ -1262,10 +1262,17 @@ fn main() -> Result<(), slint::PlatformError> {
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
                     let layers = edit_layer_choices(s);
                     let holds = hold_layer_choices(s);
+                    let chords = chord_rows_for_layer(s, &created);
                     refresh_warnings(&win, s); // defining a layer can clear an orphan
                     drop(sb);
                     win.set_edit_layers(model(layers));
                     win.set_hold_layers(model(holds));
+                    // The focused layer changed: refresh the chord list and drop any
+                    // half-built chord pair (it belonged to the previous layer's board).
+                    win.set_chord_rows(model(chords));
+                    win.set_chord_key1("".into());
+                    win.set_chord_key2("".into());
+                    win.set_chord_action("".into());
                     win.set_can_rename(renameable(&created));
                     win.set_edit_layer(created.into());
                     win.set_selected_phys("".into());
@@ -1343,10 +1350,16 @@ fn main() -> Result<(), slint::PlatformError> {
                     // Reselect the first surviving section (none → "" base board).
                     let next =
                         layers.first().map(|c| c.name.to_string()).unwrap_or_default();
+                    let chords = chord_rows_for_layer(s, &next);
                     refresh_warnings(&win, s); // a now-dangling ref becomes an orphan
                     drop(sb);
                     win.set_edit_layers(model(layers));
                     win.set_hold_layers(model(holds));
+                    // Focused layer changed: refresh chords, drop any half-built pair.
+                    win.set_chord_rows(model(chords));
+                    win.set_chord_key1("".into());
+                    win.set_chord_key2("".into());
+                    win.set_chord_action("".into());
                     win.set_can_rename(renameable(&next));
                     win.set_edit_layer(next.into());
                     win.set_selected_phys("".into());
@@ -1397,10 +1410,17 @@ fn main() -> Result<(), slint::PlatformError> {
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
                     let layers = edit_layer_choices(s);
                     let holds = hold_layer_choices(s);
+                    let chords = chord_rows_for_layer(s, &renamed);
                     refresh_warnings(&win, s); // following refs can clear an orphan
                     drop(sb);
                     win.set_edit_layers(model(layers));
                     win.set_hold_layers(model(holds));
+                    // The layer's name changed: refresh its chord list under the new name
+                    // and drop any half-built pair from before the rename.
+                    win.set_chord_rows(model(chords));
+                    win.set_chord_key1("".into());
+                    win.set_chord_key2("".into());
+                    win.set_chord_action("".into());
                     win.set_edit_layer(renamed.clone().into());
                     win.set_can_rename(renameable(&renamed));
                     // The selection's section changed name; reset the picked key.

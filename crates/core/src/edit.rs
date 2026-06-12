@@ -447,8 +447,11 @@ impl EditConfig {
     /// end of the file if the config has none yet. keyd accepts `[global]` anywhere, so
     /// appending round-trips cleanly; most real configs already carry one.
     pub fn global_section_mut(&mut self) -> &mut Section {
-        if self.sections.iter().any(|s| s.name == "global") {
-            return self.section_mut("global").expect("checked above");
+        // Last-wins: keyd applies `[global]` blocks in file order, so an edit must land
+        // on the LAST one (mirrors [`Self::target_or_create_section_mut`]); editing an
+        // earlier, shadowed block would silently do nothing.
+        if let Some(i) = self.sections.iter().rposition(|s| s.name == "global") {
+            return &mut self.sections[i];
         }
         self.append_section("global", SectionKind::Global)
     }
@@ -729,10 +732,16 @@ pub struct OrphanRef {
     pub layer: String,
 }
 
-/// Layer-activating functions whose sole argument is a layer name. The tap/hold family
-/// ([`crate::parser::TAPHOLD`]) also takes a layer as its *first* arg — but only when
-/// that arg isn't a modifier, which [`layer_refs`] guards.
-const LAYER_FNS: [&str; 4] = ["layer", "oneshot", "toggle", "swap"];
+/// Layer-activating functions whose **first** argument is a layer name — the plain
+/// forms (`layer`/`oneshot`/`toggle`/`swap`) and their `…m`/`…k` variants that take an
+/// extra macro/key after the layer (`layerm`/`oneshotm`/`oneshotk`/`swapm`/`togglem`,
+/// verified against keyd 2.6.0). The tap/hold family ([`crate::parser::TAPHOLD`]) also
+/// takes a layer first — but only when that arg isn't a modifier, which [`layer_refs`]
+/// guards. (`overloadi`'s first arg is an *action*, and `setlayout`'s is a *layout*, so
+/// both are deliberately excluded — rewriting them would corrupt a different namespace.)
+const LAYER_FNS: [&str; 9] = [
+    "layer", "oneshot", "toggle", "swap", "layerm", "oneshotm", "oneshotk", "swapm", "togglem",
+];
 
 /// The layer name a binding value activates via a well-known layer function, or `None`.
 /// Modifier targets (keyd's built-in modifier layers) and composite `a+b` targets are
@@ -1273,6 +1282,33 @@ mod tests {
         assert!(cfg.is_dirty());
         // No orphans: every reference followed the rename, and `shift` was never a ref.
         assert!(cfg.orphan_layer_refs().is_empty());
+    }
+
+    #[test]
+    fn rename_layer_covers_the_momentary_layer_variants() {
+        // The …m/…k variants take the layer as arg 0 just like the plain forms; a miss
+        // here would leave a dangling reference and report success (a config-corruption
+        // bug caught in review). (Nested layer refs inside an `overloadi` action arg are
+        // a separate, rarer gap — not rewritten here, but caught by `keyd check` at apply.)
+        let src = "[main]\na = layerm(nav, x)\nb = oneshotm(nav, x)\nc = oneshotk(nav, x)\n\
+                   d = swapm(nav, x)\ne = togglem(nav, x)\n[nav]\nh = left\n";
+        let mut cfg = EditConfig::parse(src);
+        assert_eq!(cfg.rename_layer("nav", "sym").unwrap(), 5);
+        assert_eq!(
+            cfg.serialize(),
+            "[main]\na = layerm(sym, x)\nb = oneshotm(sym, x)\nc = oneshotk(sym, x)\n\
+             d = swapm(sym, x)\ne = togglem(sym, x)\n[sym]\nh = left\n"
+        );
+        assert!(cfg.orphan_layer_refs().is_empty());
+    }
+
+    #[test]
+    fn orphan_scan_flags_a_missing_layer_via_a_momentary_variant() {
+        // The orphan net shares LAYER_FNS, so it must see these forms too.
+        let cfg = EditConfig::parse("[main]\na = togglem(gone, x)\n");
+        let orphans = cfg.orphan_layer_refs();
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].layer, "gone");
     }
 
     #[test]

@@ -1384,8 +1384,10 @@ export component MainWindow inherits Window {
                             }
                         }
                         // delete the selected layer (confirm-gated). Hidden once the
-                        // confirm bar (or rename field) is up, so it can't re-target.
-                        if root.edit_layer != "" && !root.editing_global && !root.new_layer_open && root.delete_prompt == "" && root.rename_target == "": Rectangle {
+                        // confirm bar (or rename field) is up, so it can't re-target. The
+                        // base board ("main") can't be deleted — it's keyd's root layer,
+                        // not a user layer (mirrors the rename chip's main exclusion).
+                        if root.edit_layer != "" && root.edit_layer != "main" && !root.editing_global && !root.new_layer_open && root.delete_prompt == "" && root.rename_target == "": Rectangle {
                             width: dell.preferred-width + 16px;
                             height: dell.preferred-height + 8px;
                             border-radius: 7px;
