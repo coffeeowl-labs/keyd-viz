@@ -1153,6 +1153,13 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
                 return;
             }
+            // Re-clicking the currently-selected key deselects it — back to the
+            // nothing-picked state (the only way out other than picking another key).
+            if phys == win.get_selected_phys() {
+                win.set_selected_phys("".into());
+                win.set_capture_armed(false);
+                return;
+            }
             let sb = session.borrow();
             let Some(s) = sb.as_ref() else { return };
             let layer = win.get_edit_layer().to_string();
