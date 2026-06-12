@@ -1858,7 +1858,9 @@ fn main() -> Result<(), slint::PlatformError> {
             let findings = keydviz_apply::scan::scan(bytes.as_bytes());
             let mut info = String::new();
             for f in &findings {
-                info.push_str(&format!("\u{26a0} {}\n", f.describe()));
+                if let Some(s) = applying::finding_summary(f) {
+                    info.push_str(&format!("\u{26a0} {s}\n"));
+                }
             }
             // One-level include closure scan (§5.3): a command()/macro() hiding in an
             // included file is invisible to the inline byte scan — read one level of
@@ -1868,7 +1870,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let included =
                 applying::scan_includes(&findings, config_dir, applying::keyd_data_dir());
             for inc in &included {
-                info.push_str(&format!("\u{26a0} {}\n", inc.describe()));
+                info.push_str(&format!("\u{26a0} {}\n", inc.summary()));
             }
             if let Some(w) = s.stale_warning() {
                 info.push_str(&format!("\u{26a0} {w}\n"));

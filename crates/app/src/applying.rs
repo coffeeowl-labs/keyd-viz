@@ -72,15 +72,37 @@ pub struct IncludedFinding {
 }
 
 impl IncludedFinding {
-    /// A pre-flight line naming the include, the resolved file, and the construct.
-    pub fn describe(&self) -> String {
-        format!(
-            "included `{}` ({}) {}",
-            self.include_arg,
-            self.file.display(),
-            self.finding.describe(),
-        )
+    /// Plain-language apply-confirmation line — what the user reads, so it names the
+    /// file they wrote (`include foo`) rather than the resolved path, and says what it
+    /// does, not which token matched.
+    pub fn summary(&self) -> String {
+        use keydviz_apply::scan::Finding;
+        let what = match self.finding {
+            Finding::Macro { .. } => "sends keystrokes for you",
+            _ => "runs a shell command as root",
+        };
+        format!("The included file \u{201c}{}\u{201d} {what}.", self.include_arg)
     }
+}
+
+/// Plain-language apply-confirmation line for an inline scan finding. The app owns
+/// user-facing copy; [`keydviz_apply::scan::Finding::describe`] is the machine
+/// protocol. `None` for a normal `include` — benign on its own, and the contents it
+/// pulls in are scanned and surfaced separately ([`IncludedFinding::summary`]).
+pub fn finding_summary(f: &keydviz_apply::scan::Finding) -> Option<String> {
+    use keydviz_apply::scan::Finding;
+    Some(match f {
+        Finding::Command { line } => format!(
+            "Runs a shell command when a key is pressed (line {line}) \u{2014} commands run as root."
+        ),
+        Finding::Macro { line } => {
+            format!("Sends keystrokes for you when a key is pressed (line {line}).")
+        }
+        Finding::Include { .. } => return None,
+        Finding::SuspectInclude { arg, .. } => format!(
+            "Skips the include \u{201c}{arg}\u{201d} \u{2014} keyd only loads includes from its own folders."
+        ),
+    })
 }
 
 /// Resolve an `include` argument the way keyd does for the lookup — the config's own
@@ -551,7 +573,26 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].include_arg, "common");
         assert!(found[0].file.ends_with("conf/common"));
-        assert!(found[0].describe().contains("command line 2"), "{}", found[0].describe());
+        assert!(matches!(found[0].finding, keydviz_apply::scan::Finding::Command { line: 2 }));
+        // The user-facing line names the include and what it does — no path, no token.
+        let s = found[0].summary();
+        assert_eq!(s, "The included file \u{201c}common\u{201d} runs a shell command as root.");
+    }
+
+    #[test]
+    fn finding_summaries_are_plain_language() {
+        use keydviz_apply::scan::Finding;
+        // command/macro read as actions, with the line number; no `command(` token.
+        let cmd = finding_summary(&Finding::Command { line: 7 }).unwrap();
+        assert!(cmd.contains("shell command") && cmd.contains("line 7") && cmd.contains("root"));
+        assert!(!cmd.contains("command("));
+        let mac = finding_summary(&Finding::Macro { line: 3 }).unwrap();
+        assert!(mac.contains("keystrokes") && mac.contains("line 3"));
+        // A normal include is benign on its own → not surfaced as a warning.
+        assert!(finding_summary(&Finding::Include { line: 1, arg: "colemak".into() }).is_none());
+        // A suspect include explains why keyd will ignore it.
+        let sus = finding_summary(&Finding::SuspectInclude { line: 1, arg: "/etc/x".into() }).unwrap();
+        assert!(sus.contains("Skips") && sus.contains("/etc/x"));
     }
 
     #[test]
