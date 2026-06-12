@@ -67,9 +67,55 @@ pub fn base_legend(keyname: &str) -> String {
     keyname.to_string()
 }
 
+/// Compact legend for one macro step, reusing the board's own glyphs so a step
+/// reads the same as that key/combo would on its own (`enter` → `⏎`, `C-t` → `⌃T`).
+fn macro_step(tok: &crate::macros::MacroToken) -> String {
+    use crate::macros::MacroToken;
+    match tok {
+        MacroToken::Key(k) => base_legend(k),
+        MacroToken::Delay(n) => format!("{n}ms"),
+        MacroToken::Text(t) => {
+            if t.chars().count() > 12 {
+                format!("{}\u{2026}", t.chars().take(11).collect::<String>())
+            } else {
+                t.clone()
+            }
+        }
+        MacroToken::Chord { mods, keys } => {
+            let mut s = String::new();
+            for m in mods {
+                s.push(*m);
+                s.push('-');
+            }
+            s.push_str(&keys.join("+"));
+            prettify(&s)
+        }
+    }
+}
+
+/// Render a `macro(...)`/`macro2(...)` value as a compact cap legend: a keyboard
+/// glyph plus the first step, with `…` when there are more steps. Falls back to a
+/// bare "⌨ macro" when the macro is one we can't decompose.
+fn macro_legend(value: &str) -> String {
+    match crate::macros::Macro::parse(value) {
+        Some(m) => match m.tokens.first() {
+            None => "\u{2328}".to_string(), // ⌨ — an empty macro
+            Some(first) => {
+                let more = if m.tokens.len() > 1 { "\u{2026}" } else { "" };
+                format!("\u{2328} {}{}", macro_step(first), more)
+            }
+        },
+        None => "\u{2328} macro".to_string(),
+    }
+}
+
 /// Turn a keyd binding value into a human glyph, handling stacked `S-/C-/A-/M-/G-`
 /// modifier prefixes (and the special shifted-symbol case for a lone `S-`).
 pub fn prettify(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.starts_with("macro(") || trimmed.starts_with("macro2(") {
+        return macro_legend(trimmed);
+    }
     let chars: Vec<char> = value.chars().collect();
     let mut i = 0;
     let mut mods: Vec<char> = Vec::new();
@@ -89,4 +135,37 @@ pub fn prettify(value: &str) -> String {
         return format!("{}{}", glyphs, base_legend(&base));
     }
     base_legend(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prettify;
+
+    #[test]
+    fn macro_shows_glyph_and_first_step() {
+        // First step is a Ctrl+t chord → board glyph form, then ellipsis for the rest.
+        assert_eq!(prettify("macro(C-t 100ms google.com enter)"), "\u{2328} \u{2303}T\u{2026}");
+        // A single-step macro has no ellipsis.
+        assert_eq!(prettify("macro(enter)"), "\u{2328} \u{23ce}");
+        // First step is typed text.
+        assert_eq!(prettify("macro(Hello space World)"), "\u{2328} Hello\u{2026}");
+    }
+
+    #[test]
+    fn macro2_renders_like_macro() {
+        assert_eq!(prettify("macro2(400, 50, macro(Hello space World))"), "\u{2328} Hello\u{2026}");
+    }
+
+    #[test]
+    fn unmodelable_macro_falls_back_to_generic_glyph() {
+        assert_eq!(prettify("macro(x macro(y))"), "\u{2328} macro");
+    }
+
+    #[test]
+    fn non_macro_values_are_unaffected() {
+        assert_eq!(prettify("esc"), "Esc");
+        assert_eq!(prettify("C-t"), "\u{2303}T");
+        // A binding to the literal `macro` key (no paren) is not a macro action.
+        assert_eq!(prettify("macro"), "macro");
+    }
 }
