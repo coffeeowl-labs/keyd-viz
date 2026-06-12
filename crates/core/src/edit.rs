@@ -340,6 +340,26 @@ impl EditConfig {
         })
     }
 
+    /// Like [`Self::target_section_mut`], but appends an empty `[main]` when the config
+    /// declares no base board — so binding a key on a config whose `[main]` lives in an
+    /// `include` (or that has none at all) just works instead of erroring. Only `"main"`
+    /// is materialized: it's the base board the GUI always shows even when the file
+    /// carries no `[main]`. A named layer is only ever shown when its section already
+    /// exists, so a missing one is a bad call, not a board to create → `None`. Mirrors
+    /// [`Self::global_section_mut`].
+    pub fn target_or_create_section_mut(&mut self, layer: &str) -> Option<&mut Section> {
+        if let Some(i) = self.sections.iter().rposition(|s| {
+            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
+                && s.base_name().trim() == layer
+        }) {
+            return Some(&mut self.sections[i]);
+        }
+        if layer != "main" {
+            return None;
+        }
+        Some(self.append_section("main", SectionKind::Main))
+    }
+
     /// Make `key` transparent on the `layer` board: remove its binding from
     /// **every** layer-bearing section whose base name is `layer`. keyd merges
     /// duplicate sections (and `[nav]` / `[nav:C]` both feed the "nav" board) and

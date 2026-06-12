@@ -125,11 +125,12 @@ impl EditSession {
     }
 
     /// Bind `key = val` on the board for `layer` (`"main"` for the base board).
-    /// `Err` names the reason (no such section — section creation is E2).
+    /// Creates the `[layer]` section if the config doesn't declare one locally
+    /// (e.g. its bindings live in an `include`), so the bind always lands.
     pub fn set_binding(&mut self, layer: &str, key: &str, val: &str) -> Result<(), String> {
         let section = self
             .edit
-            .target_section_mut(layer)
+            .target_or_create_section_mut(layer)
             .ok_or_else(|| format!("this config has no [{layer}] section"))?;
         section.set_or_add_binding(key, val);
         Ok(())
@@ -178,7 +179,7 @@ impl EditSession {
         let th = TapHold::compose(existing.as_ref(), target.to_string(), tap, feel);
         let section = self
             .edit
-            .target_section_mut(layer)
+            .target_or_create_section_mut(layer)
             .ok_or_else(|| format!("this config has no [{layer}] section"))?;
         section.set_or_add_binding(key, &th.serialize());
         Ok(())
@@ -234,7 +235,7 @@ impl EditSession {
         let canon = canonical_chord(&new_key);
         let section = self
             .edit
-            .target_section_mut(layer)
+            .target_or_create_section_mut(layer)
             .ok_or_else(|| format!("this config has no [{layer}] section"))?;
         // Rewrite an existing chord line (any order) in place, else append a new one.
         let existing = section.entries.iter().find_map(|e| match &e.kind {
@@ -755,6 +756,25 @@ mod tests {
     }
 
     #[test]
+    fn bind_on_a_config_without_main_creates_it() {
+        // A config whose [main] lives entirely in an include (or that has no [main]
+        // at all) still shows the base board — binding a key must create the [main]
+        // section rather than erroring "no [main]" (the include-scan test scenario).
+        let td = TempDir::new("nomain-bind");
+        let p = td.0.join("inc.conf");
+        std::fs::write(&p, "[ids]\n*\n\ninclude shared\n").unwrap();
+        let mut s = EditSession::open(&p).unwrap();
+        s.set_binding("main", "a", "b").unwrap();
+        assert_eq!(s.current_binding("main", "a").as_deref(), Some("b"));
+        let out = s.serialized();
+        assert!(out.contains("[main]"), "appended a [main] section");
+        assert!(out.contains("include shared"), "preserved the include directive");
+        // tap/hold takes the same path.
+        s.set_tap_hold("main", "f", "nav", Some("f".into()), None).unwrap();
+        assert!(s.current_binding("main", "f").is_some());
+    }
+
+    #[test]
     fn add_layer_then_edit_it() {
         let td = TempDir::new("addlayer");
         let mut s = session(&td);
@@ -988,11 +1008,13 @@ mod tests {
         let mut s = session(&td);
         assert!(s.set_chord("main", "j", "j", "esc").unwrap_err().contains("different"));
         assert!(s.set_chord("main", "j", "k", "  ").unwrap_err().contains("action"));
-        // No [main] section at all → a named error.
+        // No [main] section at all → setting a chord creates one (mirrors set_binding).
         let p = td.0.join("nomain.conf");
         std::fs::write(&p, "[ids]\n*\n\n[nav]\nh = left\n").unwrap();
         let mut s2 = EditSession::open(&p).unwrap();
-        assert!(s2.set_chord("main", "j", "k", "esc").unwrap_err().contains("[main]"));
+        s2.set_chord("main", "j", "k", "esc").unwrap();
+        assert_eq!(s2.chords("main"), vec![("j+k".to_string(), "esc".to_string())]);
+        assert!(s2.serialized().contains("[main]"));
     }
 
     #[test]
