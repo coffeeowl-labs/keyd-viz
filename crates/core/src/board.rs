@@ -101,7 +101,15 @@ impl Sheet {
         // Non-game layers in declaration order, then game last (matches the
         // original render order).
         for layer in &cfg.layers {
-            if layer.name != "game" {
+            if layer.name == "game" {
+                continue;
+            }
+            // A `[a+b]` composite is live only while *both* constituents are held, so it
+            // renders as an overlay of them (design doc §12) rather than a standalone
+            // board showing just its own keys.
+            if layer.name.contains('+') {
+                boards.push(build_composite(cfg, layer, geom));
+            } else {
                 boards.push(build_layer(cfg, layer, geom));
             }
         }
@@ -496,6 +504,90 @@ fn build_layer(cfg: &Config, layer: &Layer, geom: &Geometry) -> Board {
     }
 }
 
+/// Build a composite layer's board (`[nav+sym]`): its bindings are live only while
+/// *all* its constituent layers are held at once, so rendering only the section's own
+/// overrides (as [`build_layer`] would) hides that nav's and sym's bindings are *also*
+/// active — the "orphan layer" look (design doc §12). Instead overlay the constituents:
+/// every key the held stack affects shows its effective binding, tinted by the layer
+/// that sets it (nav-blue, sym-purple, the combo's own overrides in the remap accent),
+/// so the picture matches what the keyboard does while you hold the whole stack.
+fn build_composite(cfg: &Config, layer: &Layer, geom: &Geometry) -> Board {
+    let name = &layer.name;
+    let own_accent = accent_for(name).to_string();
+    // Constituents in name order (`nav+sym` → [nav, sym]). For a key two of them bind,
+    // the later one wins (keyd's true precedence is runtime activation order — config
+    // order is the faithful static proxy); the composite's own override beats them all.
+    let parts: Vec<&str> = name.split('+').map(str::trim).filter(|p| !p.is_empty()).collect();
+    // Each constituent's hold key (what you press to engage it) + its accent — drives
+    // the "hold X + Y" header and the per-cap HOLD badge.
+    let holders: Vec<(String, String)> = parts
+        .iter()
+        .filter_map(|p| {
+            cfg.holds.iter().find(|h| &h.target == p).map(|h| (h.key.clone(), accent_for(p).to_string()))
+        })
+        .collect();
+    let how = if holders.is_empty() {
+        String::new()
+    } else {
+        let keys = holders.iter().map(|(k, _)| base_legend(k)).collect::<Vec<_>>().join(" + ");
+        format!("hold {keys}")
+    };
+
+    let mut keys = Vec::new();
+    for slot in &geom.slots {
+        let Some(nm) = slot.key.as_deref() else {
+            let mut blank = cap_at(slot, "");
+            blank.state = KeyState::Dim;
+            keys.push(blank);
+            continue;
+        };
+        let mut cap = cap_at(slot, nm);
+        // The effective binding for this key when the whole stack is held, with the
+        // accent of the layer it came from: the composite's own override first, else
+        // the last constituent (name order) that binds it.
+        let bound: Option<(&str, String)> = match layer.get(nm) {
+            Some(v) => Some((v, own_accent.clone())),
+            None => parts
+                .iter()
+                .rev()
+                .find_map(|p| cfg.layer(p).and_then(|l| l.get(nm)).map(|v| (v, accent_for(p).to_string()))),
+        };
+        if let Some((val, accent)) = bound {
+            cap.label = prettify(val);
+            cap.emphasized = true;
+            cap.ghost = base_legend(nm);
+            cap.accent = accent;
+            cap.key = output_chord(val).unwrap_or_default();
+        } else if let Some((_, accent)) = holders.iter().find(|(k, _)| k == nm) {
+            // A key held to engage one of the constituents — emits nothing, so no glow.
+            cap.label = base_legend(nm);
+            cap.accent = accent.clone();
+            cap.state = KeyState::Hold;
+            cap.badge_left = Some(Badge { text: "HOLD".to_string(), color: accent.clone() });
+            cap.key = String::new();
+        } else {
+            cap.label = base_legend(nm);
+            cap.state = KeyState::Dim;
+        }
+        // The composite's own chords (`j+k = …` under `[nav+sym]`) badge their members.
+        if in_layer_combo(layer, nm) {
+            cap.badge_right = Some(Badge { text: "\u{2295}".to_string(), color: own_accent.clone() });
+        }
+        keys.push(cap);
+    }
+
+    Board {
+        is_base: false,
+        title: name.to_uppercase(),
+        accent: own_accent,
+        how,
+        hint: "live only while all parts are held \u{2014} each key tinted by the layer that sets it"
+            .to_string(),
+        keys,
+        extent: geom.extent(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,6 +604,49 @@ mod tests {
 
     fn cap_named<'a>(board: &'a Board, name: &str) -> &'a KeyCap {
         board.keys.iter().find(|c| c.phys == name).expect("slot present")
+    }
+
+    #[test]
+    fn composite_board_overlays_its_constituents() {
+        // [nav+sym] must render as an overlay of nav + sym (not a standalone "orphan"
+        // board of only its own keys): a key nav binds shows in nav's accent, a key sym
+        // binds in sym's, the combo's own key in the remap accent, base keys stay dim.
+        let geom = Geometry::from_rows(&[&[
+            ("a", 1.0),
+            ("b", 1.0),
+            ("c", 1.0),
+            ("d", 1.0),
+            ("capslock", 1.0),
+            ("tab", 1.0),
+        ]]);
+        let cfg = crate::parser::parse_text(
+            "[ids]\n*\n\n[main]\ncapslock = overload(nav, esc)\ntab = overload(sym, tab)\n\n\
+             [nav]\na = left\n\n[sym]\nb = 1\n\n[nav+sym]\nc = f1\n",
+        );
+        let layer = cfg.layer("nav+sym").expect("composite layer parsed");
+        let board = build_composite(&cfg, layer, &geom);
+
+        // The composite's own key: emphasized, in the remap accent.
+        let c = cap_named(&board, "c");
+        assert!(c.emphasized, "composite key emphasized");
+        assert_eq!(c.accent, REMAP_ACCENT);
+        assert_eq!(c.label, prettify("f1"));
+        // Inherited from nav → nav's accent, present (not dim).
+        let a = cap_named(&board, "a");
+        assert!(a.emphasized && a.state != KeyState::Dim);
+        assert_eq!(a.accent, accent_for("nav"));
+        // Inherited from sym → sym's accent.
+        let b = cap_named(&board, "b");
+        assert_eq!(b.accent, accent_for("sym"));
+        // A key neither layer touches stays dim base.
+        let d = cap_named(&board, "d");
+        assert_eq!(d.state, KeyState::Dim);
+        assert!(!d.emphasized);
+        // Both constituents' hold keys are flagged, and the header names them.
+        assert_eq!(cap_named(&board, "capslock").state, KeyState::Hold);
+        assert_eq!(cap_named(&board, "tab").state, KeyState::Hold);
+        assert!(board.how.contains(&base_legend("capslock")));
+        assert!(board.how.contains(&base_legend("tab")));
     }
 
     #[test]
