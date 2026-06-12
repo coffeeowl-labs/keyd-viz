@@ -16,7 +16,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use keydviz_core::edit::{starter_config, EditConfig, EntryKind, Section, SectionKind};
-use keydviz_core::{canonical_chord, is_chord_key, parser, round_trips, Behavior, Config, TapHold};
+use keydviz_core::{
+    canonical_chord, is_chord_key, parser, round_trips, Behavior, Config, Macro, TapHold,
+};
 
 /// Does `section` belong to the layer named `layer`? `"main"` matches the base
 /// (`[main]`); any other name matches its layer/composite section(s), including a
@@ -195,6 +197,57 @@ impl EditSession {
             .target_or_create_section_mut(layer)
             .ok_or_else(|| format!("this config has no [{layer}] section"))?;
         section.set_or_add_binding(key, &th.serialize());
+        Ok(())
+    }
+
+    /// The selected key's binding decomposed as a structured macro, if it's a
+    /// `macro(...)`/`macro2(...)` we can model losslessly — so the panel can show
+    /// the token-list builder instead of raw text. `None` when the key is unbound,
+    /// isn't a macro, or is a macro shape we don't model (nested, literal parens,
+    /// exotic `macro2` args), which keeps it editable as raw text and clobber-safe.
+    pub fn current_macro(&self, layer: &str, key: &str) -> Option<Macro> {
+        let rhs = self.current_binding(layer, key)?;
+        Macro::parse(&rhs)
+    }
+
+    /// Write `mac` as the binding for `key` on `layer`, serialized to keyd macro
+    /// syntax. Creates the `[layer]` section if the config doesn't declare one
+    /// locally (same as [`Self::set_binding`]).
+    ///
+    /// Two guards keep this faithful: (1) it refuses to overwrite an *existing*
+    /// macro that [`Macro::parse`] can't decompose — re-setting would silently
+    /// discard the original's exotic form (the `overloadi` philosophy); (2) it
+    /// refuses to write a macro whose serialization doesn't survive our own
+    /// round-trip, which catches anything keyd can't faithfully represent (e.g. a
+    /// literal `(`/`)` that slipped into a text step — keyd has no escape for it).
+    pub fn set_macro(&mut self, layer: &str, key: &str, mac: &Macro) -> Result<(), String> {
+        if mac.tokens.is_empty() {
+            return Err("a macro needs at least one step".to_string());
+        }
+        // Don't recompose over a macro we couldn't decompose in the first place.
+        if let Some(cur) = self.current_binding(layer, key) {
+            if matches!(parser::leading_fn(&cur), Some("macro") | Some("macro2"))
+                && Macro::parse(&cur).is_none()
+            {
+                return Err("this key uses an advanced macro form keyd-viz can't edit \u{2014} \
+                            switch to simple mode to edit it as text"
+                    .to_string());
+            }
+        }
+        // Self-round-trip guard: the serialized macro must re-parse and re-serialize
+        // identically, else it holds something keyd can't represent (a literal paren).
+        let rhs = mac.serialize();
+        let stable = Macro::parse(&rhs).is_some_and(|m| m.serialize() == rhs);
+        if !stable {
+            return Err("this macro has text keyd can\u{2019}t type \u{2014} remove any \
+                        parentheses and try again"
+                .to_string());
+        }
+        let section = self
+            .edit
+            .target_or_create_section_mut(layer)
+            .ok_or_else(|| format!("this config has no [{layer}] section"))?;
+        section.set_or_add_binding(key, &rhs);
         Ok(())
     }
 
@@ -1168,5 +1221,86 @@ mod tests {
             (None, None) => {} // no keyd in PATH
             other => panic!("inconsistent keyd availability: {other:?}"),
         }
+    }
+
+    #[test]
+    fn macro_round_trips_through_the_session() {
+        use keydviz_core::MacroToken;
+        let td = TempDir::new("macro-rt");
+        let mut s = session(&td);
+        let mac = Macro {
+            tokens: vec![
+                MacroToken::Chord { mods: vec!['C'], keys: vec!["t".into()] },
+                MacroToken::Delay(100),
+                MacroToken::Text("google.com".into()),
+                MacroToken::Key("enter".into()),
+            ],
+            repeat: None,
+        };
+        s.set_macro("main", "capslock", &mac).unwrap();
+        assert_eq!(
+            s.current_binding("main", "capslock").as_deref(),
+            Some("macro(C-t 100ms google.com enter)")
+        );
+        // Read back as a structured macro.
+        assert_eq!(s.current_macro("main", "capslock"), Some(mac));
+    }
+
+    #[test]
+    fn set_macro_creates_layer_section_and_supports_macro2() {
+        let td = TempDir::new("macro-mk");
+        let mut s = session(&td);
+        // `nav` has no local [nav] for a new key here? It does (h = left), so use it.
+        let mac = Macro {
+            tokens: vec![keydviz_core::MacroToken::Key("space".into())],
+            repeat: Some((400, 50)),
+        };
+        s.set_macro("nav", "j", &mac).unwrap();
+        assert_eq!(
+            s.current_binding("nav", "j").as_deref(),
+            Some("macro2(400, 50, macro(space))")
+        );
+    }
+
+    #[test]
+    fn current_macro_none_for_non_macro() {
+        let td = TempDir::new("macro-none");
+        let s = session(&td);
+        assert!(s.current_macro("main", "capslock").is_none()); // = esc, a plain remap
+        assert!(s.current_macro("main", "nonexistent").is_none());
+    }
+
+    #[test]
+    fn set_macro_refuses_empty_and_literal_paren() {
+        use keydviz_core::MacroToken;
+        let td = TempDir::new("macro-guard");
+        let mut s = session(&td);
+        // Empty.
+        assert!(s.set_macro("main", "capslock", &Macro { tokens: vec![], repeat: None }).is_err());
+        // A literal '(' in text can't be represented — refuse, don't write garbage.
+        let bad = Macro {
+            tokens: vec![MacroToken::Text("a(b".into())],
+            repeat: None,
+        };
+        assert!(s.set_macro("main", "capslock", &bad).is_err());
+        // The original binding is untouched.
+        assert_eq!(s.current_binding("main", "capslock").as_deref(), Some("esc"));
+    }
+
+    #[test]
+    fn set_macro_refuses_to_clobber_an_unmodelable_macro() {
+        // A nested macro keyd accepts but we don't decompose: editing must refuse so
+        // we never silently rewrite (and lose) the original.
+        let td = TempDir::new("macro-clobber");
+        let p = td.0.join("test.conf");
+        std::fs::write(&p, "[ids]\n*\n[main]\na = macro(b macro(c))\n").unwrap();
+        let mut s = EditSession::open(&p).unwrap();
+        assert!(s.current_macro("main", "a").is_none()); // not decomposable
+        let new = Macro {
+            tokens: vec![keydviz_core::MacroToken::Key("x".into())],
+            repeat: None,
+        };
+        assert!(s.set_macro("main", "a", &new).is_err());
+        assert_eq!(s.current_binding("main", "a").as_deref(), Some("macro(b macro(c))"));
     }
 }

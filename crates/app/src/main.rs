@@ -23,7 +23,7 @@ use devices::InputDevice;
 use keydviz_core::board::{KeyCap, KeyState};
 use keydviz_core::{
     catalog, find_conflicts, import_qmk, parse_file, parse_text, Behavior, Config, DeviceFlags,
-    Geometry, IdConflict, Ids, MatchKind, Sheet, MODIFIERS,
+    Geometry, IdConflict, Ids, Macro, MacroToken, MatchKind, Sheet, MODIFIERS,
 };
 use slint::{Brush, Color, ModelRc, VecModel};
 
@@ -916,6 +916,10 @@ fn main() -> Result<(), slint::PlatformError> {
     // Edit mode (Phase 6 E1): one optional session; `Some(_)` == editing. Created here
     // so the keyboard switcher and the config-reload timer can respect it.
     let session: SharedSession = Rc::new(RefCell::new(None));
+    // Macro editor draft: the in-progress list of steps for the selected key, held in
+    // Rust as the real core tokens and rebuilt into the `macro_rows` UI model on each
+    // change. Committed to the config only on "set macro" (`apply_macro`).
+    let macro_draft: Rc<RefCell<Vec<MacroToken>>> = Rc::new(RefCell::new(Vec::new()));
     // One-click apply (E2): the event handler runs out of `invoke_from_event_loop`
     // closures that can't capture these Rcs across the thread hop — park them.
     APPLY.with(|a| {
@@ -1134,6 +1138,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let weak = win.as_weak();
         let session = session.clone();
+        let macro_draft = macro_draft.clone();
         win.on_select_key(move |phys| {
             let Some(win) = weak.upgrade() else { return };
             // In chord mode a board click fills the chord builder's two key slots
@@ -1165,9 +1170,16 @@ fn main() -> Result<(), slint::PlatformError> {
             let layer = win.get_edit_layer().to_string();
             let cur = s.current_binding(&layer, &phys).unwrap_or_default();
             seed_tap_hold(&win, s, &layer, &phys);
+            seed_macro(&win, s, &layer, &phys, &macro_draft);
             // Default the editor mode to match the key's current binding: an existing
-            // tap/hold opens in tap/hold mode, anything else in simple mode.
-            let mode = if win.get_selected_is_tap_hold() { "taphold" } else { "simple" };
+            // macro opens in macro mode, a tap/hold in tap/hold mode, else simple.
+            let mode = if win.get_selected_is_macro() {
+                "macro"
+            } else if win.get_selected_is_tap_hold() {
+                "taphold"
+            } else {
+                "simple"
+            };
             win.set_key_mode(mode.into());
             // Clicking a key returns from the global options form.
             win.set_editing_global(false);
@@ -1519,6 +1531,182 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
+    // Macro editor: build an ordered step list for the selected key, then commit it as
+    // a macro(...)/macro2(...) binding on "set macro". The draft tokens live in
+    // `macro_draft`; every mutation rebuilds the `macro_rows` view model.
+    {
+        let weak = win.as_weak();
+        let macro_draft = macro_draft.clone();
+        win.on_macro_add_text(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let text = win.get_macro_text_input().to_string();
+            if text.is_empty() {
+                return;
+            }
+            macro_draft.borrow_mut().push(MacroToken::Text(text));
+            win.set_macro_text_input("".into());
+            push_macro_rows(&win, &macro_draft);
+        });
+    }
+    {
+        let weak = win.as_weak();
+        let macro_draft = macro_draft.clone();
+        win.on_macro_add_delay(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let raw = win.get_macro_delay_input().to_string();
+            match raw.trim().parse::<u16>() {
+                Ok(ms) if ms < 1024 => {
+                    macro_draft.borrow_mut().push(MacroToken::Delay(ms));
+                    win.set_macro_delay_input("".into());
+                    win.set_edit_banner("".into());
+                    push_macro_rows(&win, &macro_draft);
+                }
+                _ => win.set_edit_banner(
+                    "\u{26a0} a pause must be a whole number of milliseconds under 1024".into(),
+                ),
+            }
+        });
+    }
+    {
+        let weak = win.as_weak();
+        let macro_draft = macro_draft.clone();
+        win.on_macro_add_chord(move || {
+            let Some(win) = weak.upgrade() else { return };
+            let key = win.get_macro_chord_key().trim().to_string();
+            if key.is_empty() {
+                win.set_edit_banner("\u{26a0} pick a key for the chord first".into());
+                return;
+            }
+            if !keydviz_core::keycodes::is_keycode(&key) {
+                win.set_edit_banner(
+                    format!(
+                        "\u{26a0} \u{201c}{key}\u{201d} isn\u{2019}t a key name \u{2014} use pick\u{2026} to choose one"
+                    )
+                    .into(),
+                );
+                return;
+            }
+            let mut mods = Vec::new();
+            if win.get_macro_chord_c() {
+                mods.push('C');
+            }
+            if win.get_macro_chord_m() {
+                mods.push('M');
+            }
+            if win.get_macro_chord_a() {
+                mods.push('A');
+            }
+            if win.get_macro_chord_s() {
+                mods.push('S');
+            }
+            if win.get_macro_chord_g() {
+                mods.push('G');
+            }
+            macro_draft
+                .borrow_mut()
+                .push(MacroToken::Chord { mods, keys: vec![key] });
+            win.set_macro_chord_key("".into());
+            win.set_macro_chord_c(false);
+            win.set_macro_chord_m(false);
+            win.set_macro_chord_a(false);
+            win.set_macro_chord_s(false);
+            win.set_macro_chord_g(false);
+            win.set_edit_banner("".into());
+            push_macro_rows(&win, &macro_draft);
+        });
+    }
+    {
+        let weak = win.as_weak();
+        let macro_draft = macro_draft.clone();
+        win.on_macro_remove(move |idx| {
+            let Some(win) = weak.upgrade() else { return };
+            let i = idx as usize;
+            {
+                let mut d = macro_draft.borrow_mut();
+                if i < d.len() {
+                    d.remove(i);
+                }
+            }
+            push_macro_rows(&win, &macro_draft);
+        });
+    }
+    {
+        let weak = win.as_weak();
+        let macro_draft = macro_draft.clone();
+        win.on_macro_move(move |idx, delta| {
+            let Some(win) = weak.upgrade() else { return };
+            let j = idx + delta;
+            {
+                let mut d = macro_draft.borrow_mut();
+                let i = idx as usize;
+                if i < d.len() && j >= 0 && (j as usize) < d.len() {
+                    d.swap(i, j as usize);
+                }
+            }
+            push_macro_rows(&win, &macro_draft);
+        });
+    }
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        let macro_draft = macro_draft.clone();
+        win.on_apply_macro(move || {
+            let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
+            let layer = win.get_edit_layer().to_string();
+            let phys = win.get_selected_phys().to_string();
+            if phys.is_empty() {
+                return;
+            }
+            let tokens = macro_draft.borrow().clone();
+            if tokens.is_empty() {
+                win.set_edit_banner("\u{26a0} add at least one step".into());
+                return;
+            }
+            // Repeat (macro2) needs both ms values; reject a half-filled form rather
+            // than guess.
+            let repeat = if win.get_macro_repeat_on() {
+                let to = win.get_macro_repeat_timeout().to_string();
+                let rp = win.get_macro_repeat_count().to_string();
+                match (to.trim().parse::<u32>(), rp.trim().parse::<u32>()) {
+                    (Ok(t), Ok(r)) => Some((t, r)),
+                    _ => {
+                        win.set_edit_banner(
+                            "\u{26a0} repeat needs two whole-millisecond numbers".into(),
+                        );
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+            let mac = Macro { tokens, repeat };
+            let mut sb = session.borrow_mut();
+            let Some(s) = sb.as_mut() else { return };
+            match s.set_macro(&layer, &phys, &mac) {
+                Ok(()) => {
+                    let cur = s.current_binding(&layer, &phys).unwrap_or_default();
+                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    // Reseed from the stored binding so the panel shows the canonical
+                    // (possibly normalized) form that was actually written.
+                    seed_macro(&win, s, &layer, &phys, &macro_draft);
+                    refresh_warnings(&win, s); // a macro can't orphan a layer, but keep parity
+                    drop(sb);
+                    win.set_edit_current(cur.clone().into());
+                    win.set_edit_value(cur.into());
+                    win.set_edit_dirty(dirty);
+                    win.set_capture_armed(false);
+                    win.set_edit_banner("".into());
+                    refresh_preview(&win, &srcs, &path, cfg);
+                }
+                Err(e) => win.set_edit_banner(format!("\u{26a0} {e}").into()),
+            }
+        });
+    }
+
     // Arm/disarm press-to-capture; the next live key-down becomes the value (consumed
     // in [`handle_key_event`]).
     {
@@ -1559,12 +1747,19 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     {
         let weak = win.as_weak();
+        let macro_draft = macro_draft.clone();
         win.on_pick_key(move |name| {
             let Some(win) = weak.upgrade() else { return };
             // Route to the field the picker was opened for; never auto-apply.
             match win.get_picker_target().as_str() {
                 "tap" => win.set_th_tap(name),
                 "chord_action" => win.set_chord_action(name),
+                // A macro "key" step is appended straight to the draft list.
+                "macro_token" => {
+                    macro_draft.borrow_mut().push(MacroToken::Key(name.to_string()));
+                    push_macro_rows(&win, &macro_draft);
+                }
+                "macro_chord_key" => win.set_macro_chord_key(name),
                 _ => win.set_edit_value(name),
             }
             win.set_picker_open(false);
@@ -2134,6 +2329,84 @@ fn edit_layer_choices(s: &editing::EditSession) -> Vec<EditLayer> {
         .collect()
 }
 
+/// A modifier letter's human label for a macro chord step.
+fn mod_label(c: char) -> &'static str {
+    match c {
+        'C' => "Ctrl",
+        'M' => "Meta",
+        'A' => "Alt",
+        'S' => "Shift",
+        'G' => "AltGr",
+        _ => "?",
+    }
+}
+
+/// The UI row (kind + human label) for one macro step.
+fn macro_row(tok: &MacroToken) -> MacroRow {
+    let (kind, display) = match tok {
+        MacroToken::Key(k) => ("key", format!("press {k}")),
+        MacroToken::Delay(n) => ("delay", format!("pause {n} ms")),
+        MacroToken::Text(t) => ("text", format!("type \u{201c}{t}\u{201d}")),
+        MacroToken::Chord { mods, keys } => {
+            let mut parts: Vec<String> = mods.iter().map(|c| mod_label(*c).to_string()).collect();
+            parts.extend(keys.iter().cloned());
+            ("chord", parts.join("+"))
+        }
+    };
+    MacroRow { kind: kind.into(), display: display.into() }
+}
+
+/// Rebuild the `macro_rows` view model from the current draft step list.
+fn push_macro_rows(win: &MainWindow, draft: &RefCell<Vec<MacroToken>>) {
+    let rows: Vec<MacroRow> = draft.borrow().iter().map(macro_row).collect();
+    win.set_macro_rows(model(rows));
+}
+
+/// Seed the macro panel from the selected key's binding: an existing macro we can
+/// decompose loads its steps + repeat into the draft and marks `selected_is_macro`;
+/// anything else resets to an empty builder. Clears the staged sub-form either way.
+fn seed_macro(
+    win: &MainWindow,
+    s: &editing::EditSession,
+    layer: &str,
+    phys: &str,
+    draft: &RefCell<Vec<MacroToken>>,
+) {
+    match s.current_macro(layer, phys) {
+        Some(m) => {
+            win.set_selected_is_macro(true);
+            win.set_macro_repeat_on(m.repeat.is_some());
+            match m.repeat {
+                Some((t, r)) => {
+                    win.set_macro_repeat_timeout(t.to_string().into());
+                    win.set_macro_repeat_count(r.to_string().into());
+                }
+                None => {
+                    win.set_macro_repeat_timeout("".into());
+                    win.set_macro_repeat_count("".into());
+                }
+            }
+            *draft.borrow_mut() = m.tokens;
+        }
+        None => {
+            win.set_selected_is_macro(false);
+            win.set_macro_repeat_on(false);
+            win.set_macro_repeat_timeout("".into());
+            win.set_macro_repeat_count("".into());
+            draft.borrow_mut().clear();
+        }
+    }
+    push_macro_rows(win, draft);
+    win.set_macro_text_input("".into());
+    win.set_macro_delay_input("".into());
+    win.set_macro_chord_key("".into());
+    win.set_macro_chord_c(false);
+    win.set_macro_chord_m(false);
+    win.set_macro_chord_a(false);
+    win.set_macro_chord_s(false);
+    win.set_macro_chord_g(false);
+}
+
 /// All `[main]` chords as UI rows for the ⌨ chords manager: `chord` is the verbatim
 /// LHS (used to edit/delete), `display` the pretty `j + k` form, `action` the RHS.
 fn chord_rows_for_layer(s: &editing::EditSession, layer: &str) -> Vec<ChordRow> {
@@ -2349,6 +2622,19 @@ fn reset_edit_ui(win: &MainWindow) {
     win.set_chord_key1("".into());
     win.set_chord_key2("".into());
     win.set_chord_action("".into());
+    win.set_selected_is_macro(false);
+    win.set_macro_rows(model(Vec::<MacroRow>::new()));
+    win.set_macro_text_input("".into());
+    win.set_macro_delay_input("".into());
+    win.set_macro_chord_key("".into());
+    win.set_macro_chord_c(false);
+    win.set_macro_chord_m(false);
+    win.set_macro_chord_a(false);
+    win.set_macro_chord_s(false);
+    win.set_macro_chord_g(false);
+    win.set_macro_repeat_on(false);
+    win.set_macro_repeat_timeout("".into());
+    win.set_macro_repeat_count("".into());
     win.set_editing_global(false);
     win.set_global_rows(model(Vec::<GlobalRow>::new()));
     win.set_apply_available(false);

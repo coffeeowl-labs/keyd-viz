@@ -380,6 +380,13 @@ export struct ChordRow {
     action: string,
 }
 
+// One step in the macro builder, in type order: `kind` ("key"|"text"|"chord"|"delay")
+// is informational, `display` is the human label shown in the step's chip.
+export struct MacroRow {
+    kind: string,
+    display: string,
+}
+
 // One row in the [global] options form: `name` is the keyd key, `label`/`hint` the
 // human framing, `value` the current setting ("" = unset/default), `is_bool` renders
 // a toggle, `known` distinguishes a documented option from an unrecognized line.
@@ -622,11 +629,33 @@ export component MainWindow inherits Window {
     in-out property <bool> th_hold_only;     // momentary: hold only, no tap action
     in-out property <string> th_feel;        // tap-vs-hold "feel": "fast" | "safe"
     callback apply_tap_hold();               // compose th_hold/th_tap into the binding
+    // ---- macro editor: an ordered list of typed steps (keyd macro(...)/macro2(...)) ----
+    // The draft steps live in Rust (the real tokens); `macro_rows` is the rebuilt view.
+    // Pending sub-form fields stage one not-yet-added step; "set macro" commits the list.
+    in property <bool> selected_is_macro;          // the selection is already a macro binding
+    in property <[MacroRow]> macro_rows;           // the draft steps, in order
+    in-out property <string> macro_text_input;     // staged "type text" step
+    in-out property <string> macro_delay_input;    // staged delay (ms) step
+    in-out property <bool> macro_chord_c;          // staged chord: Control held
+    in-out property <bool> macro_chord_m;          // staged chord: Meta held
+    in-out property <bool> macro_chord_a;          // staged chord: Alt held
+    in-out property <bool> macro_chord_s;          // staged chord: Shift held
+    in-out property <bool> macro_chord_g;          // staged chord: AltGr held
+    in-out property <string> macro_chord_key;      // staged chord: the key
+    in-out property <bool> macro_repeat_on;        // wrap as macro2 (repeat while held)
+    in-out property <string> macro_repeat_timeout; // macro2 first-repeat delay (ms)
+    in-out property <string> macro_repeat_count;   // macro2 between-repeat delay (ms)
+    callback macro_add_text();                     // append a "type text" step
+    callback macro_add_delay();                    // append a pause step
+    callback macro_add_chord();                    // append a chord step (mods + key)
+    callback macro_remove(int);                    // remove the step at this index
+    callback macro_move(int, int);                 // move the step (index, -1 up / +1 down)
+    callback apply_macro();                         // serialize the draft → set the binding
     // ---- searchable key picker (E2): browse keyd's full key vocabulary ----
     // A shared overlay; `picker_target` routes the pick to the binding or the tap field.
     // Fill-only: picking sets the field, it does not apply — the user still hits "set".
     in-out property <bool> picker_open: false;
-    in-out property <string> picker_target: "";   // "binding" | "tap" | "chord_action"
+    in-out property <string> picker_target: "";   // "binding" | "tap" | "chord_action" | "macro_token" | "macro_chord_key"
     in-out property <string> picker_query: "";
     in property <[string]> picker_results;         // ranked slice (Rust holds the full list)
     in property <int> picker_truncated: 0;         // matches dropped past the cap (0 = all shown)
@@ -1630,6 +1659,14 @@ export component MainWindow inherits Window {
                                 root.set_key_mode("taphold");
                             }
                         }
+                        IconButton {
+                            wide: true;
+                            text: "macro";
+                            active: root.key_mode == "macro";
+                            clicked => {
+                                root.set_key_mode("macro");
+                            }
+                        }
                     }
                     // simple remap editor — shown in "simple" mode (a plain key→key,
                     // disable, or unbind). Tap/hold lives in its own panel below.
@@ -2029,6 +2066,260 @@ export component MainWindow inherits Window {
                                     clicked => {
                                         if (root.th_hold != "") {
                                             root.apply_tap_hold();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // macro editor — shown in "macro" mode: an ordered list of steps
+                    // (keys, typed text, chords, pauses) that keyd plays back. Optional
+                    // "repeat while held" wraps it as macro2.
+                    if !root.editing_global && root.board_mode != "chord" && root.selected_phys != "" && root.key_mode == "macro": Rectangle {
+                        background: #11151c;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: #2a3340;
+                        VerticalLayout {
+                            padding: 9px;
+                            spacing: 7px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: "macro (types a sequence of steps)";
+                                    color: #8a93a0;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                                if root.selected_is_macro: Text {
+                                    text: "\u{2022} editing existing";
+                                    color: #5a6673;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            // the ordered steps, each with reorder + remove controls.
+                            if root.macro_rows.length == 0: Text {
+                                text: "no steps yet \u{2014} add a key, text, chord, or pause below";
+                                color: #5a6673;
+                                font-size: 11px;
+                            }
+                            for m[idx] in root.macro_rows: HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                Rectangle {
+                                    width: mrow.preferred-width + 16px;
+                                    height: 26px;
+                                    border-radius: 6px;
+                                    background: #11191d;
+                                    border-width: 1px;
+                                    border-color: #2a3340;
+                                    mrow := Text {
+                                        x: 8px;
+                                        y: (parent.height - self.height) / 2;
+                                        text: m.display;
+                                        color: #cfd6df;
+                                        font-size: 12px;
+                                        font-family: "JetBrains Mono";
+                                    }
+                                }
+                                IconButton {
+                                    text: "\u{2191}";
+                                    clicked => {
+                                        root.macro_move(idx, -1);
+                                    }
+                                }
+                                IconButton {
+                                    text: "\u{2193}";
+                                    clicked => {
+                                        root.macro_move(idx, 1);
+                                    }
+                                }
+                                IconButton {
+                                    text: "\u{2715}";
+                                    clicked => {
+                                        root.macro_remove(idx);
+                                    }
+                                }
+                            }
+                            // add a key / text / pause step.
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                Text {
+                                    text: "add:";
+                                    color: #cfd6df;
+                                    font-size: 12px;
+                                    font-family: "JetBrains Mono";
+                                    vertical-alignment: center;
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "key\u{2026}";
+                                    clicked => {
+                                        root.open_picker("macro_token");
+                                    }
+                                }
+                                LineEdit {
+                                    width: 130px;
+                                    height: 28px;
+                                    font-size: 13px;
+                                    placeholder-text: "type text";
+                                    text <=> root.macro_text_input;
+                                    accepted(t) => {
+                                        root.macro_add_text();
+                                    }
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "+ text";
+                                    clicked => {
+                                        root.macro_add_text();
+                                    }
+                                }
+                                LineEdit {
+                                    width: 64px;
+                                    height: 28px;
+                                    font-size: 13px;
+                                    placeholder-text: "ms";
+                                    text <=> root.macro_delay_input;
+                                    accepted(t) => {
+                                        root.macro_add_delay();
+                                    }
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "+ pause";
+                                    clicked => {
+                                        root.macro_add_delay();
+                                    }
+                                }
+                            }
+                            // add a chord step: modifier toggles + a key.
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                Text {
+                                    text: "chord:";
+                                    color: #cfd6df;
+                                    font-size: 12px;
+                                    font-family: "JetBrains Mono";
+                                    vertical-alignment: center;
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "Ctrl";
+                                    active: root.macro_chord_c;
+                                    clicked => {
+                                        root.macro_chord_c = !root.macro_chord_c;
+                                    }
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "Meta";
+                                    active: root.macro_chord_m;
+                                    clicked => {
+                                        root.macro_chord_m = !root.macro_chord_m;
+                                    }
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "Alt";
+                                    active: root.macro_chord_a;
+                                    clicked => {
+                                        root.macro_chord_a = !root.macro_chord_a;
+                                    }
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "Shift";
+                                    active: root.macro_chord_s;
+                                    clicked => {
+                                        root.macro_chord_s = !root.macro_chord_s;
+                                    }
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "AltGr";
+                                    active: root.macro_chord_g;
+                                    clicked => {
+                                        root.macro_chord_g = !root.macro_chord_g;
+                                    }
+                                }
+                                LineEdit {
+                                    width: 80px;
+                                    height: 28px;
+                                    font-size: 13px;
+                                    placeholder-text: "key";
+                                    text <=> root.macro_chord_key;
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "pick\u{2026}";
+                                    clicked => {
+                                        root.open_picker("macro_chord_key");
+                                    }
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "+ chord";
+                                    clicked => {
+                                        root.macro_add_chord();
+                                    }
+                                }
+                            }
+                            // repeat (macro2): hold the key to repeat the macro.
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                IconButton {
+                                    wide: true;
+                                    text: "repeat while held";
+                                    active: root.macro_repeat_on;
+                                    clicked => {
+                                        root.macro_repeat_on = !root.macro_repeat_on;
+                                    }
+                                }
+                                if root.macro_repeat_on: Text {
+                                    text: "wait";
+                                    color: #cfd6df;
+                                    font-size: 12px;
+                                    font-family: "JetBrains Mono";
+                                    vertical-alignment: center;
+                                }
+                                if root.macro_repeat_on: LineEdit {
+                                    width: 64px;
+                                    height: 28px;
+                                    font-size: 13px;
+                                    placeholder-text: "ms";
+                                    text <=> root.macro_repeat_timeout;
+                                }
+                                if root.macro_repeat_on: Text {
+                                    text: "then every";
+                                    color: #cfd6df;
+                                    font-size: 12px;
+                                    font-family: "JetBrains Mono";
+                                    vertical-alignment: center;
+                                }
+                                if root.macro_repeat_on: LineEdit {
+                                    width: 64px;
+                                    height: 28px;
+                                    font-size: 13px;
+                                    placeholder-text: "ms";
+                                    text <=> root.macro_repeat_count;
+                                }
+                            }
+                            HorizontalLayout {
+                                alignment: start;
+                                IconButton {
+                                    wide: true;
+                                    text: "set macro";
+                                    active: root.macro_rows.length > 0;
+                                    clicked => {
+                                        if (root.macro_rows.length > 0) {
+                                            root.apply_macro();
                                         }
                                     }
                                 }
