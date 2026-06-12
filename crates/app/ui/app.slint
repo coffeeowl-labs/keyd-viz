@@ -675,6 +675,10 @@ export component MainWindow inherits Window {
     in property <[ChordRow]> chord_rows;
     in-out property <[string]> chord_keys;      // members of the builder, in click order
     in-out property <string> chord_action: "";  // action for the builder
+    // The LHS of the chord being edited ("" = building a fresh one). Set when "edit" seeds
+    // the builder; lets a commit REPLACE that chord even if its key set changed (add/remove
+    // a member), instead of appending a new chord and orphaning the original.
+    in-out property <string> chord_edit_orig: "";
     callback toggle_chord_key(string);  // arg = phys clicked on the board → add/remove member
     callback clear_chord_keys();        // reset the builder's member list
     callback add_chord();               // commit chord_keys → chord_action
@@ -1894,7 +1898,7 @@ export component MainWindow inherits Window {
                             }
                             IconButton {
                                 wide: true;
-                                text: "add";
+                                text: root.chord_edit_orig != "" ? "update" : "add";
                                 clicked => {
                                     root.add_chord();
                                 }

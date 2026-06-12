@@ -1153,6 +1153,20 @@ mod tests {
     }
 
     #[test]
+    fn editing_a_chords_key_set_replaces_it_not_duplicates() {
+        // The editor flow when you add a member to an existing chord: set the new key set,
+        // then drop the original (its canonical form changed). Result is one chord, not two.
+        let td = TempDir::new("chord-edit-keys");
+        let mut s = session(&td);
+        s.set_chord("main", &keys(&["a", "s", "d"]), "esc").unwrap();
+        s.set_chord("main", &keys(&["a", "s", "d", "f"]), "esc").unwrap();
+        s.remove_chord("main", "a+s+d").unwrap(); // canonical match drops the original
+        assert_eq!(s.chords("main"), vec![("a+s+d+f".to_string(), "esc".to_string())]);
+        assert!(s.serialized().contains("a+s+d+f = esc"));
+        assert!(!s.serialized().contains("a+s+d = esc"), "the original 3-key line is gone");
+    }
+
+    #[test]
     fn set_chord_rejects_bad_input() {
         let td = TempDir::new("chord-bad");
         let mut s = session(&td);

@@ -1200,7 +1200,7 @@ fn main() -> Result<(), slint::PlatformError> {
             // Chords are layer-scoped: switching layers in chord mode reloads that layer's
             // chord list and clears any half-built member set (it belonged to the old layer).
             if win.get_board_mode().as_str() == "chord" {
-                win.set_chord_keys(model(Vec::<slint::SharedString>::new()));
+                clear_chord_builder(&win);
                 win.set_chord_action("".into());
                 if let Some(rows) =
                     session.borrow().as_ref().map(|s| chord_rows_for_layer(s, name.as_str()))
@@ -1259,7 +1259,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     // The focused layer changed: refresh the chord list and drop any
                     // half-built chord pair (it belonged to the previous layer's board).
                     win.set_chord_rows(model(chords));
-                    win.set_chord_keys(model(Vec::<slint::SharedString>::new()));
+                    clear_chord_builder(&win);
                     win.set_chord_action("".into());
                     win.set_can_rename(renameable(&created));
                     win.set_edit_layer(created.into());
@@ -1346,7 +1346,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_hold_layers(model(holds));
                     // Focused layer changed: refresh chords, drop any half-built pair.
                     win.set_chord_rows(model(chords));
-                    win.set_chord_keys(model(Vec::<slint::SharedString>::new()));
+                    clear_chord_builder(&win);
                     win.set_chord_action("".into());
                     win.set_can_rename(renameable(&next));
                     win.set_edit_layer(next.into());
@@ -1407,7 +1407,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     // The layer's name changed: refresh its chord list under the new name
                     // and drop any half-built pair from before the rename.
                     win.set_chord_rows(model(chords));
-                    win.set_chord_keys(model(Vec::<slint::SharedString>::new()));
+                    clear_chord_builder(&win);
                     win.set_chord_action("".into());
                     win.set_edit_layer(renamed.clone().into());
                     win.set_can_rename(renameable(&renamed));
@@ -1843,16 +1843,28 @@ fn main() -> Result<(), slint::PlatformError> {
                 win.get_chord_keys().iter().map(|s| s.to_string()).collect()
             };
             let action = win.get_chord_action().to_string();
+            // The chord we're editing, if any (its key set may have changed).
+            let orig = win.get_chord_edit_orig().to_string();
             let mut sb = session.borrow_mut();
             let Some(s) = sb.as_mut() else { return };
             match s.set_chord(&layer, &keys, &action) {
                 Ok(()) => {
+                    // Editing an existing chord whose key set was changed: the new key set
+                    // is a different line, so drop the original (set ran first, so on a
+                    // validation error nothing was removed). Unchanged keys → same canonical
+                    // form → set_chord already rewrote it in place, so skip the remove.
+                    if !orig.is_empty()
+                        && keydviz_core::canonical_chord(&orig)
+                            != keydviz_core::canonical_chord(&keys.join("+"))
+                    {
+                        let _ = s.remove_chord(&layer, &orig);
+                    }
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
                     refresh_warnings(&win, s); // a chord can target a missing layer
                     let rows = chord_rows_for_layer(s, &layer);
                     drop(sb);
                     win.set_chord_rows(model(rows));
-                    clear_chord_builder(&win);
+                    clear_chord_builder(&win); // also clears chord_edit_orig
                     win.set_chord_action("".into());
                     win.set_edit_dirty(dirty);
                     refresh_preview(&win, &srcs, &path, cfg);
@@ -1878,6 +1890,9 @@ fn main() -> Result<(), slint::PlatformError> {
             let parts: Vec<slint::SharedString> =
                 chord.split('+').map(|p| p.trim().into()).collect();
             win.set_chord_keys(model(parts));
+            // Remember which chord we're editing, so committing replaces it even if its key
+            // set is changed (a member added/removed) rather than appending a new chord.
+            win.set_chord_edit_orig(chord.clone());
             if let Some(s) = session.borrow().as_ref() {
                 let layer = win.get_edit_layer().to_string();
                 let canon = keydviz_core::canonical_chord(&chord);
@@ -2334,9 +2349,11 @@ fn render_board(win: &MainWindow) {
     win.set_active_board(board);
 }
 
-/// Empty the chord-builder member list (board chord-mode).
+/// Empty the chord-builder member list (board chord-mode) and forget any chord being
+/// edited — every reset path (clear, mode/layer switch, exit) abandons an in-progress edit.
 fn clear_chord_builder(win: &MainWindow) {
     win.set_chord_keys(model(Vec::<slint::SharedString>::new()));
+    win.set_chord_edit_orig("".into());
 }
 
 /// Add `phys` to the chord-builder member list, or remove it if already present (a
@@ -2662,7 +2679,7 @@ fn enter_edit_session(
     win.set_edit_layer(default_layer);
     win.set_key_mode("simple".into());
     win.set_board_mode("single".into());
-    win.set_chord_keys(model(Vec::<slint::SharedString>::new()));
+    clear_chord_builder(win);
     win.set_chord_action("".into());
     win.set_selected_is_macro(false);
     win.set_macro_rows(model(Vec::<MacroRow>::new()));
@@ -2724,7 +2741,7 @@ fn reset_edit_ui(win: &MainWindow) {
     win.set_key_mode("simple".into());
     win.set_board_mode("single".into());
     win.set_chord_rows(model(Vec::<ChordRow>::new()));
-    win.set_chord_keys(model(Vec::<slint::SharedString>::new()));
+    clear_chord_builder(win);
     win.set_chord_action("".into());
     win.set_selected_is_macro(false);
     win.set_macro_rows(model(Vec::<MacroRow>::new()));
