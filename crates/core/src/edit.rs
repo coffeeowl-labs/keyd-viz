@@ -142,20 +142,18 @@ impl Section {
     /// Set `key = value` in this section: rewrite the last existing binding for
     /// `key`, or append a new line when none exists. The append lands after the
     /// last non-blank entry (so a trailing blank-line separator stays at the
-    /// section's end) in the file's own line-ending style.
-    pub fn set_or_add_binding(&mut self, key: &str, new_val: &str) {
+    /// section's end) in `style` — the **file's** line-ending, which the caller
+    /// passes because a section can't see it (a freshly-appended `[layer]` header
+    /// may carry `Eol::None`, so its own EOL is no guide).
+    pub fn set_or_add_binding(&mut self, key: &str, new_val: &str, style: Eol) {
         if !self.set_binding(key, new_val) {
-            self.push_binding(key, new_val);
+            self.push_binding(key, new_val, style);
         }
     }
 
-    /// Append a fresh `key = value` binding line to this section.
-    fn push_binding(&mut self, key: &str, new_val: &str) {
-        // The file's line style, inferred from the section header.
-        let style = match self.header.eol {
-            Eol::None => Eol::Lf,
-            e => e,
-        };
+    /// Append a fresh `key = value` binding line to this section in the file's
+    /// `style` line-ending (passed in — see [`Self::set_or_add_binding`]).
+    fn push_binding(&mut self, key: &str, new_val: &str, style: Eol) {
         let at = self
             .entries
             .iter()
@@ -378,6 +376,79 @@ impl EditConfig {
         removed
     }
 
+    /// Bind `key = val` on the `layer` board, last-wins-aware. If any section feeding the
+    /// board already binds `key`, the **last** (winning) occurrence is rewritten in place —
+    /// so editing a key whose binding lives in an earlier merged section updates that line
+    /// rather than appending a shadowed duplicate to the target section. Otherwise the
+    /// binding is appended to the target (last matching) section, creating `[main]` when the
+    /// board is include-only. New lines take the file's own line-ending. Returns `false`
+    /// only when the board doesn't exist and can't be created (a non-`main` layer with no
+    /// local section). The single write path for [`Self::set_or_add_binding`]'s callers.
+    pub fn set_layer_binding(&mut self, layer: &str, key: &str, val: &str) -> bool {
+        let style = self.file_eol();
+        let is_board = |s: &Section| {
+            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
+                && s.base_name().trim() == layer
+        };
+        if let Some(i) =
+            self.sections.iter().rposition(|s| is_board(s) && s.get_binding(key).is_some())
+        {
+            self.sections[i].set_binding(key, val);
+            return true;
+        }
+        match self.target_or_create_section_mut(layer) {
+            Some(sec) => {
+                sec.set_or_add_binding(key, val, style);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Set a chord (`key1+key2`) binding on the `layer` board, matching existing chords by
+    /// **canonical** key set so `k+j` updates an existing `j+k` (in any merged section, not
+    /// just the target) instead of appending a duplicate. `canon` is the canonical form of
+    /// `new_key`. Rewrites the last canonically-matching chord in place, else appends
+    /// `new_key` to the target section. Same `false` / `[main]`-creation rules as
+    /// [`Self::set_layer_binding`].
+    pub fn set_layer_chord(&mut self, layer: &str, canon: &str, new_key: &str, val: &str) -> bool {
+        let style = self.file_eol();
+        let is_board = |s: &Section| {
+            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
+                && s.base_name().trim() == layer
+        };
+        // The last (file-order) section feeding the board that already holds this chord,
+        // and the literal key string it's stored under (whichever order the user typed).
+        let mut hit: Option<(usize, String)> = None;
+        for (i, s) in self.sections.iter().enumerate().filter(|(_, s)| is_board(s)) {
+            for e in &s.entries {
+                if let EntryKind::Binding { key: k, .. } = &e.kind {
+                    if crate::parser::is_chord_key(k) && crate::parser::canonical_chord(k) == canon {
+                        hit = Some((i, k.clone()));
+                    }
+                }
+            }
+        }
+        if let Some((i, k)) = hit {
+            self.sections[i].set_binding(&k, val);
+            return true;
+        }
+        match self.target_or_create_section_mut(layer) {
+            Some(sec) => {
+                sec.set_or_add_binding(new_key, val, style);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Set a `[global]` option `name = value`, appending in the file's line-ending style
+    /// (creating `[global]` if absent — see [`Self::global_section_mut`]).
+    pub fn set_global_option(&mut self, name: &str, value: &str) {
+        let style = self.file_eol();
+        self.global_section_mut().set_or_add_binding(name, value, style);
+    }
+
     /// Create a new empty layer section `[name]` at the end of the file. `name` is a
     /// *base* layer name (no qualifier/composite) — `Err` names why it was rejected:
     /// empty, an illegal character, a reserved special (`ids`/`global`/`aliases`), or
@@ -400,7 +471,11 @@ impl EditConfig {
             return Err(format!("[{n}] already exists"));
         }
 
-        self.append_section(n, SectionKind::Layer);
+        // `section_kind` classifies the name as keyd would: `main` becomes the base
+        // board (`SectionKind::Main`), not a named `Layer` — so an explicitly-created
+        // `[main]` behaves like the one `target_or_create_section_mut` would make.
+        // (Composite `a+b` is unreachable: the char check above already rejects `+`.)
+        self.append_section(n, section_kind(n));
         Ok(())
     }
 
@@ -477,7 +552,7 @@ impl EditConfig {
     /// Every binding that activates `layer` via a well-known layer function — the
     /// inverse of [`Self::orphan_layer_refs`]. Used to warn before deleting a layer
     /// ("N bindings still point here"). One `(section-base, key)` per offending
-    /// binding, in file order. Same precision rules as [`layer_refs`].
+    /// binding, in file order. Same precision rules as [`layer_ref_spans`].
     pub fn references_to(&self, layer: &str) -> Vec<(String, String)> {
         let is_layer = |s: &&Section| {
             matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
@@ -486,7 +561,7 @@ impl EditConfig {
         for s in self.sections.iter().filter(is_layer) {
             for e in &s.entries {
                 let EntryKind::Binding { key, val: Some(val), .. } = &e.kind else { continue };
-                if layer_refs(val) == Some(layer) {
+                if layer_ref_spans(val).iter().any(|sp| &val[sp.clone()] == layer) {
                     out.push((s.base_name().trim().to_string(), key.clone()));
                 }
             }
@@ -579,19 +654,36 @@ impl EditConfig {
             let kind = s.kind;
             for e in &mut s.entries {
                 let new_line = match &e.kind {
-                    EntryKind::Binding { val: Some(v), key, .. } => layer_ref_span(v)
-                        .filter(|span| &v[span.clone()] == old_base)
-                        .map(|span| (key.clone(), format!("{}{new}{}", &v[..span.start], &v[span.end..]))),
+                    EntryKind::Binding { val: Some(v), key, .. } => {
+                        // Every reference to `old_base` in this value — including ones
+                        // nested in an action descriptor (`overloadi(esc, layer(nav), …)`).
+                        let mut spans: Vec<_> = layer_ref_spans(v)
+                            .into_iter()
+                            .filter(|sp| &v[sp.clone()] == old_base)
+                            .collect();
+                        if spans.is_empty() {
+                            None
+                        } else {
+                            // Splice right-to-left so earlier offsets stay valid as the
+                            // string length changes.
+                            spans.sort_by_key(|sp| std::cmp::Reverse(sp.start));
+                            let mut nv = v.clone();
+                            for sp in &spans {
+                                nv.replace_range(sp.clone(), new);
+                            }
+                            Some((key.clone(), nv, spans.len()))
+                        }
+                    }
                     _ => None,
                 };
-                if let Some((key, nv)) = new_line {
+                if let Some((key, nv, n)) = new_line {
                     e.raw = format!("{key} = {nv}");
                     if let EntryKind::Binding { val, typed, dirty, .. } = &mut e.kind {
                         *typed = classify(kind, Some(&nv));
                         *val = Some(nv);
                         *dirty = true;
                     }
-                    rewritten += 1;
+                    rewritten += n;
                 }
             }
         }
@@ -680,7 +772,7 @@ impl EditConfig {
     /// gate at apply time, so a missed orphan is far cheaper than a false alarm on a
     /// valid config. Only well-known layer activators are scanned, modifier targets
     /// (keyd's built-in modifier layers) are never flagged, and composite `a+b`
-    /// targets are skipped (their definition rules are subtle) — see [`layer_refs`].
+    /// targets are skipped (their definition rules are subtle) — see [`layer_ref_spans`].
     pub fn orphan_layer_refs(&self) -> Vec<OrphanRef> {
         let is_layer = |s: &&Section| {
             matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
@@ -692,7 +784,8 @@ impl EditConfig {
         for s in self.sections.iter().filter(is_layer) {
             for e in &s.entries {
                 let EntryKind::Binding { key, val: Some(val), .. } = &e.kind else { continue };
-                if let Some(layer) = layer_refs(val) {
+                for sp in layer_ref_spans(val) {
+                    let layer = &val[sp];
                     if !defined.contains(layer) {
                         out.push(OrphanRef {
                             section: s.base_name().trim().to_string(),
@@ -700,6 +793,36 @@ impl EditConfig {
                             layer: layer.to_string(),
                         });
                     }
+                }
+            }
+        }
+        out
+    }
+
+    /// Composite layers (`[a+b]`) whose constituents aren't all real, standalone layers —
+    /// keyd rejects such a file (`keyd check` exits non-zero: "`<part>` is not a valid
+    /// layer"), so the editor flags it *before* apply (e.g. you deleted `[nav]` but
+    /// `[nav+sym]` still lists it). One `(composite-base, missing-part)` per offending
+    /// constituent, deduped, in file order. `main` counts as always-defined (keyd has an
+    /// implicit base board even with no explicit `[main]`). A constituent must be a `Main`
+    /// or `Layer` section — a composite can't be built from another composite.
+    pub fn dangling_composites(&self) -> Vec<(String, String)> {
+        let plain: std::collections::HashSet<&str> = self
+            .sections
+            .iter()
+            .filter(|s| matches!(s.kind, SectionKind::Main | SectionKind::Layer))
+            .map(|s| s.base_name().trim())
+            .collect();
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for s in self.sections.iter().filter(|s| s.kind == SectionKind::Composite) {
+            let comp = s.base_name().trim();
+            for part in comp.split('+').map(str::trim) {
+                if part != "main"
+                    && !plain.contains(part)
+                    && seen.insert((comp.to_string(), part.to_string()))
+                {
+                    out.push((comp.to_string(), part.to_string()));
                 }
             }
         }
@@ -736,37 +859,66 @@ pub struct OrphanRef {
 /// forms (`layer`/`oneshot`/`toggle`/`swap`) and their `…m`/`…k` variants that take an
 /// extra macro/key after the layer (`layerm`/`oneshotm`/`oneshotk`/`swapm`/`togglem`,
 /// verified against keyd 2.6.0). The tap/hold family ([`crate::parser::TAPHOLD`]) also
-/// takes a layer first — but only when that arg isn't a modifier, which [`layer_refs`]
+/// takes a layer first — but only when that arg isn't a modifier, which [`layer_ref_spans`]
 /// guards. (`overloadi`'s first arg is an *action*, and `setlayout`'s is a *layout*, so
 /// both are deliberately excluded — rewriting them would corrupt a different namespace.)
 const LAYER_FNS: [&str; 9] = [
     "layer", "oneshot", "toggle", "swap", "layerm", "oneshotm", "oneshotk", "swapm", "togglem",
 ];
 
-/// The layer name a binding value activates via a well-known layer function, or `None`.
-/// Modifier targets (keyd's built-in modifier layers) and composite `a+b` targets are
-/// excluded — both are valid without a matching `[…]` section, so flagging them would
-/// be a false alarm.
-fn layer_refs(val: &str) -> Option<&str> {
-    layer_ref_span(val).map(|r| &val[r])
+/// Whether argument `idx` of keyd function `name` is an **action** slot — a position whose
+/// value is itself a binding descriptor that can nest further layer references, so the scan
+/// must recurse into it. Only the `overload` family nests an action; every other layer
+/// function's non-layer args are macros/keys/timeouts (never descriptors). Keeping this set
+/// tight is what makes the scan high-precision: it never descends into `macro(...)` /
+/// `command(...)` text, so a literal word there can't be mistaken for a layer name.
+fn action_slot(name: &str, idx: usize) -> bool {
+    match name {
+        // (layer, action, [timeout]) — the tap-hold/tap action is arg 1.
+        "overload" | "overloadt" | "overloadt2" => idx == 1,
+        // (tap-action, hold-action, timeout) — both actions, no layer of its own.
+        "overloadi" => idx == 0 || idx == 1,
+        _ => false,
+    }
 }
 
-/// The byte range within `val` of the layer name it activates — the splice point
-/// [`EditConfig::rename_layer`] rewrites, leaving everything else in the value verbatim.
-/// `None` under the same precision rules as [`layer_refs`] (which is `&val[span]`).
-fn layer_ref_span(val: &str) -> Option<std::ops::Range<usize>> {
-    let (name, args) = crate::parser::parse_fn(val)?;
-    let arg0 = *args.first()?;
-    let trimmed = arg0.trim();
-    let referenced = LAYER_FNS.contains(&name) || crate::parser::TAPHOLD.contains(&name);
-    if !(referenced && !crate::parser::is_mod(trimmed) && !trimmed.contains('+')) {
-        return None;
+/// Every byte range within `val` that names an activated layer — the splice points
+/// [`EditConfig::rename_layer`] rewrites and the names [`EditConfig::orphan_layer_refs`]
+/// checks. Covers references nested inside an action descriptor
+/// (`overloadi(esc, layer(nav), 200)` → the `nav` span), not just the top-level call.
+/// Modifier targets (keyd's built-in modifier layers) and composite `a+b` targets are
+/// excluded — both are valid without a matching `[…]` section, so flagging them would be a
+/// false alarm. Spans are in discovery order; a splicing caller must apply them right-to-left.
+fn layer_ref_spans(val: &str) -> Vec<std::ops::Range<usize>> {
+    // Every arg `parse_fn` yields is a sub-slice of this same buffer, at any depth, so a
+    // span's absolute offset is just its pointer delta from `base`.
+    let base = val.as_ptr() as usize;
+    let mut out = Vec::new();
+    collect_layer_spans(val, base, &mut out);
+    out
+}
+
+/// Recursive worker for [`layer_ref_spans`]; `base` is the root value's pointer.
+fn collect_layer_spans(val: &str, base: usize, out: &mut Vec<std::ops::Range<usize>>) {
+    let Some((name, args)) = crate::parser::parse_fn(val) else { return };
+    let is_layer_fn = LAYER_FNS.contains(&name) || crate::parser::TAPHOLD.contains(&name);
+    for (i, arg) in args.iter().enumerate() {
+        if is_layer_fn && i == 0 {
+            // arg-0 of a layer/tap-hold function is the activated layer. Record it unless
+            // it's a modifier or composite target (valid without a section), or itself a
+            // call (not a plain layer name — leave such malformed input alone).
+            let trimmed = arg.trim();
+            if !crate::parser::is_mod(trimmed) && !trimmed.contains('+') && !trimmed.contains('(') {
+                let off = arg.as_ptr() as usize - base;
+                let lead = arg.len() - arg.trim_start().len();
+                out.push(off + lead..off + lead + trimmed.len());
+            }
+            continue;
+        }
+        if action_slot(name, i) {
+            collect_layer_spans(arg, base, out);
+        }
     }
-    // `parse_fn` slices `arg0` out of `val`, so its byte offset is the pointer delta;
-    // add the leading whitespace `trim` drops to land on the name itself.
-    let off = arg0.as_ptr() as usize - val.as_ptr() as usize;
-    let lead = arg0.len() - arg0.trim_start().len();
-    Some(off + lead..off + lead + trimmed.len())
 }
 
 /// Replace the bracketed name in a section header line, preserving leading/trailing
@@ -1012,14 +1164,14 @@ mod tests {
         // The blank line separating sections must stay at the section's end.
         let src = "[main]\na = b\n\n[nav]\nh = left\n";
         let mut cfg = EditConfig::parse(src);
-        cfg.target_section_mut("main").unwrap().set_or_add_binding("q", "esc");
+        cfg.target_section_mut("main").unwrap().set_or_add_binding("q", "esc", Eol::Lf);
         assert_eq!(cfg.serialize(), "[main]\na = b\nq = esc\n\n[nav]\nh = left\n");
     }
 
     #[test]
     fn add_binding_preserves_missing_final_newline() {
         let mut cfg = EditConfig::parse("[main]\na = b");
-        cfg.target_section_mut("main").unwrap().set_or_add_binding("q", "esc");
+        cfg.target_section_mut("main").unwrap().set_or_add_binding("q", "esc", Eol::Lf);
         // The old last line gains its newline; the new last line takes the None.
         assert_eq!(cfg.serialize(), "[main]\na = b\nq = esc");
     }
@@ -1027,7 +1179,7 @@ mod tests {
     #[test]
     fn add_binding_to_empty_section_and_crlf_style() {
         let mut cfg = EditConfig::parse("[main]\r\n");
-        cfg.target_section_mut("main").unwrap().set_or_add_binding("a", "b");
+        cfg.target_section_mut("main").unwrap().set_or_add_binding("a", "b", Eol::CrLf);
         assert_eq!(cfg.serialize(), "[main]\r\na = b\r\n");
     }
 
@@ -1037,7 +1189,7 @@ mod tests {
         // the LAST one so it out-ranks every earlier assignment.
         let src = "[nav]\nh = left\n[nav:C]\nj = down\n";
         let mut cfg = EditConfig::parse(src);
-        cfg.target_section_mut("nav").unwrap().set_or_add_binding("k", "up");
+        cfg.target_section_mut("nav").unwrap().set_or_add_binding("k", "up", Eol::Lf);
         assert_eq!(cfg.serialize(), "[nav]\nh = left\n[nav:C]\nj = down\nk = up\n");
         // [ids]/[global] are never edit targets.
         assert!(cfg.target_section_mut("ids").is_none());
@@ -1055,10 +1207,10 @@ mod tests {
     fn dirty_tracks_edits_and_adds() {
         let mut cfg = EditConfig::parse("[main]\na = b\n");
         assert!(!cfg.is_dirty());
-        cfg.target_section_mut("main").unwrap().set_or_add_binding("a", "c");
+        cfg.target_section_mut("main").unwrap().set_or_add_binding("a", "c", Eol::Lf);
         assert!(cfg.is_dirty());
         let mut cfg = EditConfig::parse("[main]\n");
-        cfg.target_section_mut("main").unwrap().set_or_add_binding("q", "esc");
+        cfg.target_section_mut("main").unwrap().set_or_add_binding("q", "esc", Eol::Lf);
         assert!(cfg.is_dirty());
     }
 
@@ -1174,7 +1326,7 @@ mod tests {
         assert_eq!(cfg.serialize(), "[ids]\n*\n\n[main]\na = b\n\n[nav]\n");
         assert!(cfg.is_dirty());
         // It's a real editable target now (set_or_add_binding lands in it).
-        cfg.target_section_mut("nav").unwrap().set_or_add_binding("h", "left");
+        cfg.target_section_mut("nav").unwrap().set_or_add_binding("h", "left", Eol::Lf);
         assert_eq!(cfg.serialize(), "[ids]\n*\n\n[main]\na = b\n\n[nav]\nh = left\n");
     }
 
@@ -1288,8 +1440,8 @@ mod tests {
     fn rename_layer_covers_the_momentary_layer_variants() {
         // The …m/…k variants take the layer as arg 0 just like the plain forms; a miss
         // here would leave a dangling reference and report success (a config-corruption
-        // bug caught in review). (Nested layer refs inside an `overloadi` action arg are
-        // a separate, rarer gap — not rewritten here, but caught by `keyd check` at apply.)
+        // bug caught in review). Nested refs inside an action arg are covered separately
+        // by `rename_rewrites_layer_refs_nested_in_an_action`.
         let src = "[main]\na = layerm(nav, x)\nb = oneshotm(nav, x)\nc = oneshotk(nav, x)\n\
                    d = swapm(nav, x)\ne = togglem(nav, x)\n[nav]\nh = left\n";
         let mut cfg = EditConfig::parse(src);
@@ -1321,6 +1473,110 @@ mod tests {
             cfg.serialize(),
             "[main]\nx = y\n[navi]\nh = left\n[sym]\nk = up\n[navi+sym]\nq = w\n"
         );
+    }
+
+    #[test]
+    fn rename_rewrites_layer_refs_nested_in_an_action() {
+        // `overloadi`'s arg 0 and arg 1 are actions, and `overload`'s arg 1 is an action —
+        // a layer named inside any of them must be followed, or rename silently corrupts.
+        let src = "[main]\n\
+                   a = overloadi(esc, layer(nav), 200)\n\
+                   b = overload(meta, oneshot(nav))\n\
+                   c = overloadi(layer(nav), toggle(nav), 200)\n\
+                   [nav]\nh = left\n";
+        let mut cfg = EditConfig::parse(src);
+        // 1 in a, 1 in b, 2 in c = 4 references rewritten.
+        assert_eq!(cfg.rename_layer("nav", "sym").unwrap(), 4);
+        assert_eq!(
+            cfg.serialize(),
+            "[main]\n\
+             a = overloadi(esc, layer(sym), 200)\n\
+             b = overload(meta, oneshot(sym))\n\
+             c = overloadi(layer(sym), toggle(sym), 200)\n\
+             [sym]\nh = left\n"
+        );
+        assert!(cfg.orphan_layer_refs().is_empty());
+    }
+
+    #[test]
+    fn rename_handles_deep_nesting_and_a_shrinking_name() {
+        // Three refs to `nav` in one value, the deepest two levels down (an `overload`
+        // inside an `overloadi` action slot), rewritten to a SHORTER name — the
+        // right-to-left splice must keep earlier offsets valid as the string shrinks.
+        let src = "[main]\na = overloadi(layer(nav), overload(nav, oneshot(nav)), 200)\n[nav]\nh = left\n";
+        let mut cfg = EditConfig::parse(src);
+        assert_eq!(cfg.rename_layer("nav", "x").unwrap(), 3);
+        assert_eq!(
+            cfg.serialize(),
+            "[main]\na = overloadi(layer(x), overload(x, oneshot(x)), 200)\n[x]\nh = left\n"
+        );
+    }
+
+    #[test]
+    fn orphan_scan_sees_a_layer_ref_nested_in_an_action() {
+        // The orphan net shares the recursive span finder, so a missing layer named only
+        // inside an `overloadi` hold descriptor must still be flagged.
+        let cfg = EditConfig::parse("[main]\na = overloadi(esc, layer(gone), 200)\n");
+        let orphans = cfg.orphan_layer_refs();
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].layer, "gone");
+    }
+
+    #[test]
+    fn span_finder_does_not_descend_into_macro_or_command_text() {
+        // A literal `layer(...)` inside macro/command text is NOT a layer activation — the
+        // scanner must not mistake it for one (precision over recall). No `[oops]` section
+        // exists, so a false positive would surface as a phantom orphan.
+        let cfg = EditConfig::parse(
+            "[main]\n\
+             a = overload(nav, macro(layer(oops)))\n\
+             b = command(echo layer(oops))\n\
+             [nav]\nh = left\n",
+        );
+        // Only `nav` is a real ref (defined), so no orphans — `oops` is never seen.
+        assert!(cfg.orphan_layer_refs().is_empty(), "{:?}", cfg.orphan_layer_refs());
+    }
+
+    #[test]
+    fn dangling_composite_is_flagged_until_its_part_exists() {
+        // keyd rejects `[nav+sym]` when `sym` isn't a real layer (exit 255).
+        let mut cfg = EditConfig::parse("[main]\nx = y\n[nav]\nh = left\n[nav+sym]\nq = w\n");
+        assert_eq!(cfg.dangling_composites(), vec![("nav+sym".to_string(), "sym".to_string())]);
+        // Defining the missing part clears it; `main` is implicitly defined (no flag).
+        cfg.add_layer("sym").unwrap();
+        assert!(cfg.dangling_composites().is_empty());
+        // A composite over the implicit base board is fine without an explicit [main].
+        let cfg2 = EditConfig::parse("[ids]\n*\n[nav]\nh = left\n[main+nav]\nq = w\n");
+        assert!(cfg2.dangling_composites().is_empty());
+    }
+
+    #[test]
+    fn set_layer_binding_edits_in_place_across_a_merged_section() {
+        // `a` lives only in the earlier `[main]` block; editing it must rewrite that line,
+        // not append a shadowed duplicate to the later block.
+        let mut cfg = EditConfig::parse("[main]\na = b\n[nav]\nh = left\n[main]\nc = d\n");
+        assert!(cfg.set_layer_binding("main", "a", "z"));
+        assert_eq!(cfg.serialize(), "[main]\na = z\n[nav]\nh = left\n[main]\nc = d\n");
+        // A brand-new key still appends to the LAST (winning) block.
+        assert!(cfg.set_layer_binding("main", "e", "f"));
+        assert_eq!(cfg.serialize(), "[main]\na = z\n[nav]\nh = left\n[main]\nc = d\ne = f\n");
+    }
+
+    #[test]
+    fn set_layer_binding_appends_in_the_files_crlf_style() {
+        // A freshly-created `[main]` header carries Eol::None on a no-final-newline file;
+        // the appended binding must take the file's CRLF, not default to LF.
+        let mut cfg = EditConfig::parse("[ids]\r\n*\r\n[nav]\r\nh = left");
+        assert!(cfg.set_layer_binding("main", "a", "b")); // creates [main], then appends
+        assert_eq!(cfg.serialize(), "[ids]\r\n*\r\n[nav]\r\nh = left\r\n\r\n[main]\r\na = b");
+    }
+
+    #[test]
+    fn add_layer_main_creates_the_base_board_kind() {
+        let mut cfg = EditConfig::parse("[ids]\n*\n[nav]\nh = left\n");
+        cfg.add_layer("main").unwrap();
+        let main = cfg.sections.iter().find(|s| s.name == "main").unwrap();
+        assert_eq!(main.kind, SectionKind::Main);
     }
 
     #[test]

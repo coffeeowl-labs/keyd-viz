@@ -1276,6 +1276,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_can_rename(renameable(&created));
                     win.set_edit_layer(created.into());
                     win.set_selected_phys("".into());
+                    win.set_key_mode("simple".into()); // no key selected: reset the editor mode
                     win.set_edit_current("".into());
                     win.set_edit_value("".into());
                     win.set_new_layer_open(false);
@@ -1363,6 +1364,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_can_rename(renameable(&next));
                     win.set_edit_layer(next.into());
                     win.set_selected_phys("".into());
+                    win.set_key_mode("simple".into()); // no key selected: reset the editor mode
                     win.set_edit_current("".into());
                     win.set_edit_value("".into());
                     win.set_edit_dirty(dirty);
@@ -1425,6 +1427,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_can_rename(renameable(&renamed));
                     // The selection's section changed name; reset the picked key.
                     win.set_selected_phys("".into());
+                    win.set_key_mode("simple".into()); // no key selected: reset the editor mode
                     win.set_edit_current("".into());
                     win.set_edit_value("".into());
                     win.set_edit_dirty(dirty);

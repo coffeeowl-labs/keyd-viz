@@ -130,11 +130,9 @@ impl EditSession {
     /// Creates the `[layer]` section if the config doesn't declare one locally
     /// (e.g. its bindings live in an `include`), so the bind always lands.
     pub fn set_binding(&mut self, layer: &str, key: &str, val: &str) -> Result<(), String> {
-        let section = self
-            .edit
-            .target_or_create_section_mut(layer)
-            .ok_or_else(|| format!("this config has no [{layer}] section"))?;
-        section.set_or_add_binding(key, val);
+        if !self.edit.set_layer_binding(layer, key, val) {
+            return Err(format!("this config has no [{layer}] section"));
+        }
         Ok(())
     }
 
@@ -192,11 +190,9 @@ impl EditSession {
         // Read the existing binding (immutable) before taking the mutable borrow.
         let existing = self.current_tap_hold(layer, key);
         let th = TapHold::compose(existing.as_ref(), target.to_string(), tap, feel);
-        let section = self
-            .edit
-            .target_or_create_section_mut(layer)
-            .ok_or_else(|| format!("this config has no [{layer}] section"))?;
-        section.set_or_add_binding(key, &th.serialize());
+        if !self.edit.set_layer_binding(layer, key, &th.serialize()) {
+            return Err(format!("this config has no [{layer}] section"));
+        }
         Ok(())
     }
 
@@ -243,11 +239,9 @@ impl EditSession {
                         parentheses and try again"
                 .to_string());
         }
-        let section = self
-            .edit
-            .target_or_create_section_mut(layer)
-            .ok_or_else(|| format!("this config has no [{layer}] section"))?;
-        section.set_or_add_binding(key, &rhs);
+        if !self.edit.set_layer_binding(layer, key, &rhs) {
+            return Err(format!("this config has no [{layer}] section"));
+        }
         Ok(())
     }
 
@@ -299,22 +293,10 @@ impl EditSession {
         }
         let new_key = format!("{key1}+{key2}");
         let canon = canonical_chord(&new_key);
-        let section = self
-            .edit
-            .target_or_create_section_mut(layer)
-            .ok_or_else(|| format!("this config has no [{layer}] section"))?;
-        // Rewrite an existing chord line (any order) in place, else append a new one.
-        let existing = section.entries.iter().find_map(|e| match &e.kind {
-            EntryKind::Binding { key: k, .. } if is_chord_key(k) && canonical_chord(k) == canon => {
-                Some(k.clone())
-            }
-            _ => None,
-        });
-        match existing {
-            Some(k) => {
-                section.set_binding(&k, action);
-            }
-            None => section.set_or_add_binding(&new_key, action),
+        // Rewrite an existing chord (any order, any merged section) in place, else append a
+        // new line to the target section — see [`EditConfig::set_layer_chord`].
+        if !self.edit.set_layer_chord(layer, &canon, &new_key, action) {
+            return Err(format!("this config has no [{layer}] section"));
         }
         Ok(())
     }
@@ -385,7 +367,7 @@ impl EditSession {
             self.clear_global(name);
             return Ok(());
         }
-        self.edit.global_section_mut().set_or_add_binding(name, value);
+        self.edit.set_global_option(name, value);
         Ok(())
     }
 
@@ -464,21 +446,29 @@ impl EditSession {
         out
     }
 
-    /// Warnings for bindings that activate a layer this config never defines —
-    /// one line per missing layer, naming where it's referenced (capped). Empty
-    /// when the config is clean; recomputed after every edit so creating the layer
-    /// (or removing the reference) clears it live. See
-    /// [`keydviz_core::edit::EditConfig::orphan_layer_refs`].
+    /// Warnings the config would fail `keyd check` on, recomputed after every edit so a
+    /// fix clears them live: (1) bindings that activate a layer this config never defines —
+    /// one line per missing layer, naming where it's referenced (capped); (2) composite
+    /// `[a+b]` layers whose constituents aren't real layers (e.g. you deleted `[nav]` but
+    /// `[nav+sym]` survives). Empty when the config is clean. See
+    /// [`keydviz_core::edit::EditConfig::orphan_layer_refs`] /
+    /// [`keydviz_core::edit::EditConfig::dangling_composites`].
     pub fn orphan_warnings(&self) -> Vec<String> {
         let mut groups: Vec<(String, Vec<String>)> = Vec::new();
         for o in self.edit.orphan_layer_refs() {
             let site = format!("{} in [{}]", o.key, o.section);
             match groups.iter_mut().find(|(l, _)| *l == o.layer) {
-                Some((_, sites)) => sites.push(site),
+                // Dedup: one binding can name the same missing layer twice (e.g.
+                // `overloadi(layer(nav), toggle(nav), …)`) — list the site once.
+                Some((_, sites)) => {
+                    if !sites.contains(&site) {
+                        sites.push(site);
+                    }
+                }
                 None => groups.push((o.layer, vec![site])),
             }
         }
-        groups
+        let mut out: Vec<String> = groups
             .into_iter()
             .map(|(layer, sites)| {
                 let shown = sites.len().min(3);
@@ -489,7 +479,15 @@ impl EditSession {
                     sites[..shown].join(", ")
                 )
             })
-            .collect()
+            .collect();
+        // Composite layers left dangling by a deleted/renamed constituent — keyd rejects
+        // the file, so flag it alongside the orphan refs.
+        for (comp, part) in self.edit.dangling_composites() {
+            out.push(format!(
+                "\u{26a0} [{comp}] needs a [{part}] layer, which doesn\u{2019}t exist"
+            ));
+        }
+        out
     }
 
     /// The value currently bound to `key` in `layer`'s section, if any.
@@ -910,6 +908,42 @@ mod tests {
         assert_eq!(s.orphan_warnings().len(), 1);
         // Deleting a layer that doesn't exist is a named error.
         assert!(s.remove_layer("nope").unwrap_err().contains("[nope]"));
+    }
+
+    #[test]
+    fn deleting_a_composite_constituent_warns_in_the_editor() {
+        // keyd rejects `[nav+sym]` once `nav` is gone (exit 255); the editor must say so
+        // before apply, not let it slip through silently.
+        let td = TempDir::new("rmlayer-composite");
+        let p = td.0.join("test.conf");
+        std::fs::write(
+            &p,
+            "[ids]\n*\n[main]\nx = y\n[nav]\nh = left\n[sym]\nk = up\n[nav+sym]\nq = w\n",
+        )
+        .unwrap();
+        let mut s = EditSession::open(&p).unwrap();
+        assert!(s.orphan_warnings().is_empty());
+        s.remove_layer("nav").unwrap();
+        let warns = s.orphan_warnings();
+        assert!(
+            warns.iter().any(|w| w.contains("[nav+sym]") && w.contains("[nav]")),
+            "{warns:?}"
+        );
+        // Re-creating the constituent clears the warning live.
+        s.add_layer("nav").unwrap();
+        assert!(s.orphan_warnings().is_empty());
+    }
+
+    #[test]
+    fn editing_a_key_in_an_earlier_merged_section_rewrites_in_place() {
+        // `q` lives in the first `[main]` block; a later block also feeds the board. Editing
+        // `q` must rewrite that existing line, not append a shadowed duplicate.
+        let td = TempDir::new("merged-edit");
+        let p = td.0.join("test.conf");
+        std::fs::write(&p, "[ids]\n*\n[main]\nq = esc\n[main]\nw = bspace\n").unwrap();
+        let mut s = EditSession::open(&p).unwrap();
+        s.set_binding("main", "q", "tab").unwrap();
+        assert_eq!(s.serialized(), "[ids]\n*\n[main]\nq = tab\n[main]\nw = bspace\n");
     }
 
     #[test]
