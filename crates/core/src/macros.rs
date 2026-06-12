@@ -95,8 +95,8 @@ impl Macro {
                 if args.len() != 3 {
                     return None;
                 }
-                let timeout = args[0].trim().parse::<u32>().ok()?;
-                let repeat = args[1].trim().parse::<u32>().ok()?;
+                let timeout = parse_uint(args[0].trim())?;
+                let repeat = parse_uint(args[1].trim())?;
                 let inner_expr = args[2].trim();
                 // The inner macro expression is either `macro(...)` or a bare token
                 // run (`macro2(120, 80, left)`). Anything else with parens is exotic.
@@ -197,9 +197,10 @@ fn parse_tokens(inner: &str) -> Option<Vec<MacroToken>> {
 /// containing `-`/`+`) aren't mis-split. keyd's rule is "a valid key code presses
 /// that key, otherwise the token is typed literally."
 fn classify(tok: &str) -> MacroToken {
-    // 1. Delay: <n>ms, n < 1024.
+    // 1. Delay: <n>ms, n < 1024. keyd's delay is plain digits — reject Rust's
+    // sign-tolerant parse (`+5ms`/`-5ms`) so those stay literal text, matching keyd.
     if let Some(num) = tok.strip_suffix("ms") {
-        if !num.is_empty() {
+        if is_ascii_digits(num) {
             if let Ok(v) = num.parse::<u16>() {
                 if (v as u32) < 1024 {
                     return MacroToken::Delay(v);
@@ -255,6 +256,22 @@ fn strip_mod_prefixes(tok: &str) -> Option<(Vec<char>, &str)> {
 
 fn split_plus(s: &str) -> Vec<String> {
     s.split('+').map(str::to_string).collect()
+}
+
+/// A non-empty run of ASCII digits — keyd's notion of a number (no sign, no
+/// underscores), so our delay/`macro2` parsing matches keyd rather than Rust's
+/// more permissive `FromStr`.
+fn is_ascii_digits(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Parse a keyd unsigned integer (`macro2` timeout/repeat): digits only, no sign.
+fn parse_uint(s: &str) -> Option<u32> {
+    if is_ascii_digits(s) {
+        s.parse().ok()
+    } else {
+        None
+    }
 }
 
 /// Every part of a `+`-unit is a real key (so the token is a genuine chord and not
@@ -390,6 +407,17 @@ mod tests {
     }
 
     // ---- stays-raw cases (None) ----
+
+    #[test]
+    fn sign_prefixed_numbers_are_not_delays_or_macro2_args() {
+        // keyd's number parse is digit-only; Rust's is sign-tolerant. `+5ms` must
+        // stay literal text, not become Delay(5), or a round-trip would change it.
+        assert_eq!(Macro::parse("macro(+5ms)").unwrap().tokens, vec![t("+5ms")]);
+        assert_eq!(Macro::parse("macro(-5ms)").unwrap().tokens, vec![t("-5ms")]);
+        // A signed macro2 timeout/repeat is unmodelable → stays raw.
+        assert!(Macro::parse("macro2(+1, 2, a)").is_none());
+        assert!(Macro::parse("macro2(1, +2, a)").is_none());
+    }
 
     #[test]
     fn unmodelable_forms_stay_raw() {

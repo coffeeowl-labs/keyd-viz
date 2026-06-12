@@ -1194,6 +1194,7 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let weak = win.as_weak();
         let session = session.clone();
+        let macro_draft = macro_draft.clone();
         win.on_pick_edit_layer(move |name| {
             let Some(win) = weak.upgrade() else { return };
             // Changing the focused section dismisses any pending delete confirm or open
@@ -1223,7 +1224,16 @@ fn main() -> Result<(), slint::PlatformError> {
                 if let Some(s) = session.borrow().as_ref() {
                     let cur = s.current_binding(&name, &phys).unwrap_or_default();
                     seed_tap_hold(&win, s, &name, &phys);
-                    let mode = if win.get_selected_is_tap_hold() { "taphold" } else { "simple" };
+                    // Reseed the macro panel/draft for the new layer too, or a stale
+                    // draft from the old layer could be committed onto this key here.
+                    seed_macro(&win, s, &name, &phys, &macro_draft);
+                    let mode = if win.get_selected_is_macro() {
+                        "macro"
+                    } else if win.get_selected_is_tap_hold() {
+                        "taphold"
+                    } else {
+                        "simple"
+                    };
                     win.set_key_mode(mode.into());
                     win.set_edit_current(cur.clone().into());
                     win.set_edit_value(cur.into());
@@ -1418,6 +1428,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = win.as_weak();
         let srcs = srcs.clone();
         let session = session.clone();
+        let macro_draft = macro_draft.clone();
         win.on_apply_binding(move |value| {
             let Some(win) = weak.upgrade() else { return };
             if refuse_if_applying(&win) {
@@ -1435,6 +1446,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 Ok(()) => {
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
                     seed_tap_hold(&win, s, &layer, &phys); // keep the tap/hold panel in sync
+                    seed_macro(&win, s, &layer, &phys, &macro_draft); // and the macro panel
                     refresh_warnings(&win, s); // a binding change can add/clear an orphan
                     drop(sb);
                     win.set_edit_current(value.clone().into());
@@ -1455,6 +1467,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = win.as_weak();
         let srcs = srcs.clone();
         let session = session.clone();
+        let macro_draft = macro_draft.clone();
         win.on_make_transparent(move || {
             let Some(win) = weak.upgrade() else { return };
             if refuse_if_applying(&win) {
@@ -1471,6 +1484,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 Ok(()) => {
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
                     seed_tap_hold(&win, s, &layer, &phys); // keep the tap/hold panel in sync
+                    seed_macro(&win, s, &layer, &phys, &macro_draft); // and the macro panel
                     refresh_warnings(&win, s); // a binding change can add/clear an orphan
                     drop(sb);
                     win.set_edit_current("".into());
@@ -1491,6 +1505,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = win.as_weak();
         let srcs = srcs.clone();
         let session = session.clone();
+        let macro_draft = macro_draft.clone();
         win.on_apply_tap_hold(move || {
             let Some(win) = weak.upgrade() else { return };
             if refuse_if_applying(&win) {
@@ -1518,6 +1533,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     let cur = s.current_binding(&layer, &phys).unwrap_or_default();
                     let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
                     seed_tap_hold(&win, s, &layer, &phys);
+                    seed_macro(&win, s, &layer, &phys, &macro_draft); // keep the macro panel in sync
                     refresh_warnings(&win, s); // a tap/hold can target a missing layer
                     drop(sb);
                     win.set_edit_current(cur.clone().into());
@@ -2572,6 +2588,19 @@ fn enter_edit_session(
     win.set_chord_key1("".into());
     win.set_chord_key2("".into());
     win.set_chord_action("".into());
+    win.set_selected_is_macro(false);
+    win.set_macro_rows(model(Vec::<MacroRow>::new()));
+    win.set_macro_text_input("".into());
+    win.set_macro_delay_input("".into());
+    win.set_macro_chord_key("".into());
+    win.set_macro_chord_c(false);
+    win.set_macro_chord_m(false);
+    win.set_macro_chord_a(false);
+    win.set_macro_chord_s(false);
+    win.set_macro_chord_g(false);
+    win.set_macro_repeat_on(false);
+    win.set_macro_repeat_timeout("".into());
+    win.set_macro_repeat_count("".into());
     win.set_editing_global(false);
     win.set_global_rows(model(global_rows_for(&s)));
     win.set_rename_target("".into());
