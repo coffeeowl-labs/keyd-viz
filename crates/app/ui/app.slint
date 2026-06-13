@@ -260,13 +260,15 @@ component IconButton inherits Rectangle {
     in property <bool> use_icon: false;
     in property <bool> wide: false;
     in property <bool> active: false;   // engaged/toggled state (e.g. pin on)
+    in property <bool> danger: false;   // destructive action (delete / discard) — red, not green
     callback clicked;
     width: root.use_icon ? 26px : (wide ? lbl.preferred-width + 18px : 26px);
     height: 24px;
     border-radius: 6px;
-    background: active ? #16341f : (bta.has-hover ? #1b2129 : #161b22);
+    background: danger ? (bta.has-hover ? #3a2020 : #2a1a1a)
+        : (active ? #16341f : (bta.has-hover ? #1b2129 : #161b22));
     border-width: 1px;
-    border-color: active ? #3ddc84 : #2a3340;
+    border-color: danger ? #e5534b : (active ? #3ddc84 : #2a3340);
     bta := TouchArea {
         clicked => {
             root.clicked();
@@ -288,7 +290,7 @@ component IconButton inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         text: root.text;
-        color: active ? #3ddc84 : #cfd6df;
+        color: danger ? #ff8b82 : (active ? #3ddc84 : #cfd6df);
         font-size: 13px;
         font-weight: 700;
         font-family: "JetBrains Mono";
@@ -1153,7 +1155,8 @@ export component MainWindow inherits Window {
                             }
                             IconButton {
                                 wide: true;
-                                text: "discard";
+                                text: "discard & exit";
+                                danger: true;
                                 clicked => {
                                     root.confirm_discard();
                                 }
@@ -1161,7 +1164,6 @@ export component MainWindow inherits Window {
                             IconButton {
                                 wide: true;
                                 text: "keep editing";
-                                active: true;
                                 clicked => {
                                     root.cancel_discard();
                                 }
@@ -1247,7 +1249,8 @@ export component MainWindow inherits Window {
                             }
                             IconButton {
                                 wide: true;
-                                text: "delete";
+                                text: "delete layer";
+                                danger: true;
                                 clicked => {
                                     root.confirm_delete_layer();
                                 }
@@ -1255,7 +1258,6 @@ export component MainWindow inherits Window {
                             IconButton {
                                 wide: true;
                                 text: "keep";
-                                active: true;
                                 clicked => {
                                     root.cancel_delete_layer();
                                 }
@@ -1533,9 +1535,9 @@ export component MainWindow inherits Window {
                         }
                         Text {
                             text: root.board_mode == "chord"
-                                ? "click two keys on the board"
+                                ? "pick 2+ keys to press together \u{2192} one action (a combo)"
                                 : "click a key on the board";
-                            color: #5a6673;
+                            color: #8c96a4;
                             font-size: 11px;
                             vertical-alignment: center;
                         }
@@ -1583,7 +1585,7 @@ export component MainWindow inherits Window {
                             }
                             Text {
                                 text: g.known ? g.hint : "(unrecognized \u{2014} kept as-is)";
-                                color: #5a6673;
+                                color: #8c96a4;
                                 font-size: 11px;
                                 vertical-alignment: center;
                             }
@@ -1704,7 +1706,7 @@ export component MainWindow inherits Window {
                         // browse keyd's full key vocabulary (fills the field, doesn't apply).
                         IconButton {
                             wide: true;
-                            text: "pick\u{2026}";
+                            text: "pick from list\u{2026}";
                             clicked => {
                                 root.open_picker("binding");
                             }
@@ -1752,7 +1754,7 @@ export component MainWindow inherits Window {
                         }
                         if !root.keys_connected: Text {
                             text: "(no live key stream to capture from)";
-                            color: #4a525e;
+                            color: #8c96a4;
                             font-size: 11px;
                             vertical-alignment: center;
                         }
@@ -1891,7 +1893,7 @@ export component MainWindow inherits Window {
                             }
                             IconButton {
                                 wide: true;
-                                text: "pick\u{2026}";
+                                text: "pick from list\u{2026}";
                                 clicked => {
                                     root.open_picker("chord_action");
                                 }
@@ -1929,7 +1931,7 @@ export component MainWindow inherits Window {
                                 }
                                 if root.selected_is_tap_hold: Text {
                                     text: "\u{2022} editing existing \u{2014} any timings preserved";
-                                    color: #5a6673;
+                                    color: #8c96a4;
                                     font-size: 11px;
                                     vertical-alignment: center;
                                 }
@@ -1987,7 +1989,7 @@ export component MainWindow inherits Window {
                                 }
                                 if !root.th_hold_only: IconButton {
                                     wide: true;
-                                    text: "pick\u{2026}";
+                                    text: "pick from list\u{2026}";
                                     clicked => {
                                         root.open_picker("tap");
                                     }
@@ -2073,7 +2075,7 @@ export component MainWindow inherits Window {
                                             : (root.selected_is_tap_hold && root.th_feel == "")
                                                 ? "custom form kept as-is — pick a feel to change it"
                                                 : "";
-                                    color: #5a6673;
+                                    color: #8c96a4;
                                     font-size: 11px;
                                     vertical-alignment: center;
                                     overflow: elide;
@@ -2117,7 +2119,7 @@ export component MainWindow inherits Window {
                                 }
                                 if root.selected_is_macro: Text {
                                     text: "\u{2022} editing existing";
-                                    color: #5a6673;
+                                    color: #8c96a4;
                                     font-size: 11px;
                                     vertical-alignment: center;
                                 }
@@ -2125,7 +2127,7 @@ export component MainWindow inherits Window {
                             // the ordered steps, each with reorder + remove controls.
                             if root.macro_rows.length == 0: Text {
                                 text: "no steps yet \u{2014} add a key, text, chord, or pause below";
-                                color: #5a6673;
+                                color: #8c96a4;
                                 font-size: 11px;
                             }
                             for m[idx] in root.macro_rows: HorizontalLayout {
@@ -2279,7 +2281,7 @@ export component MainWindow inherits Window {
                                 }
                                 IconButton {
                                     wide: true;
-                                    text: "pick\u{2026}";
+                                    text: "pick from list\u{2026}";
                                     clicked => {
                                         root.open_picker("macro_chord_key");
                                     }
@@ -2651,7 +2653,7 @@ export component MainWindow inherits Window {
                             // the full scrollable list.
                             if root.picker_query == "": Text {
                                 text: "common";
-                                color: #5a6673;
+                                color: #8c96a4;
                                 font-size: 11px;
                             }
                             if root.picker_query == "": HorizontalLayout {
@@ -2709,7 +2711,7 @@ export component MainWindow inherits Window {
                                 text: root.picker_truncated > 0
                                     ? root.picker_source + " \u{00b7} +\{root.picker_truncated} more \u{2014} refine search"
                                     : root.picker_source;
-                                color: #5a6673;
+                                color: #8c96a4;
                                 font-size: 11px;
                                 vertical-alignment: center;
                             }
