@@ -1357,3 +1357,30 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
     the existing monitor path regardless; switch opportunistically only if upstream lands it.
   - **Logged non-blocking note:** if a config already uses keyd aliases, ensure the board *resolves* them
     for correct display (separate from the dropped alias editor).
+- *(2026-06-13 — SECOND GROOM PASS: Ryan's 7 jotted items)* Walked 7 newly-jotted items one-by-one; each
+  slotted into the groomed plan above. Net adds:
+  - **Into v1.3** (polish/bug-fixes alongside the labels + backup headline):
+    1. **Text-wrap fix** — text currently grows the window instead of wrapping. `MainWindow.width` follows
+       `body.preferred-width` with no max; several `Text`/headers lack `wrap: word-wrap` (cold-start banner,
+       `edit_banner`, global header/hint, chord header, chord-action row, tap-hold note). Add a window
+       max-width + wrap the offenders. Low blast radius (pure layout).
+    5. **De-emphasize "Save draft"** — Ryan never uses it; with one-click apply it's near-redundant. Don't
+       remove (still useful for the rare build-it-all-then-install flow) — demote it visually when apply is
+       available. Pairs with the commit-model copy.
+    6. **Symbol-glow bug** — remapping a key to a shifted symbol highlights the wrong board key. Repro:
+       `h → (` glows both shifts + `9`; but `j → )` glows correctly. Bug is in the
+       `output_chord`/`canonical` glow-resolution path (`core/src/board.rs` ~169-309); deterministic given
+       the cap keysym set → **unit-testable, fix properly with tests** (not a defer-able combinatorial case).
+    7. **Noop styling** — disabled (`noop`) keys are stamped bright-yellow `REMAP_ACCENT` like an active
+       remap (`board.rs:382-390`). A do-nothing key should recede. **Decision: render totally blank + greyed
+       (dimmed)** — distinct from an active remap (bright) and from an inherited/sublayer key (dim *with a
+       legend*); the blank cap reads as "deliberately off." Pure styling, low risk.
+  - **Into v1.4** (alongside the heatmap headline):
+    2. **Swap key (NEW feature)** — ZSA-style "move this remap here; if something's already there, swap the
+       two." Ryan used it constantly in Oryx. Two-click gesture (pick source, pick dest → swap bindings).
+    3. **Auto-advance to next key in row** — after committing a key, jump focus to the next. **Opt-in
+       toggle** (don't force it). Speeds up building a layer left-to-right.
+    4. **More layouts** — add **75%**, a generic **Laptop**, and (optional) **96%**. Research conclusion:
+       keyd's audience is laptop users + owners of dumb external keyboards, NOT split/ergo folks (those run
+       QMK/ZMK firmware). So **skip** more splits / 40% / additional ergo — keyd-viz already overshoots that
+       end with Ergodox + Ortho. Laptop ("75%") is the real gap.
