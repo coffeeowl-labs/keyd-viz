@@ -394,6 +394,7 @@ export struct GlobalRow {
     name: string,
     label: string,
     value: string,
+    unit: string,
     hint: string,
     is_bool: bool,
     known: bool,
@@ -1574,15 +1575,26 @@ export component MainWindow inherits Window {
                                 }
                             }
                             // everything else → a text field; Enter commits, blank clears.
+                            // Empty == keyd's default, so the placeholder says so rather
+                            // than a bare "default" that reads like a committed value.
                             if !g.is_bool: LineEdit {
-                                width: 120px;
+                                width: 96px;
                                 height: 26px;
                                 font-size: 12px;
-                                placeholder-text: "default";
+                                placeholder-text: "(default)";
                                 text: g.value;
                                 accepted(t) => {
                                     root.set_global(g.name, t);
                                 }
+                            }
+                            // Unit chip — prominent and non-dim so ms vs µs can't be
+                            // missed (µs is amber to flag the one microsecond row).
+                            if g.unit != "": Text {
+                                text: g.unit;
+                                color: g.unit == "\u{00b5}s" ? #f0b429 : #cfd6df;
+                                font-size: 11px;
+                                font-weight: 700;
+                                vertical-alignment: center;
                             }
                             Text {
                                 text: g.known ? g.hint : "(unrecognized \u{2014} kept as-is)";
