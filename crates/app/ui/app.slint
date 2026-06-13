@@ -259,16 +259,19 @@ component IconButton inherits Rectangle {
     in property <image> icon;           // when set (with use_icon), drawn instead of text
     in property <bool> use_icon: false;
     in property <bool> wide: false;
-    in property <bool> active: false;   // engaged/toggled state (e.g. pin on)
+    in property <bool> active: false;   // engaged/toggled state (e.g. pin on) — OUTLINE green
+    in property <bool> primary: false;  // commit action (set / apply) — FILLED green, so a
+                                        // "click me" button never reads as an "is selected" pill
     in property <bool> danger: false;   // destructive action (delete / discard) — red, not green
     callback clicked;
     width: root.use_icon ? 26px : (wide ? lbl.preferred-width + 18px : 26px);
     height: 24px;
     border-radius: 6px;
     background: danger ? (bta.has-hover ? #3a2020 : #2a1a1a)
+        : primary ? (bta.has-hover ? #4ee89a : #3ddc84)
         : (active ? #16341f : (bta.has-hover ? #1b2129 : #161b22));
     border-width: 1px;
-    border-color: danger ? #e5534b : (active ? #3ddc84 : #2a3340);
+    border-color: danger ? #e5534b : (primary ? #3ddc84 : (active ? #3ddc84 : #2a3340));
     bta := TouchArea {
         clicked => {
             root.clicked();
@@ -282,15 +285,15 @@ component IconButton inherits Rectangle {
         height: 15px;
         source: root.icon;
         image-fit: contain;
-        // SVGs are monochrome; tint to the theme (green when engaged).
-        colorize: active ? #3ddc84 : (bta.has-hover ? #ffffff : #cfd6df);
+        // SVGs are monochrome; tint to the theme (green when engaged, dark on filled-green).
+        colorize: primary ? #08130c : (active ? #3ddc84 : (bta.has-hover ? #ffffff : #cfd6df));
     }
     lbl := Text {
         visible: !root.use_icon;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         text: root.text;
-        color: danger ? #ff8b82 : (active ? #3ddc84 : #cfd6df);
+        color: danger ? #ff8b82 : (primary ? #08130c : (active ? #3ddc84 : #cfd6df));
         font-size: 13px;
         font-weight: 700;
         font-family: "JetBrains Mono";
@@ -1737,6 +1740,7 @@ export component MainWindow inherits Window {
                         IconButton {
                             wide: true;
                             text: "set";
+                            primary: true;   // the commit action for the simple-remap row
                             clicked => {
                                 root.apply_binding(root.edit_value);
                             }
@@ -2124,7 +2128,9 @@ export component MainWindow inherits Window {
                                 IconButton {
                                     wide: true;
                                     text: "set tap/hold";
-                                    active: root.th_hold != "";
+                                    // filled green once a hold target is chosen (the minimum a
+                                    // tap/hold needs); neutral-grey while incomplete.
+                                    primary: root.th_hold != "";
                                     clicked => {
                                         if (root.th_hold != "") {
                                             root.apply_tap_hold();
@@ -2378,7 +2384,9 @@ export component MainWindow inherits Window {
                                 IconButton {
                                     wide: true;
                                     text: "set macro";
-                                    active: root.macro_rows.length > 0;
+                                    // filled green only once there's something to commit;
+                                    // neutral-grey while empty reads as "not ready yet".
+                                    primary: root.macro_rows.length > 0;
                                     clicked => {
                                         if (root.macro_rows.length > 0) {
                                             root.apply_macro();
@@ -2429,7 +2437,7 @@ export component MainWindow inherits Window {
                         if root.apply_available && root.apply_state == "idle" && !root.delete_config_prompt: IconButton {
                             wide: true;
                             text: "delete config\u{2026}";
-                            active: true;
+                            danger: true;   // destructive — red, not the affirming green (B4)
                             clicked => {
                                 root.delete_config_prompt = true;
                             }
