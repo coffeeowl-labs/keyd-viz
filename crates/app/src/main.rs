@@ -378,6 +378,21 @@ fn save_snapshot(win: &MainWindow, path: &str) -> Result<(u32, u32), String> {
     Ok((w, h))
 }
 
+/// Set the selection's current binding *and* its plain-English description together, so
+/// the editor headline can lead with "Tap F → F · Hold F → nav layer" and keep the raw
+/// `lettermod(...)` as a secondary disclosure (UX-critic B1). The human form is derived
+/// from `selected_phys` (the key the binding belongs to) — set that first.
+fn set_current_binding(win: &MainWindow, cur: impl AsRef<str>) {
+    let cur = cur.as_ref();
+    win.set_edit_current(cur.into());
+    let human = if cur.is_empty() {
+        String::new()
+    } else {
+        keydviz_core::humanize(win.get_selected_phys().as_str(), cur)
+    };
+    win.set_edit_current_human(human.into());
+}
+
 /// Drive the UI into a named edit-mode state for the screenshot harness, by invoking
 /// the same callbacks a real click-path runs (so panels populate authentically). Assumes
 /// the active sheet is `examples/hhkb.conf` (tap-hold keys f/d/space/k; layers main/nav/
@@ -1272,7 +1287,7 @@ fn main() -> Result<(), slint::PlatformError> {
             // Clicking a key returns from the global options form.
             win.set_editing_global(false);
             win.set_selected_phys(phys);
-            win.set_edit_current(cur.clone().into());
+            set_current_binding(&win, cur.clone());
             win.set_edit_value(cur.into());
             win.set_capture_armed(false);
         });
@@ -1322,7 +1337,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         "simple"
                     };
                     win.set_key_mode(mode.into());
-                    win.set_edit_current(cur.clone().into());
+                    set_current_binding(&win, cur.clone());
                     win.set_edit_value(cur.into());
                 }
             }
@@ -1363,7 +1378,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_edit_layer(created.into());
                     win.set_selected_phys("".into());
                     win.set_key_mode("simple".into()); // no key selected: reset the editor mode
-                    win.set_edit_current("".into());
+                    set_current_binding(&win, "");
                     win.set_edit_value("".into());
                     win.set_new_layer_open(false);
                     win.set_new_layer_name("".into());
@@ -1450,7 +1465,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_edit_layer(next.into());
                     win.set_selected_phys("".into());
                     win.set_key_mode("simple".into()); // no key selected: reset the editor mode
-                    win.set_edit_current("".into());
+                    set_current_binding(&win, "");
                     win.set_edit_value("".into());
                     win.set_edit_dirty(dirty);
                     win.set_capture_armed(false);
@@ -1512,7 +1527,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     // The selection's section changed name; reset the picked key.
                     win.set_selected_phys("".into());
                     win.set_key_mode("simple".into()); // no key selected: reset the editor mode
-                    win.set_edit_current("".into());
+                    set_current_binding(&win, "");
                     win.set_edit_value("".into());
                     win.set_edit_dirty(dirty);
                     win.set_capture_armed(false);
@@ -1556,7 +1571,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     seed_macro(&win, s, &layer, &phys, &macro_draft); // and the macro panel
                     refresh_warnings(&win, s); // a binding change can add/clear an orphan
                     drop(sb);
-                    win.set_edit_current(value.clone().into());
+                    set_current_binding(&win, value.clone());
                     win.set_edit_value(value.into());
                     win.set_edit_dirty(dirty);
                     win.set_capture_armed(false);
@@ -1594,7 +1609,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     seed_macro(&win, s, &layer, &phys, &macro_draft); // and the macro panel
                     refresh_warnings(&win, s); // a binding change can add/clear an orphan
                     drop(sb);
-                    win.set_edit_current("".into());
+                    set_current_binding(&win, "");
                     win.set_edit_value("".into());
                     win.set_edit_dirty(dirty);
                     win.set_capture_armed(false);
@@ -1643,7 +1658,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     seed_macro(&win, s, &layer, &phys, &macro_draft); // keep the macro panel in sync
                     refresh_warnings(&win, s); // a tap/hold can target a missing layer
                     drop(sb);
-                    win.set_edit_current(cur.clone().into());
+                    set_current_binding(&win, cur.clone());
                     win.set_edit_value(cur.into());
                     win.set_edit_dirty(dirty);
                     win.set_capture_armed(false);
@@ -1818,7 +1833,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     seed_macro(&win, s, &layer, &phys, &macro_draft);
                     refresh_warnings(&win, s); // a macro can't orphan a layer, but keep parity
                     drop(sb);
-                    win.set_edit_current(cur.clone().into());
+                    set_current_binding(&win, cur.clone());
                     win.set_edit_value(cur.into());
                     win.set_edit_dirty(dirty);
                     win.set_capture_armed(false);
@@ -2826,7 +2841,7 @@ fn enter_edit_session(
     win.set_rename_target("".into());
     win.set_rename_name("".into());
     win.set_selected_phys("".into());
-    win.set_edit_current("".into());
+    set_current_binding(win, "");
     win.set_edit_value("".into());
     win.set_edit_dirty(s.dirty());
     win.set_draft_info("".into());
@@ -3332,7 +3347,7 @@ fn reopen_after_kept(win: &MainWindow, ctx: &ApplyCtx) {
             let phys = win.get_selected_phys().to_string();
             if !phys.is_empty() {
                 let cur = new_s.current_binding(&layer, &phys).unwrap_or_default();
-                win.set_edit_current(cur.clone().into());
+                set_current_binding(win, cur.clone());
                 win.set_edit_value(cur.into());
             }
             *ctx.session.borrow_mut() = Some(new_s);

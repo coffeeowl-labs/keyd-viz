@@ -581,7 +581,8 @@ export component MainWindow inherits Window {
     in property <[EditLayer]> edit_layers;   // sections offered while editing
     in property <string> edit_layer;         // exact section name being edited ("main" = base)
     in property <string> selected_phys;      // physical key picked on the board ("" = none)
-    in property <string> edit_current;       // the selection's current binding (display only)
+    in property <string> edit_current;       // the selection's current binding (raw keyd syntax)
+    in property <string> edit_current_human; // plain-English form of edit_current ("" = none)
     in-out property <string> edit_value;     // the value field (Rust seeds it on selection)
     in property <bool> edit_dirty;           // session has unsaved changes
     in property <string> edit_banner;        // affected-keyboards line / view-only reason
@@ -1652,20 +1653,34 @@ export component MainWindow inherits Window {
                                 font-family: "JetBrains Mono";
                             }
                         }
-                        Text {
-                            // unbound: keyd stops remapping the key. On a sublayer it
-                            // inherits the base layer; on base there is nothing below, so
-                            // keyd just forwards the key's real (hardware) code — not a
-                            // firmware fallback, keyd simply ceases to intercept.
-                            text: root.edit_current != ""
-                                ? "= \{root.edit_current}"
-                                : (root.edit_layer == "main" || root.edit_layer == "")
-                                    ? "no remap \u{2014} sends the real key"
-                                    : "inherits base";
-                            color: root.edit_current == "" ? #7d8694 : #cfd6df;
-                            font-size: 13px;
-                            font-family: "JetBrains Mono";
-                            vertical-alignment: center;
+                        // Lead with the plain-English meaning; keep the raw keyd syntax as
+                        // a small secondary line (the "advanced" disclosure). When unbound,
+                        // explain what keyd does instead of remapping.
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 1px;
+                            Text {
+                                // unbound: keyd stops remapping the key. On a sublayer it
+                                // inherits the base layer; on base there is nothing below, so
+                                // keyd just forwards the key's real (hardware) code — not a
+                                // firmware fallback, keyd simply ceases to intercept.
+                                text: root.edit_current != ""
+                                    ? root.edit_current_human
+                                    : (root.edit_layer == "main" || root.edit_layer == "")
+                                        ? "no remap \u{2014} sends the real key"
+                                        : "inherits base";
+                                color: root.edit_current == "" ? #8c96a4 : #cfd6df;
+                                font-size: 13px;
+                                font-weight: root.edit_current == "" ? 400 : 700;
+                                vertical-alignment: center;
+                            }
+                            if root.edit_current != "": Text {
+                                text: "= \{root.edit_current}";
+                                color: #8c96a4;
+                                font-size: 11px;
+                                font-family: "JetBrains Mono";
+                                vertical-alignment: center;
+                            }
                         }
                         Text {
                             text: "behavior:";
