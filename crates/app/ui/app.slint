@@ -2500,6 +2500,29 @@ export component MainWindow inherits Window {
                     }
 
                     // ---- one-click apply flow (E2) ----
+                    // The change detail (findings + staleness + diff, then outcome) sits
+                    // ABOVE the action bars, so "apply" reads as "apply *these* changes" —
+                    // the user sees what they're committing before the buttons. Selectable
+                    // (read-only TextInput) so revert-failed instructions copy-paste.
+                    if root.apply_state != "idle" && root.apply_info != "": Rectangle {
+                        background: #11151c;
+                        border-color: #2a3340;
+                        border-width: 1px;
+                        border-radius: 8px;
+                        height: ainfo.preferred-height + 16px;
+                        ainfo := TextInput {
+                            x: 8px;
+                            y: 8px;
+                            width: parent.width - 16px;
+                            read-only: true;
+                            wrap: word-wrap;
+                            text: root.apply_info;
+                            color: #cfd6df;
+                            font-size: 12px;
+                            font-family: "JetBrains Mono";
+                        }
+                    }
+
                     // confirm: the scan found command()/macro() — they run with root
                     // effect / inject keystrokes, so they need an unmistakable opt-in.
                     if root.apply_state == "confirm": Rectangle {
@@ -2524,7 +2547,6 @@ export component MainWindow inherits Window {
                             IconButton {
                                 wide: true;
                                 text: "cancel";
-                                active: true;
                                 clicked => {
                                     root.cancel_apply();
                                 }
@@ -2532,6 +2554,7 @@ export component MainWindow inherits Window {
                             IconButton {
                                 wide: true;
                                 text: "apply anyway";
+                                danger: true;
                                 clicked => {
                                     root.confirm_apply();
                                 }
@@ -2604,28 +2627,6 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // shared detail box for the apply flow: findings + staleness +
-                    // diff while deciding/counting down, outcome detail afterwards.
-                    // Selectable (read-only TextInput) — revert-failed instructions
-                    // must be copy-pasteable.
-                    if root.apply_state != "idle" && root.apply_info != "": Rectangle {
-                        background: #11151c;
-                        border-color: #2a3340;
-                        border-width: 1px;
-                        border-radius: 8px;
-                        height: ainfo.preferred-height + 16px;
-                        ainfo := TextInput {
-                            x: 8px;
-                            y: 8px;
-                            width: parent.width - 16px;
-                            read-only: true;
-                            wrap: word-wrap;
-                            text: root.apply_info;
-                            color: #cfd6df;
-                            font-size: 12px;
-                            font-family: "JetBrains Mono";
-                        }
-                    }
                 }
 
                 // ---- searchable key picker overlay (E2) ----
