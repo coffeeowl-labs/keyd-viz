@@ -304,6 +304,40 @@ component IconButton inherits Rectangle {
     }
 }
 
+// ---- "unbind" pill: clear the selection's binding so keyd stops remapping it ---
+// On a sublayer the key then inherits the base layer; on base it sends the real
+// (hardware) key. Distinct from "noop" (which disables the key). Dimmed when the
+// key is already unbound — nothing to clear. (We avoid QMK's "▽ transparent":
+// keyd has no firmware layer to fall through to, so the word would mislead.)
+// Lives in every kind's action row (simple / tap-hold / macro) so you never have
+// to switch kinds just to clear a key — unbind acts on the key, not the kind.
+component UnbindButton inherits Rectangle {
+    callback clicked;
+    in property <bool> already;   // already unbound → inert + dimmed
+    width: utxt.preferred-width + 14px;
+    height: 24px;
+    border-radius: 6px;
+    background: already ? #12161c : (uta.has-hover ? #16242a : #11191d);
+    border-width: 1px;
+    border-color: already ? #2a3340 : #2f5d63;
+    uta := TouchArea {
+        enabled: !already;
+        mouse-cursor: already ? default : pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+    utxt := Text {
+        x: 7px;
+        y: (parent.height - self.height) / 2;
+        text: "unbind";
+        color: already ? #4a525e : #6fc3cf;
+        font-size: 12px;
+        font-weight: 700;
+        font-family: "JetBrains Mono";
+    }
+}
+
 // ---- zoom −/+ + percentage (click to reset) + compact toggle ------------------
 component ViewControls inherits HorizontalLayout {
     in-out property <float> zoom;
@@ -1751,35 +1785,10 @@ export component MainWindow inherits Window {
                                 root.open_picker("binding");
                             }
                         }
-                        // "unbind": clear the binding so keyd stops remapping the key —
-                        // on a sublayer it inherits the base layer, on base it sends the
-                        // real key. Distinct from "noop" (which disables the key). Dimmed
-                        // when the key is already unbound — nothing to clear. (We avoid
-                        // QMK's "▽ transparent": keyd has no firmware layer to fall through
-                        // to, so the word would mislead — see the marker comment below.)
-                        Rectangle {
-                            width: trp.preferred-width + 14px;
-                            height: 24px;
-                            border-radius: 6px;
-                            property <bool> already: root.edit_current == "";
-                            background: already ? #12161c : (trpta.has-hover ? #16242a : #11191d);
-                            border-width: 1px;
-                            border-color: already ? #2a3340 : #2f5d63;
-                            trpta := TouchArea {
-                                enabled: !already;
-                                mouse-cursor: already ? default : pointer;
-                                clicked => {
-                                    root.make_transparent();
-                                }
-                            }
-                            trp := Text {
-                                x: 7px;
-                                y: (parent.height - self.height) / 2;
-                                text: "unbind";
-                                color: already ? #4a525e : #6fc3cf;
-                                font-size: 12px;
-                                font-weight: 700;
-                                font-family: "JetBrains Mono";
+                        UnbindButton {
+                            already: root.edit_current == "";
+                            clicked => {
+                                root.make_transparent();
                             }
                         }
                         // press-to-capture: the next live keypress becomes the value.
@@ -2123,6 +2132,7 @@ export component MainWindow inherits Window {
                             }
                             HorizontalLayout {
                                 alignment: start;
+                                spacing: 8px;
                                 IconButton {
                                     wide: true;
                                     text: "set tap/hold";
@@ -2133,6 +2143,13 @@ export component MainWindow inherits Window {
                                         if (root.th_hold != "") {
                                             root.apply_tap_hold();
                                         }
+                                    }
+                                }
+                                // clear the key's binding without switching to the simple kind
+                                UnbindButton {
+                                    already: root.edit_current == "";
+                                    clicked => {
+                                        root.make_transparent();
                                     }
                                 }
                             }
@@ -2379,6 +2396,7 @@ export component MainWindow inherits Window {
                             }
                             HorizontalLayout {
                                 alignment: start;
+                                spacing: 8px;
                                 IconButton {
                                     wide: true;
                                     text: "set macro";
@@ -2389,6 +2407,13 @@ export component MainWindow inherits Window {
                                         if (root.macro_rows.length > 0) {
                                             root.apply_macro();
                                         }
+                                    }
+                                }
+                                // clear the key's binding without switching to the simple kind
+                                UnbindButton {
+                                    already: root.edit_current == "";
+                                    clicked => {
+                                        root.make_transparent();
                                     }
                                 }
                             }
