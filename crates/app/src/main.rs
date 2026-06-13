@@ -454,8 +454,9 @@ fn drive_render_state(win: &MainWindow, state: &str) {
             // Seeded: the panel is property-gated; a real apply needs /etc/keyd + pkexec.
             win.set_apply_state("confirm".into());
             win.set_apply_info(
-                "2 changes to hhkb.conf\n  + [nav] g = escape\n  ~ [main] k = \
-                 lettermod(control, k, 150, 200)\n\nContains command() — review before applying."
+                "\u{26a0} this config can run a command when you press a key \u{2014} review \
+                 before applying\n\n+ [nav]\n+ g = escape   (G \u{2192} Esc)\n- k = k\n+ k = \
+                 lettermod(control, k, 150, 200)   (Tap K \u{2192} K \u{00b7} Hold K \u{2192} Ctrl)"
                     .into(),
             );
         }
@@ -2244,7 +2245,7 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(w) = s.stale_warning() {
                 info.push_str(&format!("\u{26a0} {w}\n"));
             }
-            let diff = s.diff();
+            let diff = s.diff_annotated();
             drop(sb);
             if !diff.is_empty() {
                 if !info.is_empty() {
@@ -2970,7 +2971,7 @@ fn draft_summary(s: &editing::EditSession, saved: &editing::DraftSaved) -> Strin
     if let Some(w) = &saved.stale_warning {
         out.push_str(&format!("\u{26a0} {w}\n"));
     }
-    let diff = s.diff();
+    let diff = s.diff_annotated();
     if !diff.is_empty() {
         out.push('\n');
         out.push_str(diff.trim_end());

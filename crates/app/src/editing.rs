@@ -528,6 +528,21 @@ impl EditSession {
         line_diff(&self.original, &self.edit.serialize())
     }
 
+    /// [`Self::diff`] with a plain-English gloss appended to each changed binding
+    /// line. The raw keyd value stays — it's what lands on disk — but `lettermod(…)`
+    /// is no longer the *only* form the apply/draft summary shows a first-timer
+    /// (UX critic B1; the editor headline already humanizes, this carries it into
+    /// the commit preview). Section headers and non-binding lines pass through.
+    pub fn diff_annotated(&self) -> String {
+        let raw = self.diff();
+        let mut out = String::with_capacity(raw.len());
+        for line in raw.lines() {
+            out.push_str(&annotate_diff_line(line));
+            out.push('\n');
+        }
+        out
+    }
+
     /// The exact bytes persistence writes — the same `serialize()` behind
     /// [`Self::save_draft`] and the one-click apply payload (E2). One source of
     /// truth: what the user previewed is byte-for-byte what lands on disk.
@@ -649,6 +664,24 @@ fn shell_quote(s: &str) -> String {
 /// diff. This is the change summary the user reviews before installing or
 /// applying, so it must reflect exactly what changed. Configs are small
 /// (`MAX_CONFIG_BYTES`), so the O(n·m) table is fine.
+/// Append `   (<plain English>)` to a `± key = value` diff line; pass section
+/// headers, includes, and the `[ids]` `*` line through untouched. Only lines
+/// shaped like a binding (`key = value`) get a gloss, so the parser never sees
+/// something it can't model. Monospace box → the gloss reads as a trailing note.
+fn annotate_diff_line(line: &str) -> String {
+    let Some(rest) = line.strip_prefix("- ").or_else(|| line.strip_prefix("+ ")) else {
+        return line.to_string();
+    };
+    let Some((key, val)) = rest.split_once('=') else {
+        return line.to_string();
+    };
+    let (key, val) = (key.trim(), val.trim());
+    if key.is_empty() || val.is_empty() || key.starts_with('[') {
+        return line.to_string();
+    }
+    format!("{line}   ({})", keydviz_core::humanize(key, val))
+}
+
 fn line_diff(old: &str, new: &str) -> String {
     let a: Vec<&str> = old.lines().collect();
     let b: Vec<&str> = new.lines().collect();
@@ -732,6 +765,29 @@ mod tests {
         // The preview model reflects the edit (remap b=noop shows as remap).
         assert_eq!(s.config().remap("capslock"), Some("noop"));
         assert_eq!(s.diff(), "- capslock = esc\n+ capslock = noop\n");
+    }
+
+    #[test]
+    fn annotated_diff_glosses_binding_lines() {
+        let td = TempDir::new("gloss");
+        let mut s = session(&td);
+        // An opaque tap/hold value is exactly the case B1 flagged: the raw form
+        // stays (it's what installs) but a plain-English gloss rides alongside.
+        s.set_binding("main", "capslock", "lettermod(nav, capslock, 150, 200)").unwrap();
+        let ann = s.diff_annotated();
+        assert!(ann.contains("+ capslock = lettermod(nav, capslock, 150, 200)"));
+        assert!(ann.contains("(Tap Caps \u{2192} Caps \u{00b7} Hold Caps \u{2192} nav layer)"));
+        // The `-` old line is glossed too, so you can read what's being replaced.
+        assert!(ann.contains("- capslock = esc   (Caps \u{2192} Esc)"));
+    }
+
+    #[test]
+    fn annotated_diff_leaves_section_headers_alone() {
+        // A new layer adds a `[fn]` header line; only the binding under it is
+        // glossed — headers/`*`/includes have no `key = value` shape to model.
+        assert_eq!(annotate_diff_line("+ [fn]"), "+ [fn]");
+        assert_eq!(annotate_diff_line("  [main]"), "  [main]");
+        assert_eq!(annotate_diff_line("+ *"), "+ *");
     }
 
     #[test]
