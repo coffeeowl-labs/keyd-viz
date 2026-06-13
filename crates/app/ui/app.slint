@@ -263,7 +263,10 @@ component IconButton inherits Rectangle {
     in property <bool> primary: false;  // commit action (set / apply) — FILLED green, so a
                                         // "click me" button never reads as an "is selected" pill
     in property <bool> danger: false;   // destructive action (delete / discard) — red, not green
+    in property <bool> enabled: true;   // inert + dimmed + unclickable when false (e.g. a
+                                        // per-key kind before any key is selected)
     callback clicked;
+    opacity: root.enabled ? 1.0 : 0.4;
     width: root.use_icon ? 26px : (wide ? lbl.preferred-width + 18px : 26px);
     height: 24px;
     border-radius: 6px;
@@ -273,6 +276,7 @@ component IconButton inherits Rectangle {
     border-width: 1px;
     border-color: danger ? #e5534b : (primary ? #3ddc84 : (active ? #3ddc84 : #2a3340));
     bta := TouchArea {
+        enabled: root.enabled;
         clicked => {
             root.clicked();
         }
@@ -1521,27 +1525,48 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // board interaction mode. "single key" edits one key's binding (click
-                    // a key → remap or tap/hold below); "chord" turns the board into a
-                    // two-key picker (click two keys → one action), scoped to the selected
-                    // layer (keyd scopes a chord to the layer it's declared in). Exactly
-                    // one is active, so a key's tap/hold and chord-building never overlap.
-                    // Hidden while editing globals (no board then).
+                    // The kinds of remap, as one row — no "single key vs chord" plumbing
+                    // surfaced to the user, just "what do you want to make?". The three
+                    // per-key kinds (simple / tap-hold / macro) act on the SELECTED key, so
+                    // they're inert (dimmed) until one is clicked. "chord" needs no prior
+                    // selection — it turns the whole board into a combo picker — so it's
+                    // always live and toggles on/off (click again to leave combo mode).
+                    // keyd scopes a chord to the layer it's declared in; switching layers
+                    // reloads that layer's chords. Hidden while editing globals (no board).
                     if !root.editing_global && root.edit_layer != "": HorizontalLayout {
                         spacing: 8px;
                         alignment: start;
                         Text {
-                            text: "mode:";
+                            text: "remap:";
                             color: #7d8694;
                             font-size: 12px;
                             vertical-alignment: center;
                         }
                         IconButton {
                             wide: true;
-                            text: "single key";
-                            active: root.board_mode != "chord";
+                            text: "simple";
+                            enabled: root.board_mode != "chord" && root.selected_phys != "";
+                            active: root.board_mode != "chord" && root.selected_phys != "" && root.key_mode == "simple";
                             clicked => {
-                                root.set_board_mode("single");
+                                root.set_key_mode("simple");
+                            }
+                        }
+                        IconButton {
+                            wide: true;
+                            text: "tap / hold";
+                            enabled: root.board_mode != "chord" && root.selected_phys != "";
+                            active: root.board_mode != "chord" && root.selected_phys != "" && root.key_mode == "taphold";
+                            clicked => {
+                                root.set_key_mode("taphold");
+                            }
+                        }
+                        IconButton {
+                            wide: true;
+                            text: "macro";
+                            enabled: root.board_mode != "chord" && root.selected_phys != "";
+                            active: root.board_mode != "chord" && root.selected_phys != "" && root.key_mode == "macro";
+                            clicked => {
+                                root.set_key_mode("macro");
                             }
                         }
                         IconButton {
@@ -1549,12 +1574,10 @@ export component MainWindow inherits Window {
                             text: "\u{2328} chord";
                             active: root.board_mode == "chord";
                             clicked => {
-                                root.set_board_mode("chord");
+                                root.set_board_mode(root.board_mode == "chord" ? "single" : "chord");
                             }
                         }
-                        // Only in chord mode — glosses what a "chord" is. In single mode
-                        // this would duplicate the "click a key on the board to edit its
-                        // binding" prompt below, so it's omitted there.
+                        // Only in chord mode — glosses what a "chord" is.
                         if root.board_mode == "chord": Text {
                             text: "pick 2+ keys to press together \u{2192} one action (a combo)";
                             color: #8c96a4;
@@ -1639,7 +1662,8 @@ export component MainWindow inherits Window {
                         color: #7d8694;
                         font-size: 12px;
                     }
-                    // header row: key chip + current binding + simple/tap-hold toggle
+                    // header row: the picked key chip + its current binding in plain English
+                    // (the simple/tap-hold/macro kind toggle lives in the "remap:" row above).
                     if !root.editing_global && root.board_mode != "chord" && root.selected_phys != "": HorizontalLayout {
                         spacing: 8px;
                         alignment: start;
@@ -1687,36 +1711,6 @@ export component MainWindow inherits Window {
                                 font-size: 11px;
                                 font-family: "JetBrains Mono";
                                 vertical-alignment: center;
-                            }
-                        }
-                        Text {
-                            text: "behavior:";
-                            color: #7d8694;
-                            font-size: 12px;
-                            vertical-alignment: center;
-                        }
-                        IconButton {
-                            wide: true;
-                            text: "simple";
-                            active: root.key_mode == "simple";
-                            clicked => {
-                                root.set_key_mode("simple");
-                            }
-                        }
-                        IconButton {
-                            wide: true;
-                            text: "tap / hold";
-                            active: root.key_mode == "taphold";
-                            clicked => {
-                                root.set_key_mode("taphold");
-                            }
-                        }
-                        IconButton {
-                            wide: true;
-                            text: "macro";
-                            active: root.key_mode == "macro";
-                            clicked => {
-                                root.set_key_mode("macro");
                             }
                         }
                     }
