@@ -1318,3 +1318,42 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   to all keyboards not claimed by another config"). Workspace green, clippy `-D warnings` clean; both
   changes' GUI click-through left for manual verification. **E2 functional surface unchanged (still
   complete); this is symmetry + polish from real-use testing.**
+- *(2026-06-12 — AI UX-critic pass + edit-mode polish, DONE)* Ran the gated §8 persona-critic pass
+  (built a headless `--render-state` screenshot harness; `scripts/ux-screenshots.sh`; report in
+  `docs/ux-critique-edit-mode.md`) and shipped every finding: plain-English binding humanizer
+  (`core::humanizer`) in the editor headline + apply/draft diff; commit-model copy; apply diff above the
+  action bars; a consistent button design language — **OUTLINE-green = selected state, FILLED-green
+  (`primary`) = commit action, RED (`danger`) = destructive, DIMMED (`enabled:false`) = inert**; gaps
+  between destructive/safe confirm buttons. Then two structural fixes from Ryan's click-through: the two
+  stacked toggle rows ("mode: single key | chord" + "behavior: simple|tap-hold|macro") collapsed into ONE
+  `remap: simple · tap-hold · macro · ⌨ chord` row (per-key kinds inert until a key is selected; chord
+  always-live toggle; "single key" deleted); and `unbind` moved into every kind's action row (reusable
+  `UnbindButton`), not just simple.
+- *(2026-06-13 — ROADMAP RE-GROOM; supersedes parts of §6 Phase 6 E3 and §8)* Walked the whole remaining
+  backlog item-by-item with Ryan. New shape:
+  - **v1.3 (reopened — no longer "cut now"; holds for two features):**
+    (a) **Custom key labels (HEADLINE)** — Oryx-style "see my own names on the board". Free-form,
+    **comment-backed** (`key = … # Tab L`), NOT keyd `[aliases]` (Ryan: aliases mostly obfuscate; free-form
+    labels supplant them). Any text incl. spaces; portable in the `.conf`; the high-value half is *display
+    resolution* on the board, the second half is the editor. Needs a **design pass** — the parser must
+    associate a trailing comment with its binding entry (read+edit+lossless round-trip); that's the
+    blast-radius-y part. (b) **Backup/restore (full: list + restore + prune)** — the apply tool ALREADY
+    writes timestamped backups (`crates/apply/src/txn.rs`, for the dead-man's-switch); add a list/restore UI
+    (restore = apply old bytes via the existing pkexec path) + retention (keep last N, prune). Low blast
+    radius. Honest limit: only covers one-click-apply configs, not manual draft-then-install.
+  - **v1.4 (HEADLINE):** **Usage heatmap** (Oryx/Keymapp-style) — persistent keypress aggregation, opt-in,
+    a storage layer (doesn't exist yet), board rendering. Keypress stream infra already exists (helper →
+    `keyd monitor`). Needs a privacy/storage design pass. Ranked above all other post-release work.
+  - **Post-v1.4, low priority:** composite-layer **creation** (minimal typed `a+b` → validate parts → dedup
+    → `SectionKind::Composite`); **curated built-in templates** (vetted presets: home-row mods, caps→esc/ctrl,
+    nav layer — serves newcomers; the *arbitrary* snippet-import idea was dropped as fuzzy/untestable).
+  - **DROPPED:** keyd `[aliases]` editing (supplanted by labels), `include` editing, "layout layers"
+    (already covered by `[global] default_layout` + `setlayout`/`swap` actions), arbitrary community-snippet
+    import, standalone lossless-CST formatting (its one useful slice — per-binding comment fidelity — rides
+    along with labels), undo/redo (replaced by backup/restore — coarse snapshots dodge the combinatorial QA
+    surface).
+  - **Parallel outreach (cheap, non-blocking):** file a keyd UPSTREAM issue proposing key events in keyd's
+    IPC — would let the heatmap/live view drop the `/dev/input` (`monitor`) privilege. Design v1.4 against
+    the existing monitor path regardless; switch opportunistically only if upstream lands it.
+  - **Logged non-blocking note:** if a config already uses keyd aliases, ensure the board *resolves* them
+    for correct display (separate from the dropped alias editor).
