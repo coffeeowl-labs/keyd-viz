@@ -2467,6 +2467,7 @@ dependencies = [
  "keydviz-apply",
  "keydviz-core",
  "ksni",
+ "png 0.17.16",
  "slint",
  "slint-build",
 ]

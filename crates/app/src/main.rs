@@ -357,6 +357,97 @@ fn flag_value(name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
 
+/// Capture the window's current frame to a PNG (RGBA8). Used by `--render` for the
+/// UX-critic screenshot harness. Returns the captured dimensions on success.
+fn save_snapshot(win: &MainWindow, path: &str) -> Result<(u32, u32), String> {
+    let buf = win.window().take_snapshot().map_err(|e| format!("take_snapshot: {e}"))?;
+    let (w, h) = (buf.width(), buf.height());
+    // The window is opaque; the software renderer's snapshot leaves alpha at 0 (it only
+    // copies RGB), so emit a 3-channel RGB PNG rather than a transparent RGBA one.
+    let mut bytes = Vec::with_capacity((w * h * 3) as usize);
+    for p in buf.as_slice() {
+        bytes.extend_from_slice(&[p.r, p.g, p.b]);
+    }
+    let file = std::fs::File::create(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+    enc.set_color(png::ColorType::Rgb);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header()
+        .and_then(|mut wr| wr.write_image_data(&bytes))
+        .map_err(|e| format!("png encode: {e}"))?;
+    Ok((w, h))
+}
+
+/// Drive the UI into a named edit-mode state for the screenshot harness, by invoking
+/// the same callbacks a real click-path runs (so panels populate authentically). Assumes
+/// the active sheet is `examples/hhkb.conf` (tap-hold keys f/d/space/k; layers main/nav/
+/// num/sym/game/shift; one chord leftshift+rightshift). A few terminal-confirmation
+/// panels (apply summary, discard) are seeded directly — they're property-gated and a
+/// faithful real apply needs `/etc/keyd` + pkexec, out of scope for a screenshot.
+fn drive_render_state(win: &MainWindow, state: &str) {
+    if state == "base" {
+        return; // plain viewer, base board — already rendered
+    }
+    // Every other state is inside edit mode.
+    win.invoke_toggle_edit();
+    match state {
+        "edit" => {} // edit mode entered, no key selected
+        "key-selected" => win.invoke_select_key("a".into()),
+        "tap-hold" => {
+            win.invoke_select_key("f".into()); // lettermod(nav, …) → seeds the editor
+            win.invoke_set_key_mode("taphold".into());
+        }
+        "macro" => {
+            win.invoke_select_key("a".into());
+            win.invoke_set_key_mode("macro".into());
+            // Build a representative draft through the real step callbacks.
+            win.set_macro_text_input("git push".into());
+            win.invoke_macro_add_text();
+            win.set_macro_delay_input("200".into());
+            win.invoke_macro_add_delay();
+            win.set_macro_chord_c(true);
+            win.set_macro_chord_key("enter".into());
+            win.invoke_macro_add_chord();
+        }
+        "picker" => {
+            win.invoke_select_key("f".into());
+            win.invoke_set_key_mode("taphold".into());
+            win.invoke_open_picker("tap".into());
+            win.invoke_filter_keys("".into()); // rank the full vocabulary
+        }
+        "chord" => {
+            win.invoke_set_board_mode("chord".into());
+            win.invoke_toggle_chord_key("j".into());
+            win.invoke_toggle_chord_key("k".into());
+        }
+        "global" => win.invoke_edit_global(),
+        "new-layer" => {
+            win.set_new_layer_open(true);
+            win.set_new_layer_name("fn".into());
+        }
+        "rename-layer" => {
+            win.invoke_pick_edit_layer("nav".into());
+            win.set_rename_target("nav".into());
+            win.set_rename_name("navigation".into());
+        }
+        "delete-layer" => {
+            win.invoke_pick_edit_layer("nav".into());
+            win.invoke_delete_layer("nav".into());
+        }
+        "discard" => win.set_discard_prompt(true),
+        "apply-summary" => {
+            // Seeded: the panel is property-gated; a real apply needs /etc/keyd + pkexec.
+            win.set_apply_state("confirm".into());
+            win.set_apply_info(
+                "2 changes to hhkb.conf\n  + [nav] g = escape\n  ~ [main] k = \
+                 lettermod(control, k, 150, 200)\n\nContains command() — review before applying."
+                    .into(),
+            );
+        }
+        other => eprintln!("unknown --render-state '{other}'"),
+    }
+}
+
 /// `--qmk-info <info.json>` path: render a keyd config on a board imported from QMK.
 ///
 /// The geometry + key identities come from QMK (`info.json` zipped index-wise with the
@@ -822,6 +913,13 @@ fn main() -> Result<(), slint::PlatformError> {
     if std::env::args().any(|a| a == "--probe") {
         println!("{}", probe::KeydProbe::run().summary());
         return Ok(());
+    }
+
+    // `--render`: force the software renderer before any Slint platform init. It renders
+    // synchronously (no GL surface / shown window needed) so `take_snapshot` is reliable,
+    // and this flat design (no gradients/blur) is pixel-faithful to the GPU path.
+    if std::env::args().any(|a| a == "--render") && std::env::var("SLINT_BACKEND").is_err() {
+        std::env::set_var("SLINT_BACKEND", "software");
     }
 
     let det = match flag_value("--qmk-info") {
@@ -2221,6 +2319,30 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     // The dead-man's switch GUI half (KEEP / revert during the countdown) lives on
     // the ApplyDialog, wired in open_apply_dialog — see handle_apply_event.
+
+    // `--render-state <name> --render <out.png>`: screenshot harness for the UX-critic
+    // pass. Placed here so every `win.on_*` handler is already wired — each state is
+    // driven by invoking the SAME callbacks a click runs, so panels populate
+    // authentically rather than from hand-faked models. Software-rendered (see top of
+    // main), then exits without spawning the live/helper/tray machinery.
+    if let Some(out) = flag_value("--render") {
+        let state = flag_value("--render-state").unwrap_or_else(|| "base".into());
+        drive_render_state(&win, &state);
+        win.show()?;
+        let weak = win.as_weak();
+        let delay = flag_value("--render-delay").and_then(|s| s.parse().ok()).unwrap_or(400);
+        slint::Timer::single_shot(std::time::Duration::from_millis(delay), move || {
+            if let Some(win) = weak.upgrade() {
+                match save_snapshot(&win, &out) {
+                    Ok((w, h)) => eprintln!("rendered {state} {w}x{h} -> {out}"),
+                    Err(e) => eprintln!("render error ({state}): {e}"),
+                }
+            }
+            let _ = slint::quit_event_loop();
+        });
+        win.run()?;
+        return Ok(());
+    }
 
     let demo = std::env::args().any(|a| a == "--demo");
     if demo {

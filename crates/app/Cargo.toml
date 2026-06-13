@@ -19,13 +19,16 @@ keydviz-core = { path = "../core" }
 keydviz-apply = { path = "../apply" }
 # unstable-fontique-08: lets us register the bundled JetBrains Mono faces at
 # runtime so typography is identical regardless of installed system fonts.
-slint = { version = "1", features = ["unstable-fontique-08"] }
+slint = { version = "1", features = ["unstable-fontique-08", "renderer-software"] }
 # Direct access to the underlying winit window (WinitWindowAccessor) so we can drive
 # always-on-top ourselves — WM-independent. Must track slint's version.
 i-slint-backend-winit = "1"
 # Tray icon via StatusNotifierItem over D-Bus (no GTK, no tokio). The `blocking`
 # feature needs an executor backend; async-io avoids pulling in tokio.
 ksni = { version = "0.3.4", default-features = false, features = ["blocking", "async-io"] }
+# PNG encoder for the `--render` screenshot harness (UX-critic pass). Pure Rust,
+# builds offline — matches the project's minimal-deps ethos.
+png = "0.17"
 
 [build-dependencies]
 slint-build = "1"
