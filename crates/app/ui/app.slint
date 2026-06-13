@@ -1176,6 +1176,8 @@ export component MainWindow inherits Window {
                                     root.confirm_discard();
                                 }
                             }
+                            // gap so the destructive button isn't fat-finger-adjacent to the safe one
+                            Rectangle { width: 18px; }
                             IconButton {
                                 wide: true;
                                 text: "keep editing";
@@ -1270,6 +1272,8 @@ export component MainWindow inherits Window {
                                     root.confirm_delete_layer();
                                 }
                             }
+                            // gap so the destructive button isn't fat-finger-adjacent to the safe one
+                            Rectangle { width: 18px; }
                             IconButton {
                                 wide: true;
                                 text: "keep";
@@ -2472,14 +2476,16 @@ export component MainWindow inherits Window {
                             IconButton {
                                 wide: true;
                                 text: "cancel";
-                                active: true;
                                 clicked => {
                                     root.delete_config_prompt = false;
                                 }
                             }
+                            // gap so the destructive button isn't fat-finger-adjacent to cancel
+                            Rectangle { width: 18px; }
                             IconButton {
                                 wide: true;
                                 text: "delete";
+                                danger: true;
                                 clicked => {
                                     root.delete_config();
                                 }
@@ -2559,6 +2565,8 @@ export component MainWindow inherits Window {
                                     root.cancel_apply();
                                 }
                             }
+                            // gap so "apply anyway" isn't fat-finger-adjacent to cancel
+                            Rectangle { width: 18px; }
                             IconButton {
                                 wide: true;
                                 text: "apply anyway";
