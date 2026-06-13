@@ -1533,10 +1533,11 @@ export component MainWindow inherits Window {
                                 root.set_board_mode("chord");
                             }
                         }
-                        Text {
-                            text: root.board_mode == "chord"
-                                ? "pick 2+ keys to press together \u{2192} one action (a combo)"
-                                : "click a key on the board";
+                        // Only in chord mode — glosses what a "chord" is. In single mode
+                        // this would duplicate the "click a key on the board to edit its
+                        // binding" prompt below, so it's omitted there.
+                        if root.board_mode == "chord": Text {
+                            text: "pick 2+ keys to press together \u{2192} one action (a combo)";
                             color: #8c96a4;
                             font-size: 11px;
                             vertical-alignment: center;
