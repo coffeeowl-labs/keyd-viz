@@ -2389,6 +2389,18 @@ export component MainWindow inherits Window {
                         }
                     }
 
+                    // The commit model, stated once: the three verbs (set / save draft /
+                    // apply / done) are otherwise unrelated-looking. Adapts to whether the
+                    // one-click apply path is available for this config.
+                    Text {
+                        text: root.apply_available
+                            ? "Edits preview on the board as you go. \u{201c}save draft\u{201d} writes them to the file; \u{201c}apply\u{201d} loads them into keyd now; \u{201c}done\u{201d} just leaves edit mode."
+                            : "Edits preview on the board as you go. \u{201c}save draft\u{201d} writes them to a file; \u{201c}done\u{201d} just leaves edit mode.";
+                        color: #8c96a4;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+
                     // save: write the draft and show the copy-paste install steps;
                     // apply: the one-click pkexec path when this install supports it.
                     HorizontalLayout {
@@ -2424,7 +2436,7 @@ export component MainWindow inherits Window {
                         }
                         if root.apply_hint != "": Text {
                             text: root.apply_hint;
-                            color: #4a525e;
+                            color: #8c96a4;
                             font-size: 11px;
                             vertical-alignment: center;
                         }
