@@ -2775,7 +2775,10 @@ fn affected_line(src: &SheetSrc) -> String {
     } else if !src.matched_ids.is_empty() {
         format!("{path} \u{2014} applies to {}", src.matched_ids.join(", "))
     } else {
-        format!("{path} \u{2014} no connected keyboard matches this config")
+        // Reframed from a failure ("no keyboard matches") to the actual situation:
+        // editing works fine, the changes just don't drive a live keyboard right now
+        // (true for an example config or a real one whose keyboard is unplugged).
+        format!("{path} \u{2014} no matching keyboard connected; edits still save to this file")
     }
 }
 

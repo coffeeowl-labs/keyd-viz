@@ -837,6 +837,16 @@ export component MainWindow inherits Window {
                 }
             }
 
+            // Cold-start orientation: the title is a filename, so on first run nothing
+            // says what the app is or how to change a key. This one-liner does both —
+            // names the purpose and points at the edit button. Hidden in edit mode (the
+            // EDIT banner takes over) and in compact mode.
+            if !root.compact && !root.edit_mode: Text {
+                text: "keyd config viewer & editor \u{2014} click \u{201c}edit\u{201d} to remap keys";
+                color: #8c96a4;
+                font-size: 12px;
+            }
+
             // line 2: source config file + the [ids] it applies to on the left, the
             // live-status pill on the right. The id matching the currently-plugged-in
             // keyboard is highlighted green.
