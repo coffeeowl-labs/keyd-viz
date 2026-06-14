@@ -673,6 +673,12 @@ export component MainWindow inherits Window {
     callback apply_binding(string);          // typed / palette / captured value for the selection
     callback make_transparent();             // clear the selection's binding → falls through to base
     callback arm_capture();
+    // ---- custom display label (v1.3): a free-form cap name, stored as a keyd-safe
+    // comment. Independent of the remap kind — it changes display, not behavior.
+    in-out property <string> edit_label;     // the label field (Rust seeds it on selection)
+    in property <bool> selected_has_label;   // a label is currently set (→ show "clear")
+    callback set_label(string);              // write/update the selection's label
+    callback clear_label();                  // remove the selection's label
     // A selected key's binding is remap XOR tap/hold — one binding line, never both.
     // `key_mode` ("simple" | "taphold") picks which editor shows; Rust seeds it from
     // the current binding on select. (Chords are a SEPARATE construct — see board_mode.)
@@ -1787,6 +1793,46 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+                    // custom display label — shown for any selected key, in every key
+                    // mode (it's about how the cap reads, not what it does). Sets/clears a
+                    // keyd-safe `# keyd-viz:` comment beside the binding.
+                    if !root.editing_global && root.board_mode != "chord" && root.selected_phys != "": HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Text {
+                            text: "label";
+                            color: #7d8694;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+                        LineEdit {
+                            width: 220px;
+                            height: 28px;
+                            font-size: 13px;
+                            placeholder-text: "custom cap name (e.g. Tab L)";
+                            text <=> root.edit_label;
+                            accepted(t) => {
+                                root.set_label(t);
+                            }
+                        }
+                        IconButton {
+                            wide: true;
+                            text: "set";
+                            primary: root.edit_label != "";  // commit only when there's text
+                            clicked => {
+                                root.set_label(root.edit_label);
+                            }
+                        }
+                        if root.selected_has_label: IconButton {
+                            wide: true;
+                            text: "clear";
+                            danger: true;   // removes the custom name (reverts to the legend)
+                            clicked => {
+                                root.clear_label();
+                            }
+                        }
+                    }
+
                     // simple remap editor — shown in "simple" mode (a plain key→key,
                     // disable, or unbind). Tap/hold lives in its own panel below.
                     if !root.editing_global && root.board_mode != "chord" && root.selected_phys != "" && root.key_mode == "simple": HorizontalLayout {

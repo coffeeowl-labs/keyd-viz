@@ -414,6 +414,10 @@ fn drive_render_state(win: &MainWindow, state: &str) {
             win.set_backups_open(true);
         }
         "key-selected" => win.invoke_select_key("a".into()),
+        "label" => {
+            win.invoke_select_key("a".into());
+            win.set_edit_label("My Key".into());
+        }
         "tap-hold" => {
             win.invoke_select_key("f".into()); // lettermod(nav, …) → seeds the editor
             win.invoke_set_key_mode("taphold".into());
@@ -1284,6 +1288,8 @@ fn main() -> Result<(), slint::PlatformError> {
             if phys == win.get_selected_phys() {
                 win.set_selected_phys("".into());
                 win.set_capture_armed(false);
+                win.set_edit_label("".into());
+                win.set_selected_has_label(false);
                 return;
             }
             let sb = session.borrow();
@@ -1292,6 +1298,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let cur = s.current_binding(&layer, &phys).unwrap_or_default();
             seed_tap_hold(&win, s, &layer, &phys);
             seed_macro(&win, s, &layer, &phys, &macro_draft);
+            seed_label(&win, s, &layer, &phys);
             // Default the editor mode to match the key's current binding: an existing
             // macro opens in macro mode, a tap/hold in tap/hold mode, else simple.
             let mode = if win.get_selected_is_macro() {
@@ -1347,6 +1354,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     // Reseed the macro panel/draft for the new layer too, or a stale
                     // draft from the old layer could be committed onto this key here.
                     seed_macro(&win, s, &name, &phys, &macro_draft);
+                    seed_label(&win, s, &name, &phys);
                     let mode = if win.get_selected_is_macro() {
                         "macro"
                     } else if win.get_selected_is_tap_hold() {
@@ -1631,6 +1639,69 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_edit_value("".into());
                     win.set_edit_dirty(dirty);
                     win.set_capture_armed(false);
+                    refresh_preview(&win, &srcs, &path, cfg);
+                }
+                Err(e) => win.set_edit_banner(format!("\u{26a0} {e}").into()),
+            }
+        });
+    }
+
+    // Set the selection's custom display label (a keyd-safe `# keyd-viz:` comment). It
+    // changes how the cap reads, never the binding — so no warning/orphan recompute, just
+    // re-render and refresh dirty. An empty value clears it (same as the clear button).
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        win.on_set_label(move |text| {
+            let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
+            let text = text.trim().to_string();
+            let layer = win.get_edit_layer().to_string();
+            let phys = win.get_selected_phys().to_string();
+            if phys.is_empty() {
+                return;
+            }
+            let mut sb = session.borrow_mut();
+            let Some(s) = sb.as_mut() else { return };
+            match s.set_label(&layer, &phys, &text) {
+                Ok(()) => {
+                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    seed_label(&win, s, &layer, &phys);
+                    drop(sb);
+                    win.set_edit_dirty(dirty);
+                    refresh_preview(&win, &srcs, &path, cfg);
+                }
+                Err(e) => win.set_edit_banner(format!("\u{26a0} {e}").into()),
+            }
+        });
+    }
+
+    // Clear the selection's custom label (revert the cap to its default legend).
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        win.on_clear_label(move || {
+            let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
+            let layer = win.get_edit_layer().to_string();
+            let phys = win.get_selected_phys().to_string();
+            if phys.is_empty() {
+                return;
+            }
+            let mut sb = session.borrow_mut();
+            let Some(s) = sb.as_mut() else { return };
+            match s.clear_label(&layer, &phys) {
+                Ok(()) => {
+                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+                    seed_label(&win, s, &layer, &phys);
+                    drop(sb);
+                    win.set_edit_dirty(dirty);
                     refresh_preview(&win, &srcs, &path, cfg);
                 }
                 Err(e) => win.set_edit_banner(format!("\u{26a0} {e}").into()),
@@ -2800,6 +2871,15 @@ fn seed_tap_hold(win: &MainWindow, s: &editing::EditSession, layer: &str, phys: 
     }
 }
 
+/// Seed the custom-label field and its "has a label" flag for the selected key, so
+/// the label row pre-fills with the current label and shows the `clear` button only
+/// when one is set. Independent of the binding kind.
+fn seed_label(win: &MainWindow, s: &editing::EditSession, layer: &str, phys: &str) {
+    let label = s.current_label(layer, phys).unwrap_or_default();
+    win.set_selected_has_label(!label.is_empty());
+    win.set_edit_label(label.into());
+}
+
 /// The UI "feel" token for an existing binding's behavior: `""` (no chip lit) for
 /// a form outside the two-behavior model, so editing it preserves rather than
 /// converts. Kept in sync with [`feel_from_str`].
@@ -2883,6 +2963,8 @@ fn enter_edit_session(
     win.set_selected_phys("".into());
     set_current_binding(win, "");
     win.set_edit_value("".into());
+    win.set_edit_label("".into());
+    win.set_selected_has_label(false);
     win.set_edit_dirty(s.dirty());
     win.set_draft_info("".into());
     win.set_capture_armed(false);
@@ -2923,6 +3005,8 @@ fn reset_edit_ui(win: &MainWindow) {
     win.set_rename_target("".into());
     win.set_rename_name("".into());
     win.set_can_rename(false);
+    win.set_edit_label("".into());
+    win.set_selected_has_label(false);
     win.set_key_mode("simple".into());
     win.set_board_mode("single".into());
     win.set_chord_rows(model(Vec::<ChordRow>::new()));

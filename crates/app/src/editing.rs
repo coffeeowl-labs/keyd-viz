@@ -149,6 +149,40 @@ impl EditSession {
         Ok(())
     }
 
+    /// Set a custom display label on `key` in `layer` (`"main"` = base). The label is
+    /// stored as a keyd-safe `# keyd-viz: key = text` comment beside the binding; it
+    /// only affects how the cap is drawn, never the remap. Empty `text` clears it.
+    /// Creates `[main]` if the base board is include-only (same as [`Self::set_binding`]).
+    /// `Err` only when there is no such board (a named layer with no local section).
+    pub fn set_label(&mut self, layer: &str, key: &str, text: &str) -> Result<(), String> {
+        if !self.edit.set_label(layer, key, text) {
+            return Err(format!("this config has no [{layer}] section"));
+        }
+        Ok(())
+    }
+
+    /// Remove the custom label for `key` on the `layer` board. A no-op when none is
+    /// set. `Err` only when there is no such board at all.
+    pub fn clear_label(&mut self, layer: &str, key: &str) -> Result<(), String> {
+        if !self.editable_sections().iter().any(|s| s == layer) {
+            return Err(format!("this config has no [{layer}] section"));
+        }
+        self.edit.clear_label(layer, key);
+        Ok(())
+    }
+
+    /// The custom label currently shown on `key` in `layer`, if any — read from the
+    /// same derived model the board renders, so the field matches the cap.
+    pub fn current_label(&self, layer: &str, key: &str) -> Option<String> {
+        let cfg = self.config();
+        let labels = if layer == "main" {
+            &cfg.labels
+        } else {
+            &cfg.layer(layer)?.labels
+        };
+        keydviz_core::model::label_for(labels, key).map(str::to_string)
+    }
+
     /// The selected key's current binding as a decomposed tap/hold, if it is one
     /// of the editable tap/hold forms — so the panel can show "tap / hold" slots
     /// instead of the raw `overload(...)` text. `None` when the key is unbound or
@@ -816,6 +850,43 @@ mod tests {
         s2.clear_binding("main", "nonexistent").unwrap();
         assert!(!s2.dirty());
         assert!(s2.clear_binding("sym", "a").unwrap_err().contains("[sym]"));
+    }
+
+    #[test]
+    fn set_and_clear_label_round_trips_through_the_session() {
+        let td = TempDir::new("label");
+        let mut s = session(&td);
+        assert_eq!(s.current_label("main", "capslock"), None);
+
+        s.set_label("main", "capslock", "Hyper").unwrap();
+        assert!(s.dirty());
+        assert_eq!(s.current_label("main", "capslock").as_deref(), Some("Hyper"));
+        // The label rides as a comment beside the (untouched) binding.
+        assert!(s.serialized().contains("# keyd-viz: capslock = Hyper"));
+        assert_eq!(s.current_binding("main", "capslock").as_deref(), Some("esc"));
+
+        // Clearing the label removes it but keeps the binding.
+        s.clear_label("main", "capslock").unwrap();
+        assert_eq!(s.current_label("main", "capslock"), None);
+        assert_eq!(s.current_binding("main", "capslock").as_deref(), Some("esc"));
+
+        // A label on a layer key reads from that layer; a missing board errors.
+        let mut s2 = session(&td);
+        s2.set_label("nav", "h", "Left").unwrap();
+        assert_eq!(s2.current_label("nav", "h").as_deref(), Some("Left"));
+        assert_eq!(s2.current_label("main", "h"), None);
+        assert!(s2.set_label("sym", "a", "X").unwrap_err().contains("[sym]"));
+    }
+
+    #[test]
+    fn label_survives_a_binding_edit() {
+        // A label names the cap, not the value: retargeting the binding keeps it.
+        let td = TempDir::new("label-edit");
+        let mut s = session(&td);
+        s.set_label("main", "capslock", "Hyper").unwrap();
+        s.set_binding("main", "capslock", "leftcontrol").unwrap();
+        assert_eq!(s.current_label("main", "capslock").as_deref(), Some("Hyper"));
+        assert_eq!(s.current_binding("main", "capslock").as_deref(), Some("leftcontrol"));
     }
 
     #[test]
