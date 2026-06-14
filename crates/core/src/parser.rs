@@ -38,6 +38,16 @@ pub(crate) fn is_mod(target: &str) -> bool {
     MODS.contains(&target)
 }
 
+/// A hold onto `target` is a modifier hold if `target` is one of keyd's modifier
+/// names, else a momentary-layer hold.
+fn hold_kind(target: &str) -> HoldKind {
+    if is_mod(target) {
+        HoldKind::Mod
+    } else {
+        HoldKind::Layer
+    }
+}
+
 /// Read and parse a keyd config file.
 pub fn parse_file(path: &Path) -> io::Result<Config> {
     Ok(parse_text(&fs::read_to_string(path)?))
@@ -174,7 +184,7 @@ fn parse_main_binding(cfg: &mut Config, key: &str, val: &str) {
             cfg.holds.push(Hold {
                 key: key.to_string(),
                 target: target.to_string(),
-                kind: if is_mod(target) { HoldKind::Mod } else { HoldKind::Layer },
+                kind: hold_kind(target),
                 tap: Some(tap.to_string()),
             });
         }
@@ -194,7 +204,7 @@ fn parse_main_binding(cfg: &mut Config, key: &str, val: &str) {
                 Some(target) => cfg.holds.push(Hold {
                     key: key.to_string(),
                     target: target.to_string(),
-                    kind: if is_mod(target) { HoldKind::Mod } else { HoldKind::Layer },
+                    kind: hold_kind(target),
                     tap: Some(args[0].to_string()),
                 }),
                 // A hold descriptor we can't reduce (macro, command, plain key):
@@ -210,7 +220,7 @@ fn parse_main_binding(cfg: &mut Config, key: &str, val: &str) {
             cfg.holds.push(Hold {
                 key: key.to_string(),
                 target: arg.to_string(),
-                kind: if is_mod(arg) { HoldKind::Mod } else { HoldKind::Layer },
+                kind: hold_kind(arg),
                 tap: None,
             });
         }

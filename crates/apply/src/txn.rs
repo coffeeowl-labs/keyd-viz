@@ -161,6 +161,19 @@ impl Dir {
     }
 }
 
+/// The fixed prefix of every backup of `name` (`.{name}.keydviz-bak.`); the trailing
+/// `{stamp}.{pid}` follows. The one place that knows the scheme, used to both build
+/// ([`backup_name`]) and recognise ([`prune_backups`]) backups so they can't drift.
+fn backup_prefix(name: &str) -> String {
+    format!(".{name}.keydviz-bak.")
+}
+
+/// The timestamped backup filename for `name`: `.{name}.keydviz-bak.{stamp}.{pid}`, a
+/// hidden sibling unique across concurrent invocations within one second.
+fn backup_name(name: &str, stamp: u64) -> String {
+    format!("{}{stamp}.{}", backup_prefix(name), std::process::id())
+}
+
 /// Best-effort retention: keep only the `keep` newest timestamped backups of `name`
 /// (the full config file name, e.g. `hhkb.conf`), unlinking the rest. Matches the
 /// `.{name}.keydviz-bak.{stamp}.{pid}` scheme *strictly* — both `{stamp}` and
@@ -170,7 +183,7 @@ impl Dir {
 /// error is swallowed, because a failed prune must never turn an otherwise-kept
 /// apply into a failure.
 pub fn prune_backups(dir: &Dir, name: &str, keep: usize) {
-    let prefix = format!(".{name}.keydviz-bak.");
+    let prefix = backup_prefix(name);
     let Ok(entries) = dir.entries() else { return };
     let mut baks: Vec<(String, u64)> = entries
         .into_iter()
@@ -240,7 +253,7 @@ fn apply_one(
     let backup = match &prior {
         Prior::Existed(bytes) => {
             // stamp + pid: unique across concurrent invocations within one second.
-            let bak = format!(".{}.keydviz-bak.{stamp}.{}", op.name, std::process::id());
+            let bak = backup_name(&op.name, stamp);
             if let Err(e) = dir.write_new(&bak, bytes) {
                 let _ = dir.unlink(&tmp);
                 return Err(e);
@@ -269,7 +282,7 @@ pub fn delete<'d>(dir: &'d Dir, name: &str, stamp: u64) -> io::Result<Txn<'d>> {
     };
     // Back up before unlinking; if the unlink fails, drop the backup so a failed
     // delete leaves zero debris (mirrors apply's temp-then-backup discipline).
-    let bak = format!(".{name}.keydviz-bak.{stamp}.{}", std::process::id());
+    let bak = backup_name(name, stamp);
     dir.write_new(&bak, &bytes)?;
     if let Err(e) = dir.unlink(name) {
         let _ = dir.unlink(&bak);

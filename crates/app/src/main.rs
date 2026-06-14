@@ -1901,12 +1901,7 @@ fn main() -> Result<(), slint::PlatformError> {
             macro_draft
                 .borrow_mut()
                 .push(MacroToken::Chord { mods, keys: vec![key] });
-            win.set_macro_chord_key("".into());
-            win.set_macro_chord_c(false);
-            win.set_macro_chord_m(false);
-            win.set_macro_chord_a(false);
-            win.set_macro_chord_s(false);
-            win.set_macro_chord_g(false);
+            reset_macro_chord_form(&win);
             win.set_edit_banner("".into());
             push_macro_rows(&win, &macro_draft);
         });
@@ -2795,6 +2790,18 @@ fn push_macro_rows(win: &MainWindow, draft: &RefCell<Vec<MacroToken>>) {
     win.set_macro_rows(model(rows));
 }
 
+/// Clear the macro editor's chord sub-form: the pending key and all five modifier
+/// toggles. Part of every macro-form reset, so it lives in one place rather than five
+/// copies of the same six setters that must be kept in sync by hand.
+fn reset_macro_chord_form(win: &MainWindow) {
+    win.set_macro_chord_key("".into());
+    win.set_macro_chord_c(false);
+    win.set_macro_chord_m(false);
+    win.set_macro_chord_a(false);
+    win.set_macro_chord_s(false);
+    win.set_macro_chord_g(false);
+}
+
 /// Seed the macro panel from the selected key's binding: an existing macro we can
 /// decompose loads its steps + repeat into the draft and marks `selected_is_macro`;
 /// anything else resets to an empty builder. Clears the staged sub-form either way.
@@ -2832,12 +2839,7 @@ fn seed_macro(
     push_macro_rows(win, draft);
     win.set_macro_text_input("".into());
     win.set_macro_delay_input("".into());
-    win.set_macro_chord_key("".into());
-    win.set_macro_chord_c(false);
-    win.set_macro_chord_m(false);
-    win.set_macro_chord_a(false);
-    win.set_macro_chord_s(false);
-    win.set_macro_chord_g(false);
+    reset_macro_chord_form(win);
 }
 
 /// All `[main]` chords as UI rows for the ⌨ chords manager: `chord` is the verbatim
@@ -3022,12 +3024,7 @@ fn enter_edit_session(
     win.set_macro_rows(model(Vec::<MacroRow>::new()));
     win.set_macro_text_input("".into());
     win.set_macro_delay_input("".into());
-    win.set_macro_chord_key("".into());
-    win.set_macro_chord_c(false);
-    win.set_macro_chord_m(false);
-    win.set_macro_chord_a(false);
-    win.set_macro_chord_s(false);
-    win.set_macro_chord_g(false);
+    reset_macro_chord_form(win);
     win.set_macro_repeat_on(false);
     win.set_macro_repeat_timeout("".into());
     win.set_macro_repeat_count("".into());
@@ -3091,12 +3088,7 @@ fn reset_edit_ui(win: &MainWindow) {
     win.set_macro_rows(model(Vec::<MacroRow>::new()));
     win.set_macro_text_input("".into());
     win.set_macro_delay_input("".into());
-    win.set_macro_chord_key("".into());
-    win.set_macro_chord_c(false);
-    win.set_macro_chord_m(false);
-    win.set_macro_chord_a(false);
-    win.set_macro_chord_s(false);
-    win.set_macro_chord_g(false);
+    reset_macro_chord_form(win);
     win.set_macro_repeat_on(false);
     win.set_macro_repeat_timeout("".into());
     win.set_macro_repeat_count("".into());
