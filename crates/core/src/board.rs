@@ -278,7 +278,7 @@ fn is_shifted_name(t: &str) -> bool {
 /// fixed single-chord output (`macro(...)`, `layer(...)`, a space-separated sequence).
 fn output_chord(val: &str) -> Option<String> {
     let v = val.trim();
-    if v.is_empty() || v.contains('(') || v.contains(' ') {
+    if v.is_empty() || v.contains(' ') {
         return None;
     }
     // Strip leading `X-` modifier prefixes (keyd: `while (c[1] == '-')`).
@@ -293,6 +293,13 @@ fn output_chord(val: &str) -> Option<String> {
     }
     if c.is_empty() {
         return None; // dangling modifiers, no key
+    }
+    // `(` and `)` are literal shifted key names; any *other* token bearing a paren is a
+    // function-style action (`macro(...)`, `layer(...)`, `command(...)`) with no fixed
+    // single-chord output. (Without this carve-out, `h = (` would fail to glow and the
+    // physical Shift/9 caps would light up from the live monitor report instead.)
+    if (c.contains('(') || c.contains(')')) && c != "(" && c != ")" {
+        return None;
     }
     let key = canonical(c);
     if !is_primary_keysym(key) {
@@ -604,6 +611,30 @@ mod tests {
 
     fn cap_named<'a>(board: &'a Board, name: &str) -> &'a KeyCap {
         board.keys.iter().find(|c| c.phys == name).expect("slot present")
+    }
+
+    #[test]
+    fn shifted_symbol_remap_glows_the_emitting_chord() {
+        // Remapping to a shifted symbol must stamp the cap with the keysyms keyd emits
+        // (`leftshift+<base>`), so the *remapped* cap lights up on a live keypress — not
+        // the physical Shift/base caps. Regression: `(` was wrongly treated as a function
+        // call (it contains `(`) and the cap kept no glow key, so Shift/9 lit instead.
+        let geom = Geometry::from_rows(&[&[("h", 1.0), ("j", 1.0), ("k", 1.0)]]);
+        let cfg = crate::parser::parse_text("[ids]\n*\n\n[main]\nh = (\nj = )\nk = *\n");
+        let board = build_base(&cfg, &geom);
+        assert_eq!(cap_named(&board, "h").key, "leftshift+9", "h = ( glows Shift+9");
+        assert_eq!(cap_named(&board, "j").key, "leftshift+0", "j = ) glows Shift+0");
+        assert_eq!(cap_named(&board, "k").key, "leftshift+8", "k = * glows Shift+8");
+    }
+
+    #[test]
+    fn function_action_remap_carries_no_glow_chord() {
+        // A real function action (`macro(...)`, `layer(...)`) has no fixed single-chord
+        // output — the cap keeps its physical key, never a bogus chord.
+        let geom = Geometry::from_rows(&[&[("h", 1.0)]]);
+        let cfg = crate::parser::parse_text("[ids]\n*\n\n[main]\nh = macro(a b c)\n");
+        let board = build_base(&cfg, &geom);
+        assert_eq!(cap_named(&board, "h").key, "h", "macro target leaves the physical glow key");
     }
 
     #[test]
