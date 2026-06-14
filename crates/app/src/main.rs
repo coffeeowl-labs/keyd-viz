@@ -462,7 +462,7 @@ fn drive_render_state(win: &MainWindow, state: &str) {
         "discard" => win.set_discard_prompt(true),
         "apply-summary" => {
             // Seeded: the panel is property-gated; a real apply needs /etc/keyd + pkexec.
-            win.set_apply_state("confirm".into());
+            win.set_apply_state(ApplyState::Confirm.as_str().into());
             win.set_apply_info(
                 "\u{26a0} this config can run a command when you press a key \u{2014} review \
                  before applying\n\n+ [nav]\n+ g = escape   (G \u{2192} Esc)\n- k = k\n+ k = \
@@ -888,6 +888,54 @@ fn register_fonts() {
 // thread-local avoids threading the handle through every render call site.
 thread_local! {
     static TRAY: RefCell<Option<tray::TrayHandle>> = const { RefCell::new(None) };
+}
+
+/// The apply lifecycle, mirrored into the Slint string property `MainWindow.apply-state`
+/// (app.slint matches these exact tokens to drive the apply UI). Keeping the closed set
+/// on the Rust side means a mistyped state is a compile error here, not a silently-dead
+/// branch — previously these tokens were ~30 bare string literals set and compared by hand.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ApplyState {
+    Idle,
+    Confirm,
+    Auth,
+    Countdown,
+    Kept,
+    Reverted,
+    Failed,
+    RevertFailed,
+}
+
+impl ApplyState {
+    /// The exact token written to the Slint property (and matched in app.slint).
+    fn as_str(self) -> &'static str {
+        match self {
+            ApplyState::Idle => "idle",
+            ApplyState::Confirm => "confirm",
+            ApplyState::Auth => "auth",
+            ApplyState::Countdown => "countdown",
+            ApplyState::Kept => "kept",
+            ApplyState::Reverted => "reverted",
+            ApplyState::Failed => "failed",
+            ApplyState::RevertFailed => "revert-failed",
+        }
+    }
+
+    /// Parse the Slint property back to the typed state, so reads funnel through the
+    /// same closed set as writes. `None` only for a token nothing here produces.
+    fn from_token(s: &str) -> Option<ApplyState> {
+        Some(match s {
+            "idle" => ApplyState::Idle,
+            "confirm" => ApplyState::Confirm,
+            "auth" => ApplyState::Auth,
+            "countdown" => ApplyState::Countdown,
+            "kept" => ApplyState::Kept,
+            "reverted" => ApplyState::Reverted,
+            "failed" => ApplyState::Failed,
+            "revert-failed" => ApplyState::RevertFailed,
+            _ => return None,
+        })
+    }
 }
 
 /// One-click apply bookkeeping (E2), UI-thread only. The protocol thread can only
@@ -2287,7 +2335,9 @@ fn main() -> Result<(), slint::PlatformError> {
         let session = session.clone();
         win.on_start_apply(move || {
             let Some(win) = weak.upgrade() else { return };
-            if win.get_apply_state() != "idle" || !win.get_edit_dirty() {
+            if ApplyState::from_token(&win.get_apply_state()) != Some(ApplyState::Idle)
+                || !win.get_edit_dirty()
+            {
                 return;
             }
             // The normal apply button commits the *session's* edits — never a stale
@@ -2301,7 +2351,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let Some(s) = sb.as_ref() else { return };
             let bytes = s.serialized();
             if bytes.len() > keydviz_apply::MAX_CONFIG_BYTES {
-                win.set_apply_state("failed".into());
+                win.set_apply_state(ApplyState::Failed.as_str().into());
                 win.set_apply_info(
                     format!(
                         "this config is too large to apply \u{2014} {} bytes, and the limit \
@@ -2317,7 +2367,7 @@ fn main() -> Result<(), slint::PlatformError> {
             // user paid the auth prompt. Catch it here for free. `None` (no keyd
             // in PATH) falls through: the tool is the authoritative gate.
             if let Some(Err(e)) = editing::keyd_check_bytes(&bytes) {
-                win.set_apply_state("failed".into());
+                win.set_apply_state(ApplyState::Failed.as_str().into());
                 win.set_apply_info(
                     format!("this config has an error and can't be applied \u{2014} fix it first:\n{e}")
                         .into(),
@@ -2356,7 +2406,7 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             win.set_apply_info(info.into());
             if findings.iter().any(|f| f.needs_ack()) || !included.is_empty() {
-                win.set_apply_state("confirm".into());
+                win.set_apply_state(ApplyState::Confirm.as_str().into());
             } else {
                 launch_apply(&win, false);
             }
@@ -2369,7 +2419,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = win.as_weak();
         win.on_confirm_apply(move || {
             let Some(win) = weak.upgrade() else { return };
-            if win.get_apply_state() == "confirm" {
+            if ApplyState::from_token(&win.get_apply_state()) == Some(ApplyState::Confirm) {
                 launch_apply(&win, true);
             }
         });
@@ -2400,7 +2450,7 @@ fn main() -> Result<(), slint::PlatformError> {
             let target = applying::one_click().and_then(|how| s.apply_target(how.config_dir()));
             let Some(name) = target else {
                 drop(sb);
-                win.set_apply_state("failed".into());
+                win.set_apply_state(ApplyState::Failed.as_str().into());
                 win.set_apply_info(
                     "this config lives outside keyd's config folder, so keyd-viz can't \
                      remove it for you \u{2014} delete the file manually"
@@ -2421,9 +2471,15 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = win.as_weak();
         win.on_cancel_apply(move || {
             let Some(win) = weak.upgrade() else { return };
-            match win.get_apply_state().as_str() {
-                "confirm" | "kept" | "reverted" | "revert-failed" | "failed" => {
-                    win.set_apply_state("idle".into());
+            match ApplyState::from_token(&win.get_apply_state()) {
+                Some(
+                    ApplyState::Confirm
+                    | ApplyState::Kept
+                    | ApplyState::Reverted
+                    | ApplyState::RevertFailed
+                    | ApplyState::Failed,
+                ) => {
+                    win.set_apply_state(ApplyState::Idle.as_str().into());
                     win.set_apply_info("".into());
                     // Backing out of a pending (sensitive) restore disarms the override,
                     // so it can't ride a later apply. Harmless when none was armed.
@@ -2433,7 +2489,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         }
                     });
                 }
-                "auth" => {
+                Some(ApplyState::Auth) => {
                     with_apply_run(|h| h.revert());
                     win.set_apply_info("cancelling \u{2014} finishing up\u{2026}".into());
                 }
@@ -3116,7 +3172,10 @@ fn draft_summary(s: &editing::EditSession, saved: &editing::DraftSaved) -> Strin
 
 /// True while an apply run is in flight (confirm / auth / countdown).
 fn apply_busy(win: &MainWindow) -> bool {
-    matches!(win.get_apply_state().as_str(), "confirm" | "auth" | "countdown")
+    matches!(
+        ApplyState::from_token(&win.get_apply_state()),
+        Some(ApplyState::Confirm | ApplyState::Auth | ApplyState::Countdown)
+    )
 }
 
 /// Run `f` against the live apply handle if there is one — the single place that
@@ -3136,7 +3195,7 @@ fn with_apply_run(f: impl FnOnce(&applying::ApplyHandle)) {
 /// session opens and when it closes so a new apply property can't be cleared in
 /// one place and forgotten in the other.
 fn reset_apply_ui(win: &MainWindow) {
-    win.set_apply_state("idle".into());
+    win.set_apply_state(ApplyState::Idle.as_str().into());
     win.set_apply_info("".into());
     win.set_backups_open(false);
 }
@@ -3254,7 +3313,7 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
         // rather than a dead button — the most likely cause is the tool being
         // removed mid-session, which the user should be told about.
         let Some(how) = applying::one_click() else {
-            win.set_apply_state("failed".into());
+            win.set_apply_state(ApplyState::Failed.as_str().into());
             win.set_apply_info(
                 "can't apply changes directly right now \u{2014} keyd-viz isn't fully \
                  installed. use 'save draft' instead"
@@ -3266,7 +3325,7 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
         let Some(s) = sb.as_ref() else { return };
         let Some(name) = s.apply_target(how.config_dir()) else {
             drop(sb);
-            win.set_apply_state("failed".into());
+            win.set_apply_state(ApplyState::Failed.as_str().into());
             win.set_apply_info("keyd-viz can't apply this config directly anymore".into());
             return;
         };
@@ -3276,7 +3335,7 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
         // keyd reload bounces the virtual device mid-apply; don't leave a stale
         // capture armed across the hiccup.
         win.set_capture_armed(false);
-        win.set_apply_state("auth".into());
+        win.set_apply_state(ApplyState::Auth.as_str().into());
         let weak = win.as_weak();
         let req = applying::ApplyRequest {
             name,
@@ -3295,7 +3354,7 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
         }) {
             Ok(h) => *ctx.run.borrow_mut() = Some(h),
             Err(e) => {
-                win.set_apply_state("failed".into());
+                win.set_apply_state(ApplyState::Failed.as_str().into());
                 win.set_apply_info(format!("couldn't start applying: {e}").into());
             }
         }
@@ -3362,26 +3421,26 @@ fn restore_backup(win: &MainWindow, idx: i32) {
     let bytes = match std::fs::read(&backup.path) {
         Ok(b) => b,
         Err(e) => {
-            win.set_apply_state("failed".into());
+            win.set_apply_state(ApplyState::Failed.as_str().into());
             win.set_apply_info(format!("couldn't read the backup file: {e}").into());
             return;
         }
     };
     if bytes.len() > keydviz_apply::MAX_CONFIG_BYTES {
-        win.set_apply_state("failed".into());
+        win.set_apply_state(ApplyState::Failed.as_str().into());
         win.set_apply_info("this backup is too large to restore".into());
         return;
     }
     // Configs are text; a non-UTF-8 backup is corrupt — refuse rather than mangle it.
     let Ok(text) = std::str::from_utf8(&bytes) else {
-        win.set_apply_state("failed".into());
+        win.set_apply_state(ApplyState::Failed.as_str().into());
         win.set_apply_info("this backup file is corrupt (not valid text)".into());
         return;
     };
     // The backup was valid when written, but the installed keyd may have changed —
     // catch a now-invalid config here, before paying the auth prompt.
     if let Some(Err(e)) = editing::keyd_check_bytes(text) {
-        win.set_apply_state("failed".into());
+        win.set_apply_state(ApplyState::Failed.as_str().into());
         win.set_apply_info(
             format!("this backup is no longer valid for your keyd and can't be restored:\n{e}")
                 .into(),
@@ -3411,7 +3470,7 @@ fn restore_backup(win: &MainWindow, idx: i32) {
     });
     win.set_apply_info(info.into());
     if findings.iter().any(|f| f.needs_ack()) {
-        win.set_apply_state("confirm".into());
+        win.set_apply_state(ApplyState::Confirm.as_str().into());
     } else {
         launch_apply(win, false);
     }
@@ -3426,7 +3485,7 @@ fn launch_delete(win: &MainWindow, name: String, path: PathBuf) {
         let actx = a.borrow();
         let Some(ctx) = actx.as_ref() else { return };
         let Some(how) = applying::one_click() else {
-            win.set_apply_state("failed".into());
+            win.set_apply_state(ApplyState::Failed.as_str().into());
             win.set_apply_info(
                 "can't delete this config directly right now \u{2014} keyd-viz isn't fully \
                  installed. remove the file manually"
@@ -3436,7 +3495,7 @@ fn launch_delete(win: &MainWindow, name: String, path: PathBuf) {
         };
         win.set_capture_armed(false);
         *ctx.deleting.borrow_mut() = Some(path);
-        win.set_apply_state("auth".into());
+        win.set_apply_state(ApplyState::Auth.as_str().into());
         let weak = win.as_weak();
         let req = applying::ApplyRequest {
             name,
@@ -3456,7 +3515,7 @@ fn launch_delete(win: &MainWindow, name: String, path: PathBuf) {
             Ok(h) => *ctx.run.borrow_mut() = Some(h),
             Err(e) => {
                 *ctx.deleting.borrow_mut() = None;
-                win.set_apply_state("failed".into());
+                win.set_apply_state(ApplyState::Failed.as_str().into());
                 win.set_apply_info(format!("couldn't start applying: {e}").into());
             }
         }
@@ -3501,7 +3560,7 @@ fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
     APPLY.with(|a| {
         let actx = a.borrow();
         let Some(ctx) = actx.as_ref() else { return };
-        let finish = |state: &str, info: Option<String>| {
+        let finish = |state: ApplyState, info: Option<String>| {
             *ctx.timer.borrow_mut() = None;
             *ctx.run.borrow_mut() = None;
             *ctx.deleting.borrow_mut() = None;
@@ -3509,7 +3568,7 @@ fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
             if let Some(d) = ctx.dialog.borrow_mut().take() {
                 let _ = d.hide();
             }
-            win.set_apply_state(state.into());
+            win.set_apply_state(state.as_str().into());
             if let Some(info) = info {
                 win.set_apply_info(info.into());
             }
@@ -3518,7 +3577,7 @@ fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
             // Advisory echo — pre-flight already listed the findings.
             E::Finding(_) => {}
             E::Applied { secs } => {
-                win.set_apply_state("countdown".into());
+                win.set_apply_state(ApplyState::Countdown.as_str().into());
                 // The countdown surface is a separate always-on-top dialog with a
                 // test field, so the user can type to verify before deciding.
                 match open_apply_dialog(win, secs) {
@@ -3542,12 +3601,12 @@ fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
                 // *apply* re-bases the session on the new on-disk bytes.
                 let deleted = ctx.deleting.borrow().clone();
                 if let Some(path) = deleted {
-                    finish("idle", None);
+                    finish(ApplyState::Idle, None);
                     remove_config_after_delete(win, ctx, &path);
                 } else {
                     let path =
                         ctx.session.borrow().as_ref().map(|s| s.path.display().to_string());
-                    finish("kept", path.map(|p| format!("{p} updated")));
+                    finish(ApplyState::Kept, path.map(|p| format!("{p} updated")));
                     reopen_after_kept(win, ctx);
                 }
             }
@@ -3558,7 +3617,7 @@ fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
                     other => other,
                 };
                 finish(
-                    "reverted",
+                    ApplyState::Reverted,
                     Some(format!(
                         "reverted: {why} \u{2014} the previous config is back; \
                          your edits are still staged"
@@ -3567,19 +3626,19 @@ fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
             }
             // Verbatim: the tool's message names the backup file and the panic
             // sequence — exactly what the user needs to copy.
-            E::RevertFailed(w) => finish("revert-failed", Some(w)),
+            E::RevertFailed(w) => finish(ApplyState::RevertFailed, Some(w)),
             E::Refused(r) => {
-                finish("failed", Some(format!("refused: {r} \u{2014} nothing was written")));
+                finish(ApplyState::Failed, Some(format!("refused: {r} \u{2014} nothing was written")));
             }
             E::AuthDismissed => {
                 finish(
-                    "failed",
+                    ApplyState::Failed,
                     Some("authentication cancelled \u{2014} nothing was written".to_string()),
                 );
             }
             E::NotAuthorized => {
                 finish(
-                    "failed",
+                    ApplyState::Failed,
                     Some(
                         "authorization unavailable (is a polkit agent running?) \
                          \u{2014} nothing was written"
@@ -3587,7 +3646,7 @@ fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
                     ),
                 );
             }
-            E::Failed(m) => finish("failed", Some(m)),
+            E::Failed(m) => finish(ApplyState::Failed, Some(m)),
         }
     });
 }
