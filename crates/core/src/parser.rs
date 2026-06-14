@@ -71,6 +71,9 @@ pub fn derive(edit: &EditConfig) -> Config {
                 for (key, val) in bindings(section) {
                     parse_main_binding(&mut cfg, key, val);
                 }
+                for (key, label) in section_labels(section) {
+                    push_label(&mut cfg.labels, key, label);
+                }
             }
             SectionKind::Layer | SectionKind::Composite => {
                 // A qualifier selects the base layer ([nav:C] extends nav); capture
@@ -96,6 +99,12 @@ pub fn derive(edit: &EditConfig) -> Config {
                     } else {
                         layer.keys.push((key.to_string(), val.to_string()));
                     }
+                }
+                // Custom labels for this layer (merged across same-base sections, e.g.
+                // [nav] + [nav:C], since both resolve to the one `name` layer above).
+                for (key, label) in section_labels(section) {
+                    let layer = ensure_layer(&mut cfg, &name);
+                    push_label(&mut layer.labels, key, label);
                 }
             }
         }
@@ -124,6 +133,24 @@ fn bindings(section: &crate::edit::Section) -> impl Iterator<Item = (&str, &str)
         EntryKind::Binding { key, val: Some(val), .. } => Some((key.as_str(), val.as_str())),
         _ => None,
     })
+}
+
+/// The `(key, label)` pairs from this section's `# keyd-viz: …` comment lines.
+fn section_labels(section: &crate::edit::Section) -> impl Iterator<Item = (&str, &str)> {
+    section.entries.iter().filter_map(|e| match e.kind {
+        EntryKind::Comment => crate::edit::parse_label_comment(&e.raw),
+        _ => None,
+    })
+}
+
+/// Record a label for `key`, last-wins (mirroring keyd's last-wins binding rule so a
+/// later `# keyd-viz:` line overrides an earlier one for the same key).
+fn push_label(labels: &mut Vec<(String, String)>, key: &str, label: &str) {
+    if let Some(slot) = labels.iter_mut().find(|(k, _)| k == key) {
+        slot.1 = label.to_string();
+    } else {
+        labels.push((key.to_string(), label.to_string()));
+    }
 }
 
 /// One `[main]` binding line, already split into `key`/`val`.
@@ -286,6 +313,41 @@ fn ensure_layer<'a>(cfg: &'a mut Config, name: &str) -> &'a mut Layer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------------------ custom labels
+    #[test]
+    fn derive_extracts_labels_for_main_and_layers() {
+        let cfg = parse_text(
+            "[ids]\n*\n\n[main]\n# keyd-viz: tab = Tab L\ntab = layer(nav)\n\
+             # not a label, prose comment\ncapslock = esc\n\n\
+             [nav]\n# keyd-viz: h = Left\nh = left\n",
+        );
+        assert_eq!(cfg.label("tab"), Some("Tab L"));
+        assert_eq!(cfg.label("capslock"), None); // prose comment isn't a label
+        assert_eq!(cfg.layer("nav").unwrap().labels, vec![("h".into(), "Left".into())]);
+    }
+
+    #[test]
+    fn derive_merges_labels_across_same_base_sections() {
+        // [nav] and [nav:C] resolve to one layer; labels from both land on it.
+        let cfg = parse_text(
+            "[ids]\n*\n[nav]\n# keyd-viz: h = Left\nh = left\n\
+             [nav:C]\n# keyd-viz: j = Down\nj = down\n",
+        );
+        let labels = &cfg.layer("nav").unwrap().labels;
+        assert!(labels.contains(&("h".into(), "Left".into())));
+        assert!(labels.contains(&("j".into(), "Down".into())));
+    }
+
+    #[test]
+    fn derive_label_lastwins_and_equal_key() {
+        let cfg = parse_text(
+            "[ids]\n*\n[main]\n# keyd-viz: a = First\n# keyd-viz: a = Second\na = b\n\
+             # keyd-viz: = = Equals\n= = backspace\n",
+        );
+        assert_eq!(cfg.label("a"), Some("Second")); // last-wins
+        assert_eq!(cfg.label("="), Some("Equals")); // the `=` key parses correctly
+    }
 
     // ------------------------------------------------------------ parse_fn parity
     #[test]

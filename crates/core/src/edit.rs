@@ -227,6 +227,90 @@ impl Section {
         self.dirty |= removed;
         removed
     }
+
+    /// Index of the **last** `# keyd-viz: <key> = …` label comment for `key` in this
+    /// section. Last to mirror `derive`'s within-section last-wins (the deriver scans
+    /// entries in order and the final `push_label` wins), so a rewrite updates the
+    /// effective label, not a shadowed earlier one.
+    fn label_index(&self, key: &str) -> Option<usize> {
+        self.entries.iter().rposition(|e| {
+            matches!(e.kind, EntryKind::Comment)
+                && parse_label_comment(&e.raw).is_some_and(|(k, _)| k == key)
+        })
+    }
+
+    /// Set (or replace) the custom-label comment for `key` in this section.
+    ///
+    /// If a label comment for `key` already exists, its line is rewritten in place
+    /// (position preserved). Otherwise a fresh `# keyd-viz: key = text` line is
+    /// inserted *immediately before* the **last-wins** binding for `key` (so the
+    /// label sits with the effective binding), copying that binding's `Eol`. If the
+    /// key has no binding in this section, the comment is appended at the section's
+    /// end (orphan-tolerant), taking the file's `style` line-ending. Empty `text`
+    /// clears the label instead. Marks the section dirty.
+    pub fn set_label(&mut self, key: &str, text: &str, style: Eol) {
+        let text = c_trim(text);
+        if text.is_empty() {
+            self.clear_label(key);
+            return;
+        }
+        let raw = label_comment_line(key, text);
+        if let Some(i) = self.label_index(key) {
+            self.entries[i].raw = raw;
+            self.dirty = true;
+            return;
+        }
+        // Insert before the last-wins binding (same target `set_binding` rewrites).
+        let binding_at = self
+            .entries
+            .iter()
+            .rposition(|e| matches!(&e.kind, EntryKind::Binding { key: k, .. } if k == key));
+        match binding_at {
+            Some(at) => {
+                let eol = self.entries[at].eol;
+                self.entries.insert(at, Entry { raw, eol, kind: EntryKind::Comment });
+            }
+            None => self.push_comment(raw, style),
+        }
+        self.dirty = true;
+    }
+
+    /// Remove **every** label comment for `key` from this section. All copies go (a
+    /// stale duplicate could otherwise win in `derive`). Marks the section dirty and
+    /// returns whether anything was removed.
+    pub fn clear_label(&mut self, key: &str) -> bool {
+        let before = self.entries.len();
+        self.entries.retain(|e| {
+            !(matches!(e.kind, EntryKind::Comment)
+                && parse_label_comment(&e.raw).is_some_and(|(k, _)| k == key))
+        });
+        let removed = self.entries.len() != before;
+        self.dirty |= removed;
+        removed
+    }
+
+    /// Append a comment line at the section's end, after the last non-blank entry (so
+    /// a trailing blank separator stays last), in `style` — preserving a missing final
+    /// newline exactly as [`Self::push_binding`] does.
+    fn push_comment(&mut self, raw: String, style: Eol) {
+        let at = self
+            .entries
+            .iter()
+            .rposition(|e| !matches!(e.kind, EntryKind::Blank))
+            .map_or(0, |i| i + 1);
+        let mut eol = style;
+        if at == self.entries.len() {
+            let prev_eol = match self.entries.last_mut() {
+                Some(prev) => &mut prev.eol,
+                None => &mut self.header.eol,
+            };
+            if *prev_eol == Eol::None {
+                *prev_eol = style;
+                eol = Eol::None;
+            }
+        }
+        self.entries.insert(at, Entry { raw, eol, kind: EntryKind::Comment });
+    }
 }
 
 /// A whole config file as an ordered list of verbatim lines: anything before the
@@ -372,6 +456,57 @@ impl EditConfig {
                 && s.base_name().trim() == layer
         }) {
             removed |= s.remove_binding(key);
+        }
+        removed
+    }
+
+    /// Set the custom display label for `key` on the `layer` board (`"main"` for the
+    /// base). Chooses the section to write to so the label lands beside the effective
+    /// binding and `derive` reads it back: the last board section that already carries
+    /// a label for `key` (rewrite in place), else the last that *binds* `key` (insert
+    /// adjacent), else the target section (`[main]` created if the base is include-only).
+    /// Empty `text` clears the label everywhere. Returns `false` only when the board
+    /// doesn't exist and can't be created (a non-`main` layer with no local section).
+    pub fn set_label(&mut self, layer: &str, key: &str, text: &str) -> bool {
+        let style = self.file_eol();
+        if c_trim(text).is_empty() {
+            return self.clear_label(layer, key);
+        }
+        let is_board = |s: &Section| {
+            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
+                && s.base_name().trim() == layer
+        };
+        if let Some(i) =
+            self.sections.iter().rposition(|s| is_board(s) && s.label_index(key).is_some())
+        {
+            self.sections[i].set_label(key, text, style);
+            return true;
+        }
+        if let Some(i) =
+            self.sections.iter().rposition(|s| is_board(s) && s.get_binding(key).is_some())
+        {
+            self.sections[i].set_label(key, text, style);
+            return true;
+        }
+        match self.target_or_create_section_mut(layer) {
+            Some(sec) => {
+                sec.set_label(key, text, style);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Remove the custom label for `key` from **every** section feeding the `layer`
+    /// board (mirrors [`Self::clear_binding`]: merged sections all contribute, so a
+    /// leftover copy could still win in `derive`). Returns whether anything changed.
+    pub fn clear_label(&mut self, layer: &str, key: &str) -> bool {
+        let mut removed = false;
+        for s in self.sections.iter_mut().filter(|s| {
+            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
+                && s.base_name().trim() == layer
+        }) {
+            removed |= s.clear_label(key);
         }
         removed
     }
@@ -959,7 +1094,9 @@ pub(crate) fn c_trim(s: &str) -> &str {
 /// first char may be `=` (so the `=` key is bindable); the key is everything before
 /// the first `=` thereafter with its trailing space/tab run trimmed; the value is
 /// everything after, with leading spaces/tabs skipped. No `=` → valueless (`None`).
-fn parse_kvp(s: &str) -> (&str, Option<&str>) {
+/// Crate-visible: the label grammar reuses it so a `keyd-viz:` comment's `key = text`
+/// splits identically to a binding line (the `=` key, punctuation keys, labels with `=`).
+pub(crate) fn parse_kvp(s: &str) -> (&str, Option<&str>) {
     let b = s.as_bytes();
     let mut last_space: Option<usize> = None;
     let mut i = usize::from(b.first() == Some(&b'='));
@@ -984,6 +1121,32 @@ fn parse_kvp(s: &str) -> (&str, Option<&str>) {
         i += 1;
     }
     (s, None)
+}
+
+/// The marker that distinguishes a keyd-viz custom-label comment from a prose
+/// comment: `# keyd-viz: <key> = <label>`. keyd ignores the whole line (it's a
+/// `#`-comment); keyd-viz parses it for the cap label. See `docs/labels-design.md`.
+pub(crate) const LABEL_MARKER: &str = "keyd-viz:";
+
+/// Parse a `# keyd-viz: <key> = <label>` comment into `(key, label)`, or `None` if
+/// `raw` isn't a well-formed label comment. The `<key> = <label>` split reuses
+/// [`parse_kvp`], so the key parses exactly like a binding key (incl. the `=` key);
+/// the label is the trimmed remainder (free-form, may contain `#`/`=`). An empty key
+/// or empty label yields `None` (nothing to show).
+pub(crate) fn parse_label_comment(raw: &str) -> Option<(&str, &str)> {
+    let t = c_trim(raw);
+    let rest = c_trim(t.strip_prefix('#')?); // drop the leading '#', then whitespace
+    let body = c_trim(rest.strip_prefix(LABEL_MARKER)?); // after "keyd-viz:"
+    let (key, val) = parse_kvp(body);
+    let key = c_trim(key);
+    let label = c_trim(val?);
+    (!key.is_empty() && !label.is_empty()).then_some((key, label))
+}
+
+/// The canonical on-disk form of a label comment (single spaces). Re-parses to the
+/// same `Comment` entry, so keyd-viz's own output round-trips.
+pub(crate) fn label_comment_line(key: &str, label: &str) -> String {
+    format!("# {LABEL_MARKER} {key} = {label}")
 }
 
 fn section_kind(name: &str) -> SectionKind {
@@ -1270,6 +1433,104 @@ mod tests {
         assert!(!cfg.clear_binding("missing", "h"));
         assert_eq!(cfg.serialize(), src);
         assert!(!cfg.is_dirty());
+    }
+
+    // ------------------------------------------------------------------- labels (E/v1.3)
+    #[test]
+    fn set_label_inserts_canonical_comment_before_binding() {
+        let mut cfg = EditConfig::parse("[main]\ntab = layer(nav)\na = b\n");
+        assert!(cfg.set_label("main", "tab", "Tab L"));
+        assert_eq!(
+            cfg.serialize(),
+            "[main]\n# keyd-viz: tab = Tab L\ntab = layer(nav)\na = b\n"
+        );
+        assert!(cfg.is_dirty());
+    }
+
+    #[test]
+    fn set_label_rewrites_existing_in_place() {
+        let src = "[main]\n# keyd-viz: tab = Old\ntab = layer(nav)\n";
+        let mut cfg = EditConfig::parse(src);
+        assert!(cfg.set_label("main", "tab", "New Name"));
+        // No duplicate, position preserved, only the text changed.
+        assert_eq!(cfg.serialize(), "[main]\n# keyd-viz: tab = New Name\ntab = layer(nav)\n");
+    }
+
+    #[test]
+    fn set_label_round_trips_and_passes_keyd_grammar() {
+        // Our own emitted label line re-parses to the same comment entry.
+        let mut cfg = EditConfig::parse("[main]\ntab = layer(nav)\n");
+        cfg.set_label("main", "tab", "Tab L");
+        assert!(round_trips(&cfg.serialize()));
+    }
+
+    #[test]
+    fn set_label_on_orphan_key_appends_at_section_end() {
+        // No binding for the key → comment lands at the section's end (orphan-tolerant).
+        let mut cfg = EditConfig::parse("[main]\na = b\n");
+        assert!(cfg.set_label("main", "tab", "Tab L"));
+        assert_eq!(cfg.serialize(), "[main]\na = b\n# keyd-viz: tab = Tab L\n");
+    }
+
+    #[test]
+    fn set_label_creates_main_when_board_is_include_only() {
+        let mut cfg = EditConfig::parse("[ids]\n0123:4567\n");
+        assert!(cfg.set_label("main", "tab", "Tab L"));
+        assert_eq!(cfg.serialize(), "[ids]\n0123:4567\n\n[main]\n# keyd-viz: tab = Tab L\n");
+    }
+
+    #[test]
+    fn set_label_on_missing_layer_is_false() {
+        let mut cfg = EditConfig::parse("[main]\na = b\n");
+        assert!(!cfg.set_label("nope", "a", "X"));
+    }
+
+    #[test]
+    fn set_label_lands_beside_the_winning_binding_in_a_merged_section() {
+        // The effective binding for `h` lives in [nav:C]; the label must sit with it.
+        let src = "[nav]\nh = left\n[nav:C]\nh = right\n";
+        let mut cfg = EditConfig::parse(src);
+        assert!(cfg.set_label("nav", "h", "Home"));
+        assert_eq!(
+            cfg.serialize(),
+            "[nav]\nh = left\n[nav:C]\n# keyd-viz: h = Home\nh = right\n"
+        );
+    }
+
+    #[test]
+    fn empty_text_clears_the_label() {
+        let src = "[main]\n# keyd-viz: tab = Tab L\ntab = layer(nav)\na = b\n";
+        let mut cfg = EditConfig::parse(src);
+        assert!(cfg.set_label("main", "tab", "   "));
+        assert_eq!(cfg.serialize(), "[main]\ntab = layer(nav)\na = b\n");
+    }
+
+    #[test]
+    fn clear_label_spans_every_merged_section_and_leaves_bindings() {
+        let src = "[nav]\n# keyd-viz: h = A\nh = left\n[nav:C]\n# keyd-viz: h = B\nh = right\n";
+        let mut cfg = EditConfig::parse(src);
+        assert!(cfg.clear_label("nav", "h"));
+        assert_eq!(cfg.serialize(), "[nav]\nh = left\n[nav:C]\nh = right\n");
+        assert!(cfg.is_dirty());
+    }
+
+    #[test]
+    fn clear_label_missing_is_a_noop() {
+        let src = "[main]\ntab = layer(nav)\n";
+        let mut cfg = EditConfig::parse(src);
+        assert!(!cfg.clear_label("main", "tab"));
+        assert_eq!(cfg.serialize(), src);
+        assert!(!cfg.is_dirty());
+    }
+
+    #[test]
+    fn label_text_with_spaces_hashes_and_equals_is_preserved() {
+        let mut cfg = EditConfig::parse("[main]\ntab = layer(nav)\n");
+        cfg.set_label("main", "tab", "Nav = #1 (hold)");
+        // Re-derive the label and confirm the full text survived parse_kvp.
+        let s = cfg.serialize();
+        let comment = s.lines().find(|l| l.contains("keyd-viz")).unwrap();
+        assert_eq!(parse_label_comment(comment), Some(("tab", "Nav = #1 (hold)")));
     }
 
     fn orphans(src: &str) -> Vec<(String, String, String)> {

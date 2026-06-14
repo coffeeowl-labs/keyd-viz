@@ -358,6 +358,19 @@ fn style_noop(cap: &mut KeyCap) {
     cap.key = String::new();
 }
 
+/// Apply a custom display label to `cap` (the uniform "demote" rule, design §5).
+/// One step run on every kind of cap *after* its normal construction: the action /
+/// remap target / base legend that was the cap's main text drops into the ghost, and
+/// the custom name takes the top line. Badges (↓hold-target, ⊕combo) are untouched,
+/// so each branch's secondary info survives. No-op when the key has no label.
+fn apply_label(cap: &mut KeyCap, labels: &[(String, String)], key: &str) {
+    if let Some(lbl) = crate::model::label_for(labels, key) {
+        cap.ghost = std::mem::take(&mut cap.label); // demote the old main text…
+        cap.label = lbl.to_string(); //                …custom name on top
+        cap.emphasized = true;
+    }
+}
+
 fn build_base(cfg: &Config, geom: &Geometry) -> Board {
     let mut keys = Vec::new();
     for slot in &geom.slots {
@@ -432,6 +445,7 @@ fn build_base(cfg: &Config, geom: &Geometry) -> Board {
             });
         }
 
+        apply_label(&mut cap, &cfg.labels, name);
         keys.push(cap);
     }
 
@@ -520,6 +534,7 @@ fn build_layer(cfg: &Config, layer: &Layer, geom: &Geometry) -> Board {
                 color: accent.clone(),
             });
         }
+        apply_label(&mut cap, &layer.labels, nm);
         keys.push(cap);
     }
 
@@ -607,6 +622,7 @@ fn build_composite(cfg: &Config, layer: &Layer, geom: &Geometry) -> Board {
         if in_layer_combo(layer, nm) {
             cap.badge_right = Some(Badge { text: "\u{2295}".to_string(), color: own_accent.clone() });
         }
+        apply_label(&mut cap, &layer.labels, nm);
         keys.push(cap);
     }
 
@@ -671,6 +687,62 @@ mod tests {
         let j = cap_named(&board, "j");
         assert_eq!(j.accent, REMAP_ACCENT);
         assert!(j.emphasized);
+    }
+
+    #[test]
+    fn custom_label_on_remap_demotes_action_to_ghost() {
+        // Design §5/§9: a labelled remapped key shows the custom name on top, with the
+        // action it used to show dropped into the ghost. The base legend ("h") is gone.
+        let geom = Geometry::from_rows(&[&[("h", 1.0)]]);
+        let cfg = crate::parser::parse_text(
+            "[ids]\n*\n\n[main]\n# keyd-viz: h = Home\nh = left\n",
+        );
+        let board = build_base(&cfg, &geom);
+        let h = cap_named(&board, "h");
+        assert_eq!(h.label, "Home");
+        assert_eq!(h.ghost, prettify("left"), "the action drops to the ghost");
+        assert!(h.emphasized);
+    }
+
+    #[test]
+    fn custom_label_on_unmapped_key_keeps_base_legend_as_ghost() {
+        // §9: a labelled key keyd doesn't remap shows label on top, base legend as ghost.
+        let geom = Geometry::from_rows(&[&[("h", 1.0)]]);
+        let cfg = crate::parser::parse_text("[ids]\n*\n\n[main]\n# keyd-viz: h = MyKey\n");
+        let board = build_base(&cfg, &geom);
+        let h = cap_named(&board, "h");
+        assert_eq!(h.label, "MyKey");
+        assert_eq!(h.ghost, base_legend("h"));
+        assert!(h.emphasized);
+    }
+
+    #[test]
+    fn custom_label_on_tap_hold_preserves_the_hold_badge() {
+        // A tap/hold cap shows the hold target via a ↓badge, tap as main text. A label
+        // demotes the tap into the ghost and keeps the ↓badge untouched.
+        let geom = Geometry::from_rows(&[&[("capslock", 1.0)]]);
+        let cfg = crate::parser::parse_text(
+            "[ids]\n*\n\n[main]\n# keyd-viz: capslock = Nav / Esc\ncapslock = overload(nav, esc)\n\n[nav]\nh = left\n",
+        );
+        let board = build_base(&cfg, &geom);
+        let c = cap_named(&board, "capslock");
+        assert_eq!(c.label, "Nav / Esc");
+        assert_eq!(c.ghost, prettify("esc"), "the tap action drops to the ghost");
+        let badge = c.badge_left.as_ref().expect("hold badge survives the label");
+        assert!(badge.text.contains("nav"), "↓nav badge untouched: {}", badge.text);
+    }
+
+    #[test]
+    fn custom_label_on_layer_board_reads_layer_labels() {
+        let geom = Geometry::from_rows(&[&[("h", 1.0)]]);
+        let cfg = crate::parser::parse_text(
+            "[ids]\n*\n\n[main]\na = b\n\n[nav]\n# keyd-viz: h = Left\nh = left\n",
+        );
+        let layer = cfg.layer("nav").expect("nav layer");
+        let board = build_layer(&cfg, layer, &geom);
+        let h = cap_named(&board, "h");
+        assert_eq!(h.label, "Left");
+        assert_eq!(h.ghost, prettify("left"));
     }
 
     #[test]
@@ -758,6 +830,7 @@ mod tests {
             keys: vec![("h".into(), "left".into())],
             combos: vec![("j+k".into(), "esc".into())],
             mods: None,
+            labels: vec![],
         };
         let cfg = Config { layers: vec![layer.clone()], ..Config::default() };
         let board = build_layer(&cfg, &layer, &geom);

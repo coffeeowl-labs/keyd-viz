@@ -36,6 +36,11 @@ pub struct Layer {
     /// for `:layout` sections. A hold onto a modset-qualified layer classifies as a
     /// *modifier* hold (design doc §12).
     pub mods: Option<String>,
+    /// Custom display labels for keys in this layer, `(key, label)`, derived from
+    /// `# keyd-viz: <key> = <label>` comment lines in the section(s). The on-disk
+    /// comment is the source of truth; this is a throwaway snapshot rebuilt each
+    /// `derive()`. See `docs/labels-design.md`.
+    pub labels: Vec<(String, String)>,
 }
 
 impl Layer {
@@ -64,6 +69,11 @@ pub struct Config {
     pub combos: Vec<(String, String)>,
     /// Plain remaps and unrecognized macros: `key -> value`.
     pub remaps: Vec<(String, String)>,
+    /// Custom display labels for base/`[main]` keys, `(key, label)`, derived from
+    /// `# keyd-viz: <key> = <label>` comment lines in the main section(s). Base
+    /// bindings live here (not in a `Layer`), so the base board reads labels here.
+    /// Throwaway snapshot rebuilt each `derive()`. See `docs/labels-design.md`.
+    pub labels: Vec<(String, String)>,
 }
 
 impl Config {
@@ -76,4 +86,15 @@ impl Config {
     pub fn remap(&self, key: &str) -> Option<&str> {
         self.remaps.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
     }
+
+    /// The custom label for a base/`[main]` key, if one was set.
+    pub fn label(&self, key: &str) -> Option<&str> {
+        label_for(&self.labels, key)
+    }
+}
+
+/// Look up a custom label in a `(key, label)` list. Shared by `Config`/`Layer`
+/// label lookups and the board renderer.
+pub fn label_for<'a>(labels: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    labels.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
 }
