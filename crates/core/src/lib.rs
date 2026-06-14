@@ -16,6 +16,7 @@ pub mod live;
 pub mod layout;
 pub mod macros;
 pub mod model;
+pub mod mods;
 pub mod parser;
 pub mod prettify;
 pub mod qmk;

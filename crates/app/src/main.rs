@@ -2702,14 +2702,7 @@ fn edit_layer_choices(s: &editing::EditSession) -> Vec<EditLayer> {
 
 /// A modifier letter's human label for a macro chord step.
 fn mod_label(c: char) -> &'static str {
-    match c {
-        'C' => "Ctrl",
-        'M' => "Meta",
-        'A' => "Alt",
-        'S' => "Shift",
-        'G' => "AltGr",
-        _ => "?",
-    }
+    keydviz_core::mods::Mod::from_letter(c).map_or("?", |m| m.word)
 }
 
 /// The UI row (kind + human label) for one macro step.

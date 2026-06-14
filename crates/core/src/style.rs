@@ -19,14 +19,8 @@ pub const DEFAULT_ACCENT: &str = "#ffb454";
 pub const REMAP_ACCENT: &str = "#ffb454";
 
 /// Human name for a modifier target (`control` → `Ctrl`); unknown names pass
-/// through unchanged.
+/// through unchanged. The mapping lives in [`crate::mods`] so this can't drift
+/// from the other renderers (it once said "Super" where they said "Meta").
 pub fn mod_name(target: &str) -> &str {
-    match target {
-        "control" => "Ctrl",
-        "shift" => "Shift",
-        "alt" => "Alt",
-        "meta" => "Super",
-        "altgr" => "AltGr",
-        other => other,
-    }
+    crate::mods::Mod::from_target(target).map_or(target, |m| m.word)
 }

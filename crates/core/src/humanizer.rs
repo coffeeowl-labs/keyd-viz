@@ -89,26 +89,17 @@ fn combo(value: &str) -> Option<String> {
 
 /// keyd modifier key name (`control`) → display word, for hold targets.
 fn mod_word(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "control" | "leftcontrol" | "rightcontrol" => "Ctrl",
-        "shift" | "leftshift" | "rightshift" => "Shift",
-        "alt" | "leftalt" => "Alt",
-        "meta" | "leftmeta" | "rightmeta" => "Meta",
-        "altgr" | "rightalt" => "AltGr",
-        _ => return None,
-    })
+    crate::mods::Mod::from_target(name).map(|m| m.word)
 }
 
 /// keyd combo modifier letter (`C`) → display word.
 fn mod_letter(letter: &str) -> Option<&'static str> {
-    Some(match letter {
-        "C" => "Ctrl",
-        "S" => "Shift",
-        "A" => "Alt",
-        "M" => "Meta",
-        "G" => "AltGr",
-        _ => return None,
-    })
+    let mut chars = letter.chars();
+    let c = chars.next()?;
+    if chars.next().is_some() {
+        return None; // a modifier letter is exactly one char
+    }
+    crate::mods::Mod::from_letter(c).map(|m| m.word)
 }
 
 /// Describe the non-tap-hold keyd calls (`toggle(game)` → "toggle game layer").

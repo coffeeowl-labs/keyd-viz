@@ -3,9 +3,6 @@
 //! Faithful port of `base_legend`, `prettify`, and the legend maps from the
 //! original Python tool.
 
-/// Mod prefixes that may stack at the front of a binding value (`C-`, `S-`, ...).
-const MOD_PREFIXES: [char; 5] = ['C', 'S', 'A', 'M', 'G'];
-
 /// The shifted symbol for a key, when Shift is the only modifier (`S-9` → `(`).
 fn shift_sym(key: &str) -> Option<&'static str> {
     Some(match key {
@@ -35,18 +32,6 @@ fn legend(key: &str) -> Option<&'static str> {
         "leftmeta" => "\u{25c7}", "rightmeta" => "\u{25c7}", "fn" => "Fn",
         _ => return None,
     })
-}
-
-/// The glyph for a single mod prefix char (`C` → `⌃`, `G` → `AltGr`).
-fn mod_glyph(c: char) -> &'static str {
-    match c {
-        'C' => "\u{2303}", // ⌃
-        'S' => "\u{21e7}", // ⇧
-        'A' => "\u{2325}", // ⌥
-        'M' => "\u{25c7}", // ◇
-        'G' => "AltGr",
-        _ => "",
-    }
 }
 
 /// Render a bare key-name as a cap legend: known legend, else uppercase single
@@ -119,7 +104,7 @@ pub fn prettify(value: &str) -> String {
     let chars: Vec<char> = value.chars().collect();
     let mut i = 0;
     let mut mods: Vec<char> = Vec::new();
-    while i + 1 < chars.len() && MOD_PREFIXES.contains(&chars[i]) && chars[i + 1] == '-' {
+    while i + 1 < chars.len() && crate::mods::is_prefix_letter(chars[i]) && chars[i + 1] == '-' {
         mods.push(chars[i]);
         i += 2;
     }
@@ -131,7 +116,8 @@ pub fn prettify(value: &str) -> String {
                 return sym.to_string();
             }
         }
-        let glyphs: String = mods.iter().map(|&c| mod_glyph(c)).collect();
+        let glyphs: String =
+            mods.iter().map(|&c| crate::mods::Mod::from_letter(c).map_or("", |m| m.glyph)).collect();
         return format!("{}{}", glyphs, base_legend(&base));
     }
     base_legend(value)

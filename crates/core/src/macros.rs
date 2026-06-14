@@ -26,10 +26,6 @@
 use crate::keycodes::is_keycode;
 use crate::parser::{is_chord_key, parse_fn};
 
-/// The C/M/A/S/G modifier letters of keyd's shorthand (`C-a` = Control+a). Order:
-/// **C**ontrol **M**eta **A**lt **S**hift altg**R** (written `G`).
-const MOD_PREFIXES: [char; 5] = ['C', 'M', 'A', 'S', 'G'];
-
 /// One token of a macro, in the order it's typed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MacroToken {
@@ -240,7 +236,7 @@ fn strip_mod_prefixes(tok: &str) -> Option<(Vec<char>, &str)> {
     let mut mods = Vec::new();
     let mut rest = tok;
     while let Some(c0) = rest.chars().next() {
-        if MOD_PREFIXES.contains(&c0) && rest[c0.len_utf8()..].starts_with('-') {
+        if crate::mods::is_prefix_letter(c0) && rest[c0.len_utf8()..].starts_with('-') {
             mods.push(c0);
             rest = &rest[c0.len_utf8() + 1..];
         } else {

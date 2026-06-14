@@ -32,6 +32,13 @@ fn section_is_layer(section: &Section, layer: &str) -> bool {
     }
 }
 
+/// The single user-facing "this board doesn't exist" message, used by every
+/// mutator that can fail for that reason — one string, so they can't drift
+/// (tests assert on the `[layer]` substring).
+fn no_board_err(layer: &str) -> String {
+    format!("this config has no [{layer}] section")
+}
+
 /// Why a config can't be opened for editing (it remains viewable as before).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewOnly {
@@ -126,12 +133,25 @@ impl EditSession {
         Ok(EditSession { path: path.to_path_buf(), original: String::new(), edit, created: true })
     }
 
+    /// Guard for the `clear_*` family: the base board (`"main"`) is always shown and
+    /// creatable, so clearing there is always valid (a no-op when nothing is bound —
+    /// e.g. an include-only config); a named layer must actually have a local section.
+    /// The `set_*` family instead relies on `EditConfig::set_layer_*` returning `false`
+    /// for the same condition, so both paths funnel through [`no_board_err`].
+    fn require_board(&self, layer: &str) -> Result<(), String> {
+        if layer == "main" || self.editable_sections().iter().any(|s| s == layer) {
+            Ok(())
+        } else {
+            Err(no_board_err(layer))
+        }
+    }
+
     /// Bind `key = val` on the board for `layer` (`"main"` for the base board).
     /// Creates the `[layer]` section if the config doesn't declare one locally
     /// (e.g. its bindings live in an `include`), so the bind always lands.
     pub fn set_binding(&mut self, layer: &str, key: &str, val: &str) -> Result<(), String> {
         if !self.edit.set_layer_binding(layer, key, val) {
-            return Err(format!("this config has no [{layer}] section"));
+            return Err(no_board_err(layer));
         }
         Ok(())
     }
@@ -148,9 +168,7 @@ impl EditSession {
     /// `set_binding`'s create-`[main]`-on-demand, so the whole clear/set family agrees
     /// on what counts as a board.
     pub fn clear_binding(&mut self, layer: &str, key: &str) -> Result<(), String> {
-        if layer != "main" && !self.editable_sections().iter().any(|s| s == layer) {
-            return Err(format!("this config has no [{layer}] section"));
-        }
+        self.require_board(layer)?;
         self.edit.clear_binding(layer, key);
         Ok(())
     }
@@ -169,7 +187,7 @@ impl EditSession {
             return self.clear_label(layer, key);
         }
         if !self.edit.set_label(layer, key, text) {
-            return Err(format!("this config has no [{layer}] section"));
+            return Err(no_board_err(layer));
         }
         Ok(())
     }
@@ -177,12 +195,7 @@ impl EditSession {
     /// Remove the custom label for `key` on the `layer` board. A no-op when none is
     /// set. `Err` only when there is no such board at all.
     pub fn clear_label(&mut self, layer: &str, key: &str) -> Result<(), String> {
-        // The base board ("main") is always shown and creatable, so clearing a label
-        // there is always valid (a no-op when there's nothing to clear); a named layer
-        // must actually exist. Mirrors set_label's create-`[main]`-on-demand behavior.
-        if layer != "main" && !self.editable_sections().iter().any(|s| s == layer) {
-            return Err(format!("this config has no [{layer}] section"));
-        }
+        self.require_board(layer)?;
         self.edit.clear_label(layer, key);
         Ok(())
     }
@@ -241,7 +254,7 @@ impl EditSession {
         let existing = self.current_tap_hold(layer, key);
         let th = TapHold::compose(existing.as_ref(), target.to_string(), tap, feel);
         if !self.edit.set_layer_binding(layer, key, &th.serialize()) {
-            return Err(format!("this config has no [{layer}] section"));
+            return Err(no_board_err(layer));
         }
         Ok(())
     }
@@ -290,7 +303,7 @@ impl EditSession {
                 .to_string());
         }
         if !self.edit.set_layer_binding(layer, key, &rhs) {
-            return Err(format!("this config has no [{layer}] section"));
+            return Err(no_board_err(layer));
         }
         Ok(())
     }
@@ -349,7 +362,7 @@ impl EditSession {
         // Rewrite an existing chord (any order, any merged section) in place, else append a
         // new line to the target section — see [`EditConfig::set_layer_chord`].
         if !self.edit.set_layer_chord(layer, &canon, &new_key, action) {
-            return Err(format!("this config has no [{layer}] section"));
+            return Err(no_board_err(layer));
         }
         Ok(())
     }
@@ -383,7 +396,7 @@ impl EditSession {
             }
         }
         if !found {
-            return Err(format!("this config has no [{layer}] section"));
+            return Err(no_board_err(layer));
         }
         Ok(())
     }
@@ -426,6 +439,10 @@ impl EditSession {
 
     /// Remove a `[global]` option (every assignment of it), so keyd uses its default.
     /// A no-op when the option (or the `[global]` section) isn't present.
+    ///
+    /// Returns whether anything was removed. Unlike the board `clear_*` mutators this
+    /// is infallible (there is no "missing board" to report — an absent `[global]` is a
+    /// valid no-op), so it deliberately returns `bool` rather than `Result`.
     pub fn clear_global(&mut self, name: &str) -> bool {
         match self.edit.section_mut("global") {
             Some(s) => s.remove_binding(name.trim()),

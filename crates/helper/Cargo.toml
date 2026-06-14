@@ -10,7 +10,8 @@ repository.workspace = true
 name = "keydviz-helperd"
 path = "src/main.rs"
 
-# core for the shared parsers + wire protocol; libc only for getuid() (peer-uid authz).
+# core for the shared parsers + wire protocol; libc for getuid()/free() (peer-uid authz).
+# Also links libsystemd (via build.rs) for the logind active-session check — see authz.rs.
 # Deliberately tiny: this is the security-critical, would-be-privileged component.
 [dependencies]
 keydviz-core = { path = "../core" }
