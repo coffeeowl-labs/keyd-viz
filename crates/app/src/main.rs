@@ -938,6 +938,20 @@ impl ApplyState {
     }
 }
 
+/// What the next apply will write, parked on the singleton [`ApplyCtx`]. A single
+/// typed field replaces the two out-of-band `Option` flags this used to be (a
+/// `restore_bytes` and a `deleting` path): every transition replaces the whole value,
+/// so a half-cleared override is unrepresentable — there's nothing to forget to clear.
+enum Pending {
+    /// The idle default: apply the session's own current edits.
+    Session,
+    /// Restore a backup's bytes (armed by `restore_backup`, consumed by `launch_apply`).
+    Restore(Vec<u8>),
+    /// Delete `<dir>/<name>.conf`; the path is the board to drop on `kept` (armed by
+    /// `launch_delete`, read by `handle_apply_event`).
+    Delete(PathBuf),
+}
+
 /// One-click apply bookkeeping (E2), UI-thread only. The protocol thread can only
 /// ferry plain [`applying::ApplyEvent`]s across `invoke_from_event_loop`, so the
 /// state the event handler needs — the session to re-base on `kept`, the sheet
@@ -952,22 +966,14 @@ struct ApplyCtx {
     /// alive only while a run is in `countdown`. Held so `finish`/`teardown_apply`
     /// can close it and the timer can drive its seconds.
     dialog: RefCell<Option<ApplyDialog>>,
-    /// `Some(path)` while a *delete* run is in flight (vs. an apply). On `kept` it
-    /// tells the event handler to remove that config's board and leave edit mode
-    /// instead of re-opening the session; cleared on every terminal event.
-    deleting: RefCell<Option<PathBuf>>,
-    /// `Some(bytes)` while a *restore* is the pending apply: `launch_apply` writes
-    /// these (a backup's contents) instead of the session's current bytes, so restore
-    /// reuses the whole scan → auth → countdown → keep/revert path. Set by
-    /// `restore_backup`. Because this `ApplyCtx` is a process-wide singleton that
-    /// outlives any one session, the override is scoped tightly so it can never hijack
-    /// a later/other apply: `launch_apply` `take()`s it up front (even on an early
-    /// return), the normal apply entry (`on_start_apply`) clears it, cancelling a
-    /// pending restore clears it, and `teardown_apply` (edit-mode exit / config switch)
-    /// clears it. The only producer of a `"confirm"` state with this armed is
-    /// `restore_backup` itself, and the only producer with it cleared is `on_start_apply`
-    /// — so a confirm-click always applies exactly what that confirm represents.
-    restore_bytes: RefCell<Option<Vec<u8>>>,
+    /// What the next apply will write — see [`Pending`]. One typed field that the
+    /// arming/launch/terminal transitions replace wholesale, so a stale override can't
+    /// ride a later apply (this `ApplyCtx` is a process-wide singleton outliving any one
+    /// session). It holds `Pending::Restore` across the sensitive-confirm wait between
+    /// `restore_backup` arming it and `launch_apply` consuming it, and `Pending::Delete`
+    /// from `launch_delete` until the terminal event (so `handle_apply_event` knows to
+    /// drop the board on `kept`); every other path resets it to `Pending::Session`.
+    pending: RefCell<Pending>,
     /// The backups last shown in the restore panel, newest first; `restore_backup(i)`
     /// indexes this. Refreshed on edit-enter and after each kept apply.
     backups: RefCell<Vec<applying::Backup>>,
@@ -1117,8 +1123,7 @@ fn main() -> Result<(), slint::PlatformError> {
             run: RefCell::new(None),
             timer: RefCell::new(None),
             dialog: RefCell::new(None),
-            deleting: RefCell::new(None),
-            restore_bytes: RefCell::new(None),
+            pending: RefCell::new(Pending::Session),
             backups: RefCell::new(Vec::new()),
         });
     });
@@ -2344,7 +2349,7 @@ fn main() -> Result<(), slint::PlatformError> {
             // restore override left set if a restore was armed then abandoned.
             APPLY.with(|a| {
                 if let Some(c) = a.borrow().as_ref() {
-                    *c.restore_bytes.borrow_mut() = None;
+                    *c.pending.borrow_mut() = Pending::Session;
                 }
             });
             let sb = session.borrow();
@@ -2485,7 +2490,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     // so it can't ride a later apply. Harmless when none was armed.
                     APPLY.with(|a| {
                         if let Some(c) = a.borrow().as_ref() {
-                            *c.restore_bytes.borrow_mut() = None;
+                            *c.pending.borrow_mut() = Pending::Session;
                         }
                     });
                 }
@@ -3251,10 +3256,10 @@ fn teardown_apply() {
         if let Some(ctx) = a.borrow().as_ref() {
             *ctx.timer.borrow_mut() = None;
             *ctx.run.borrow_mut() = None;
-            // Leaving edit mode / switching configs disarms any pending restore override:
-            // the singleton ApplyCtx outlives a session, so an override armed for the old
+            // Leaving edit mode / switching configs disarms any pending intent: the
+            // singleton ApplyCtx outlives a session, so an override armed for the old
             // config must not survive into the next one.
-            *ctx.restore_bytes.borrow_mut() = None;
+            *ctx.pending.borrow_mut() = Pending::Session;
             if let Some(d) = ctx.dialog.borrow_mut().take() {
                 let _ = d.hide();
             }
@@ -3303,11 +3308,12 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
     APPLY.with(|a| {
         let actx = a.borrow();
         let Some(ctx) = actx.as_ref() else { return };
-        // Consume any armed restore override up front, before the early returns below:
-        // a launch that bails (tool uninstalled mid-session, etc.) must NOT leave the
-        // override armed to be silently picked up by a later apply. `None` here means
-        // this is an ordinary apply of the session's own edits.
-        let restore = ctx.restore_bytes.borrow_mut().take();
+        // Consume the pending intent up front, before the early returns below: a launch
+        // that bails (tool uninstalled mid-session, etc.) must NOT leave a restore armed
+        // to be silently picked up by a later apply. Reset to `Session` means an ordinary
+        // apply of the session's own edits — including the `Delete` case, which never
+        // reaches here (it goes through `launch_delete`), so it harmlessly falls through.
+        let pending = ctx.pending.replace(Pending::Session);
         // Re-resolve instead of caching: tool/pkexec could have been (un)installed
         // since the session opened. On the None paths surface a visible failure
         // rather than a dead button — the most likely cause is the tool being
@@ -3330,7 +3336,10 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
             return;
         };
         // A pending restore applies the backup's bytes; otherwise the session's.
-        let bytes = restore.unwrap_or_else(|| s.serialized().into_bytes());
+        let bytes = match pending {
+            Pending::Restore(b) => b,
+            _ => s.serialized().into_bytes(),
+        };
         drop(sb);
         // keyd reload bounces the virtual device mid-apply; don't leave a stale
         // capture armed across the hiccup.
@@ -3465,7 +3474,7 @@ fn restore_backup(win: &MainWindow, idx: i32) {
     // Arm the override so launch_apply writes these bytes, then run the normal path.
     APPLY.with(|a| {
         if let Some(c) = a.borrow().as_ref() {
-            *c.restore_bytes.borrow_mut() = Some(bytes);
+            *c.pending.borrow_mut() = Pending::Restore(bytes);
         }
     });
     win.set_apply_info(info.into());
@@ -3479,7 +3488,7 @@ fn restore_backup(win: &MainWindow, idx: i32) {
 /// Spawn the apply tool to *delete* `<dir>/<name>.conf` (the caller has confirmed
 /// and verified `name` is an allow-listed target). Mirrors `launch_apply`: the same
 /// auth → countdown → KEEP/revert flow, but a `delete` request with no payload. The
-/// `deleting` marker tells `handle_apply_event` to drop the board on `kept`.
+/// `Pending::Delete` intent tells `handle_apply_event` to drop the board on `kept`.
 fn launch_delete(win: &MainWindow, name: String, path: PathBuf) {
     APPLY.with(|a| {
         let actx = a.borrow();
@@ -3494,7 +3503,7 @@ fn launch_delete(win: &MainWindow, name: String, path: PathBuf) {
             return;
         };
         win.set_capture_armed(false);
-        *ctx.deleting.borrow_mut() = Some(path);
+        *ctx.pending.borrow_mut() = Pending::Delete(path);
         win.set_apply_state(ApplyState::Auth.as_str().into());
         let weak = win.as_weak();
         let req = applying::ApplyRequest {
@@ -3514,7 +3523,7 @@ fn launch_delete(win: &MainWindow, name: String, path: PathBuf) {
         }) {
             Ok(h) => *ctx.run.borrow_mut() = Some(h),
             Err(e) => {
-                *ctx.deleting.borrow_mut() = None;
+                *ctx.pending.borrow_mut() = Pending::Session;
                 win.set_apply_state(ApplyState::Failed.as_str().into());
                 win.set_apply_info(format!("couldn't start applying: {e}").into());
             }
@@ -3563,8 +3572,7 @@ fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
         let finish = |state: ApplyState, info: Option<String>| {
             *ctx.timer.borrow_mut() = None;
             *ctx.run.borrow_mut() = None;
-            *ctx.deleting.borrow_mut() = None;
-            *ctx.restore_bytes.borrow_mut() = None;
+            *ctx.pending.borrow_mut() = Pending::Session;
             if let Some(d) = ctx.dialog.borrow_mut().take() {
                 let _ = d.hide();
             }
@@ -3599,7 +3607,10 @@ fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
             E::Kept => {
                 // A kept *delete* removes the board and leaves edit mode; a kept
                 // *apply* re-bases the session on the new on-disk bytes.
-                let deleted = ctx.deleting.borrow().clone();
+                let deleted = match &*ctx.pending.borrow() {
+                    Pending::Delete(p) => Some(p.clone()),
+                    _ => None,
+                };
                 if let Some(path) = deleted {
                     finish(ApplyState::Idle, None);
                     remove_config_after_delete(win, ctx, &path);
