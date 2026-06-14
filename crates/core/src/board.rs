@@ -367,7 +367,12 @@ fn apply_label(cap: &mut KeyCap, labels: &[(String, String)], key: &str) {
     if let Some(lbl) = crate::model::label_for(labels, key) {
         cap.ghost = std::mem::take(&mut cap.label); // demote the old main text…
         cap.label = lbl.to_string(); //                …custom name on top
-        cap.emphasized = true;
+        // Don't shout on a deliberately-quiet cap: a `noop` (or inherited) key stays
+        // Dim, and emphasizing would render the name large-bold yet dim-grey — visually
+        // contradictory. Keep the label, leave the receded state alone.
+        if cap.state != KeyState::Dim {
+            cap.emphasized = true;
+        }
     }
 }
 
@@ -730,6 +735,22 @@ mod tests {
         assert_eq!(c.ghost, prettify("esc"), "the tap action drops to the ghost");
         let badge = c.badge_left.as_ref().expect("hold badge survives the label");
         assert!(badge.text.contains("nav"), "↓nav badge untouched: {}", badge.text);
+    }
+
+    #[test]
+    fn custom_label_on_noop_key_stays_dim_and_unemphasized() {
+        // A labelled noop must show the name but stay receded (Dim, not large-bold),
+        // else the cap shouts in size while whispering in color.
+        let geom = Geometry::from_rows(&[&[("h", 1.0)]]);
+        let cfg = crate::parser::parse_text(
+            "[ids]\n*\n\n[main]\n# keyd-viz: h = Off\nh = noop\n",
+        );
+        let board = build_base(&cfg, &geom);
+        let h = cap_named(&board, "h");
+        assert_eq!(h.label, "Off");
+        assert_eq!(h.state, KeyState::Dim, "a labelled noop stays dim");
+        assert!(!h.emphasized, "a dim cap is not emphasized");
+        assert_eq!(h.key, "", "still never glows");
     }
 
     #[test]

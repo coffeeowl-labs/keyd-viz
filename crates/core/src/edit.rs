@@ -254,10 +254,17 @@ impl Section {
             self.clear_label(key);
             return;
         }
-        let raw = label_comment_line(key, text);
+        // A label is exactly one comment line. An embedded newline would split it into
+        // a second physical line that re-parses as a bogus binding (keyd rejects it), so
+        // collapse any interior CR/LF — set_label is a public API, not just GUI-fed.
+        let raw = label_comment_line(key, &text.replace(['\n', '\r'], " "));
         if let Some(i) = self.label_index(key) {
-            self.entries[i].raw = raw;
-            self.dirty = true;
+            // Skip an identical rewrite: re-clicking "set" with unchanged text must not
+            // mark the config dirty (a byte-identical "unsaved change" reads as a bug).
+            if self.entries[i].raw != raw {
+                self.entries[i].raw = raw;
+                self.dirty = true;
+            }
             return;
         }
         // Insert before the last-wins binding (same target `set_binding` rewrites).
@@ -1512,6 +1519,28 @@ mod tests {
         assert!(cfg.clear_label("nav", "h"));
         assert_eq!(cfg.serialize(), "[nav]\nh = left\n[nav:C]\nh = right\n");
         assert!(cfg.is_dirty());
+    }
+
+    #[test]
+    fn set_label_with_identical_text_is_not_dirty() {
+        // Re-setting the same label must not flag the config dirty (no byte change).
+        let mut cfg = EditConfig::parse("[main]\n# keyd-viz: tab = Tab L\ntab = layer(nav)\n");
+        assert!(cfg.set_label("main", "tab", "Tab L"));
+        assert!(!cfg.is_dirty(), "an identical rewrite is a no-op");
+        // A genuine change still dirties.
+        assert!(cfg.set_label("main", "tab", "Tab R"));
+        assert!(cfg.is_dirty());
+    }
+
+    #[test]
+    fn set_label_collapses_interior_newlines() {
+        // A newline in label text would otherwise split into a bogus second line keyd
+        // rejects. It's collapsed to a space, keeping the comment on one line.
+        let mut cfg = EditConfig::parse("[main]\ntab = layer(nav)\n");
+        cfg.set_label("main", "tab", "Tab\nLine\rTwo");
+        let s = cfg.serialize();
+        assert_eq!(s, "[main]\n# keyd-viz: tab = Tab Line Two\ntab = layer(nav)\n");
+        assert!(round_trips(&s));
     }
 
     #[test]

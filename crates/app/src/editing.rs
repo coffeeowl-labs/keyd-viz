@@ -155,6 +155,13 @@ impl EditSession {
     /// Creates `[main]` if the base board is include-only (same as [`Self::set_binding`]).
     /// `Err` only when there is no such board (a named layer with no local section).
     pub fn set_label(&mut self, layer: &str, key: &str, text: &str) -> Result<(), String> {
+        // Empty text means "clear" — a valid no-op on any real board. Route it through
+        // clear_label rather than the set path: EditConfig::set_label returns `false`
+        // for BOTH "no such board" and "empty-clear removed nothing", so an empty "set"
+        // on an unlabelled key would otherwise raise a spurious missing-board error.
+        if text.trim().is_empty() {
+            return self.clear_label(layer, key);
+        }
         if !self.edit.set_label(layer, key, text) {
             return Err(format!("this config has no [{layer}] section"));
         }
@@ -164,7 +171,10 @@ impl EditSession {
     /// Remove the custom label for `key` on the `layer` board. A no-op when none is
     /// set. `Err` only when there is no such board at all.
     pub fn clear_label(&mut self, layer: &str, key: &str) -> Result<(), String> {
-        if !self.editable_sections().iter().any(|s| s == layer) {
+        // The base board ("main") is always shown and creatable, so clearing a label
+        // there is always valid (a no-op when there's nothing to clear); a named layer
+        // must actually exist. Mirrors set_label's create-`[main]`-on-demand behavior.
+        if layer != "main" && !self.editable_sections().iter().any(|s| s == layer) {
             return Err(format!("this config has no [{layer}] section"));
         }
         self.edit.clear_label(layer, key);
@@ -876,6 +886,34 @@ mod tests {
         assert_eq!(s2.current_label("nav", "h").as_deref(), Some("Left"));
         assert_eq!(s2.current_label("main", "h"), None);
         assert!(s2.set_label("sym", "a", "X").unwrap_err().contains("[sym]"));
+    }
+
+    #[test]
+    fn empty_set_label_on_unlabelled_key_is_ok_not_an_error() {
+        // Regression: clicking "set" (or Enter) with an empty field on a key that has
+        // no label must be a clean no-op, NOT a spurious "no [main] section" error.
+        let td = TempDir::new("label-empty");
+        let mut s = session(&td);
+        assert!(s.set_label("main", "capslock", "").is_ok());
+        assert!(!s.dirty(), "an empty set on an unlabelled key changes nothing");
+        // And it still clears a real label when one exists.
+        s.set_label("main", "capslock", "X").unwrap();
+        assert!(s.set_label("main", "capslock", "   ").is_ok());
+        assert_eq!(s.current_label("main", "capslock"), None);
+    }
+
+    #[test]
+    fn empty_set_label_on_include_only_main_is_ok() {
+        // A config whose [main] lives in an include has no physical [main] section, but
+        // the base board is still shown — an empty set/clear there must not error.
+        let td = TempDir::new("label-incl");
+        let p = td.0.join("test.conf");
+        std::fs::write(&p, "[ids]\n*\n").unwrap();
+        let mut s = EditSession::open(&p).unwrap();
+        assert!(s.set_label("main", "a", "").is_ok());
+        assert!(s.clear_label("main", "a").is_ok());
+        // A truly missing named layer still errors.
+        assert!(s.set_label("nav", "h", "").is_err());
     }
 
     #[test]
