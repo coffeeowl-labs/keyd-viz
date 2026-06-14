@@ -911,8 +911,14 @@ struct ApplyCtx {
     /// `Some(bytes)` while a *restore* is the pending apply: `launch_apply` writes
     /// these (a backup's contents) instead of the session's current bytes, so restore
     /// reuses the whole scan → auth → countdown → keep/revert path. Set by
-    /// `restore_backup`, consumed (taken) by `launch_apply`, and cleared by both the
-    /// normal apply entry and every terminal event so it can never hijack a later apply.
+    /// `restore_backup`. Because this `ApplyCtx` is a process-wide singleton that
+    /// outlives any one session, the override is scoped tightly so it can never hijack
+    /// a later/other apply: `launch_apply` `take()`s it up front (even on an early
+    /// return), the normal apply entry (`on_start_apply`) clears it, cancelling a
+    /// pending restore clears it, and `teardown_apply` (edit-mode exit / config switch)
+    /// clears it. The only producer of a `"confirm"` state with this armed is
+    /// `restore_backup` itself, and the only producer with it cleared is `on_start_apply`
+    /// — so a confirm-click always applies exactly what that confirm represents.
     restore_bytes: RefCell<Option<Vec<u8>>>,
     /// The backups last shown in the restore panel, newest first; `restore_backup(i)`
     /// indexes this. Refreshed on edit-enter and after each kept apply.
@@ -2419,6 +2425,13 @@ fn main() -> Result<(), slint::PlatformError> {
                 "confirm" | "kept" | "reverted" | "revert-failed" | "failed" => {
                     win.set_apply_state("idle".into());
                     win.set_apply_info("".into());
+                    // Backing out of a pending (sensitive) restore disarms the override,
+                    // so it can't ride a later apply. Harmless when none was armed.
+                    APPLY.with(|a| {
+                        if let Some(c) = a.borrow().as_ref() {
+                            *c.restore_bytes.borrow_mut() = None;
+                        }
+                    });
                 }
                 "auth" => {
                     with_apply_run(|h| h.revert());
@@ -3186,6 +3199,10 @@ fn teardown_apply() {
         if let Some(ctx) = a.borrow().as_ref() {
             *ctx.timer.borrow_mut() = None;
             *ctx.run.borrow_mut() = None;
+            // Leaving edit mode / switching configs disarms any pending restore override:
+            // the singleton ApplyCtx outlives a session, so an override armed for the old
+            // config must not survive into the next one.
+            *ctx.restore_bytes.borrow_mut() = None;
             if let Some(d) = ctx.dialog.borrow_mut().take() {
                 let _ = d.hide();
             }
@@ -3234,6 +3251,11 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
     APPLY.with(|a| {
         let actx = a.borrow();
         let Some(ctx) = actx.as_ref() else { return };
+        // Consume any armed restore override up front, before the early returns below:
+        // a launch that bails (tool uninstalled mid-session, etc.) must NOT leave the
+        // override armed to be silently picked up by a later apply. `None` here means
+        // this is an ordinary apply of the session's own edits.
+        let restore = ctx.restore_bytes.borrow_mut().take();
         // Re-resolve instead of caching: tool/pkexec could have been (un)installed
         // since the session opened. On the None paths surface a visible failure
         // rather than a dead button — the most likely cause is the tool being
@@ -3256,11 +3278,7 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
             return;
         };
         // A pending restore applies the backup's bytes; otherwise the session's.
-        let bytes = ctx
-            .restore_bytes
-            .borrow_mut()
-            .take()
-            .unwrap_or_else(|| s.serialized().into_bytes());
+        let bytes = restore.unwrap_or_else(|| s.serialized().into_bytes());
         drop(sb);
         // keyd reload bounces the virtual device mid-apply; don't leave a stale
         // capture armed across the hiccup.

@@ -141,8 +141,14 @@ impl EditSession {
     /// unbound key. Clears the key from every section that merges into the board
     /// (last-wins means a single leftover would keep it bound). A no-op when the
     /// key was already unbound. `Err` only when there is no such board at all.
+    ///
+    /// The base board (`"main"`) is always shown and creatable, so unbinding there is
+    /// always valid (a no-op when nothing is bound locally — e.g. an include-only
+    /// config); a named layer must actually exist. Mirrors [`Self::clear_label`] and
+    /// `set_binding`'s create-`[main]`-on-demand, so the whole clear/set family agrees
+    /// on what counts as a board.
     pub fn clear_binding(&mut self, layer: &str, key: &str) -> Result<(), String> {
-        if !self.editable_sections().iter().any(|s| s == layer) {
+        if layer != "main" && !self.editable_sections().iter().any(|s| s == layer) {
             return Err(format!("this config has no [{layer}] section"));
         }
         self.edit.clear_binding(layer, key);
@@ -860,6 +866,21 @@ mod tests {
         s2.clear_binding("main", "nonexistent").unwrap();
         assert!(!s2.dirty());
         assert!(s2.clear_binding("sym", "a").unwrap_err().contains("[sym]"));
+    }
+
+    #[test]
+    fn clear_binding_on_include_only_main_is_ok_not_an_error() {
+        // The base board is always shown even when [main] lives in an include. Unbinding
+        // an inherited key there is a valid no-op, not a "no [main] section" error —
+        // consistent with set_binding (which would create [main]) and clear_label.
+        let td = TempDir::new("clear-incl");
+        let p = td.0.join("test.conf");
+        std::fs::write(&p, "[ids]\n*\n").unwrap();
+        let mut s = EditSession::open(&p).unwrap();
+        assert!(s.clear_binding("main", "a").is_ok());
+        assert!(!s.dirty(), "nothing local to clear → no change");
+        // A genuinely missing named layer still errors.
+        assert!(s.clear_binding("nav", "h").unwrap_err().contains("[nav]"));
     }
 
     #[test]
