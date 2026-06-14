@@ -1,2 +1,9 @@
 # Rust
 /target/
+
+# Python tooling cruft (legacy prototype era — not part of the Rust workspace)
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+uv.lock

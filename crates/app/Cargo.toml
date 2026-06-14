@@ -1,6 +1,6 @@
 [package]
 name = "keydviz"
-version = "1.2.0"
+version.workspace = true
 description = "keyd-viz — native GUI cheatsheet for keyd."
 edition.workspace = true
 license.workspace = true
