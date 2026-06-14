@@ -1384,3 +1384,20 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
        keyd's audience is laptop users + owners of dumb external keyboards, NOT split/ergo folks (those run
        QMK/ZMK firmware). So **skip** more splits / 40% / additional ergo — keyd-viz already overshoots that
        end with Ergodox + Ortho. Laptop ("75%") is the real gap.
+
+- *(2026-06-13 — v1.3 BUILD COMPLETE; all pushed, pending Ryan's live click-through)* Shipped the full v1.3
+  batch in order: the 4 quick items (symbol-glow fix, noop→blank+dimmed, text-wrap, save-draft de-emphasis),
+  backup/restore (list+restore+prune; restore reuses the apply path via a `restore_bytes` override, zero new
+  privileged protocol), and the **custom-labels headline**. Labels design + decisions in
+  `docs/labels-design.md` (twice critic-reviewed, approved). **Pivot:** keyd v2.6.0 does NOT support trailing
+  comments in general (only incidentally after a layer-arg action) — verified with `keyd check` — so labels
+  are keyd-safe **full-line** `# keyd-viz: <key> = <label>` comments, not the `key = val # Tab L` the groom
+  assumed. Architecture: the comment stays a verbatim `Comment` entry in `EditConfig` (round-trip untouched),
+  and the label is threaded onto the *semantic* model (`labels` Vec on `Config`/`Layer`) at `derive()` time
+  because `board.rs` only ever reads semantic data. Board uses a uniform "demote" rule (custom name on top,
+  the action/legend it replaced drops to the ghost, badges untouched) across base/layer/composite. Edit ops
+  `set_label`/`clear_label`/`current_label` on `EditConfig`/`Section`/`EditSession`; Slint label row shown for
+  any selected key in every key mode. Labels name the cap not the value (survive a binding edit; cleared only
+  explicitly); no auto rename-carry (no single rename op to hook); composite v1 shows own-section labels only.
+  Full core+session test coverage; editor row + board demote verified via the render harness. **v1.3 is now
+  feature-complete.**
