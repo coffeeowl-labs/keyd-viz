@@ -2461,7 +2461,11 @@ export component MainWindow inherits Window {
                         IconButton {
                             wide: true;
                             text: "save draft";
-                            active: root.edit_dirty && !root.apply_in_flight;
+                            // Save-draft is the prominent (filled-green) commit only when
+                            // one-click apply is unavailable — otherwise apply is the
+                            // recommended path and this stays neutral/secondary (most users
+                            // never write a draft by hand). See the apply button below.
+                            primary: !root.apply_available && root.edit_dirty && !root.apply_in_flight;
                             clicked => {
                                 root.save_draft();
                             }
@@ -2469,7 +2473,9 @@ export component MainWindow inherits Window {
                         if root.apply_available: IconButton {
                             wide: true;
                             text: "apply to /etc/keyd\u{2026}";
-                            active: root.edit_dirty && root.apply_state == "idle";
+                            // The recommended commit when available: filled-green so it reads
+                            // as "click me", outranking the now-secondary save-draft.
+                            primary: root.edit_dirty && root.apply_state == "idle";
                             clicked => {
                                 if (root.apply_state == "idle") {
                                     root.start_apply();
