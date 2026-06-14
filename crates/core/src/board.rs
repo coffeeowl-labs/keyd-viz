@@ -343,6 +343,21 @@ fn in_layer_combo(layer: &Layer, key: &str) -> bool {
     layer.combos.iter().any(|(chord, _)| chord.split('+').any(|p| p.trim() == key))
 }
 
+/// keyd's `noop` binding makes a key do nothing. Render such a cap as deliberately
+/// disabled — blank and dimmed — so it recedes instead of shouting like an active remap
+/// (which is bright) or reading like an inherited key (which is dim *with* a legend).
+fn is_noop(val: &str) -> bool {
+    val.trim() == "noop"
+}
+
+/// Style `cap` as a disabled `noop` key: no legend, dimmed, and never glowing.
+fn style_noop(cap: &mut KeyCap) {
+    cap.label = String::new();
+    cap.ghost = String::new();
+    cap.state = KeyState::Dim;
+    cap.key = String::new();
+}
+
 fn build_base(cfg: &Config, geom: &Geometry) -> Board {
     let mut keys = Vec::new();
     for slot in &geom.slots {
@@ -387,13 +402,17 @@ fn build_base(cfg: &Config, geom: &Geometry) -> Board {
                 }
             }
         } else if let Some(val) = cfg.remap(name) {
-            cap.accent = REMAP_ACCENT.to_string();
-            cap.emphasized = true;
-            cap.label = prettify(val);
-            cap.ghost = base_legend(name);
-            // Remapped keys emit the remap target; glow matches that, not the physical key.
-            if let Some(out) = output_chord(val) {
-                cap.key = out;
+            if is_noop(val) {
+                style_noop(&mut cap);
+            } else {
+                cap.accent = REMAP_ACCENT.to_string();
+                cap.emphasized = true;
+                cap.label = prettify(val);
+                cap.ghost = base_legend(name);
+                // Remapped keys emit the remap target; glow matches that, not the physical key.
+                if let Some(out) = output_chord(val) {
+                    cap.key = out;
+                }
             }
         } else {
             cap.label = base_legend(name);
@@ -469,14 +488,18 @@ fn build_layer(cfg: &Config, layer: &Layer, geom: &Geometry) -> Board {
         };
         let mut cap = cap_at(slot, nm);
         if let Some(val) = layer.get(nm) {
-            cap.label = if is_game { base_legend(nm) } else { prettify(val) };
-            cap.emphasized = true;
-            cap.ghost = if is_game { String::new() } else { base_legend(nm) };
-            cap.accent = accent.clone();
-            // Glow on what the remapped key emits (a num-layer `j = 4` glows the j-cap
-            // when keyd reports `4`). Game/passthrough keys still emit their own key.
-            if !is_game {
-                cap.key = output_chord(val).unwrap_or_default();
+            if is_noop(val) {
+                style_noop(&mut cap);
+            } else {
+                cap.label = if is_game { base_legend(nm) } else { prettify(val) };
+                cap.emphasized = true;
+                cap.ghost = if is_game { String::new() } else { base_legend(nm) };
+                cap.accent = accent.clone();
+                // Glow on what the remapped key emits (a num-layer `j = 4` glows the j-cap
+                // when keyd reports `4`). Game/passthrough keys still emit their own key.
+                if !is_game {
+                    cap.key = output_chord(val).unwrap_or_default();
+                }
             }
         } else if act_key.as_deref() == Some(nm) {
             cap.label = base_legend(nm);
@@ -560,11 +583,15 @@ fn build_composite(cfg: &Config, layer: &Layer, geom: &Geometry) -> Board {
                 .find_map(|p| cfg.layer(p).and_then(|l| l.get(nm)).map(|v| (v, accent_for(p).to_string()))),
         };
         if let Some((val, accent)) = bound {
-            cap.label = prettify(val);
-            cap.emphasized = true;
-            cap.ghost = base_legend(nm);
-            cap.accent = accent;
-            cap.key = output_chord(val).unwrap_or_default();
+            if is_noop(val) {
+                style_noop(&mut cap);
+            } else {
+                cap.label = prettify(val);
+                cap.emphasized = true;
+                cap.ghost = base_legend(nm);
+                cap.accent = accent;
+                cap.key = output_chord(val).unwrap_or_default();
+            }
         } else if let Some((_, accent)) = holders.iter().find(|(k, _)| k == nm) {
             // A key held to engage one of the constituents — emits nothing, so no glow.
             cap.label = base_legend(nm);
@@ -625,6 +652,25 @@ mod tests {
         assert_eq!(cap_named(&board, "h").key, "leftshift+9", "h = ( glows Shift+9");
         assert_eq!(cap_named(&board, "j").key, "leftshift+0", "j = ) glows Shift+0");
         assert_eq!(cap_named(&board, "k").key, "leftshift+8", "k = * glows Shift+8");
+    }
+
+    #[test]
+    fn noop_key_renders_blank_and_dimmed() {
+        // A `noop` (deliberately disabled) key must recede: blank label, dimmed, no glow,
+        // and crucially NOT the bright remap accent that made it shout like a live mapping.
+        let geom = Geometry::from_rows(&[&[("h", 1.0), ("j", 1.0)]]);
+        let cfg = crate::parser::parse_text("[ids]\n*\n\n[main]\nh = noop\nj = a\n");
+        let board = build_base(&cfg, &geom);
+        let h = cap_named(&board, "h");
+        assert_eq!(h.label, "", "noop key has no legend");
+        assert_eq!(h.state, KeyState::Dim, "noop key is dimmed");
+        assert_eq!(h.key, "", "noop key never glows");
+        assert_eq!(h.accent, "", "noop key drops the remap accent");
+        assert!(!h.emphasized);
+        // A normal remap is unaffected.
+        let j = cap_named(&board, "j");
+        assert_eq!(j.accent, REMAP_ACCENT);
+        assert!(j.emphasized);
     }
 
     #[test]
