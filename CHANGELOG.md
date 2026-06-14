@@ -4,10 +4,14 @@ All notable changes to keyd-viz are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] - 2026-06-13
 
 ### Added
 
+- **Custom key labels.** Rename what any key shows on the board — name a layer key
+  ("Nav", "Sym"), spell out a cryptic keysym, or annotate a macro — without changing the
+  binding. Labels are stored as keyd-safe `# keyd-viz:` comment lines, so they survive a
+  round-trip through keyd untouched and a plain `keyd` install simply ignores them.
 - **Edit mode (visual config editing).** An explicit **edit** toggle turns the viewer
   into an editor for the displayed config: click a key, then set its binding by typing
   it, pressing the key you want (**capture**), or searching keyd's full key list
@@ -29,6 +33,19 @@ All notable changes to keyd-viz are documented here. The format is based on
   previous config and reloads. `command()`/`macro()` configs require an extra explicit
   confirmation first. keyd's panic sequence (Backspace+Escape+Enter) remains the
   always-available failsafe and is surfaced in the UI during the countdown.
+- **Richer editing — chords, macros, daemon options, and layers.** Beyond simple
+  remaps, edit mode now builds **chords** (press `key1`+`key2` → an action), a
+  **structured macro** editor (key / typed-text / chord / delay steps, with repeat),
+  and the **`[global]`** daemon options (overload/timeout/etc., with unit-aware fields).
+  You can **create, rename, and delete layers**, and **create a fresh config** for an
+  unconfigured keyboard or **delete** an existing one — both through the same vetted
+  one-click apply path.
+- **Backup and restore for applied configs.** Every one-click apply leaves a timestamped
+  backup; a restore panel lists them newest-first and rolls any one back through the same
+  validate-write-reload-countdown path (so a restore is as safe as an apply).
+- **Composite layer overlays in the viewer.** A layer defined as a composite of others
+  (`[a+b]`) now renders as an overlay of its constituents, so the board shows what the
+  combined layer actually produces.
 
 ## [1.2.0] - 2026-06-06
 
@@ -139,7 +156,7 @@ First public release — the visual face of [keyd](https://github.com/rvaiya/key
 - System-tray resident process and a KDE global-hotkey to summon/dismiss the window.
 - Flatpak packaging.
 
-[Unreleased]: https://github.com/coffeeowl-labs/keyd-viz/compare/v1.2.0...HEAD
+[1.3.0]: https://github.com/coffeeowl-labs/keyd-viz/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/coffeeowl-labs/keyd-viz/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/coffeeowl-labs/keyd-viz/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/coffeeowl-labs/keyd-viz/releases/tag/v1.0.0
