@@ -601,6 +601,14 @@ export component MainWindow inherits Window {
     // The user picked which detected keyboard to show (index into `sheets`).
     callback pick_keyboard(int);
 
+    // The board's natural panel width (mirrors BoardView's keyboard panel formula). The
+    // edit panel is clamped to this so long help text WRAPS rather than growing the window
+    // wider than the keyboard — the board is the sole width driver. (extent_w == 0 before a
+    // board loads → fall back to a sane width so the panel isn't pinched to nothing.)
+    property <length> board_w: root.active_board.extent_w > 0
+        ? (root.active_board.extent_w * 51px - 5px) * root.zoom + 20px
+        : 760px;
+
     // view state: zoom level for the board and a compact mode that hides all chrome
     // (header, ids, layout picker) to leave a minimal, pinnable keyboard-only window.
     in-out property <float> zoom: 1.0;
@@ -1182,6 +1190,11 @@ export component MainWindow inherits Window {
                 border-width: 1px;
                 border-radius: 12px;
                 height: editbody.preferred-height;
+                // Cap the edit panel at the board's natural width so it never drives the
+                // window wider than the keyboard: long help text and monospace diffs wrap
+                // within it instead (see board_w). max-width (not a definite width) lets the
+                // panel shrink below the board when its content is naturally narrower.
+                max-width: root.board_w;
                 editbody := VerticalLayout {
                     padding: 12px;
                     spacing: 8px;
@@ -1629,6 +1642,7 @@ export component MainWindow inherits Window {
                             text: "global options \u{2014} keyd daemon settings (blank a field to reset to default)";
                             color: #7d8694;
                             font-size: 11px;
+                            wrap: word-wrap;
                         }
                         for g in root.global_rows: HorizontalLayout {
                             spacing: 8px;
@@ -1676,6 +1690,8 @@ export component MainWindow inherits Window {
                                 color: #8c96a4;
                                 font-size: 11px;
                                 vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                wrap: word-wrap;
                             }
                             // clear an explicitly-set option (dimmed when already at default).
                             if g.value != "": IconButton {
@@ -1695,6 +1711,7 @@ export component MainWindow inherits Window {
                         text: "click a key on the board to edit its binding";
                         color: #7d8694;
                         font-size: 12px;
+                        wrap: word-wrap;
                     }
                     // header row: the picked key chip + its current binding in plain English
                     // (the simple/tap-hold/macro kind toggle lives in the "remap:" row above).
@@ -1724,6 +1741,7 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             alignment: center;
                             spacing: 1px;
+                            horizontal-stretch: 1;
                             Text {
                                 // unbound: keyd stops remapping the key. On a sublayer it
                                 // inherits the base layer; on base there is nothing below, so
@@ -1738,6 +1756,7 @@ export component MainWindow inherits Window {
                                 font-size: 13px;
                                 font-weight: root.edit_current == "" ? 400 : 700;
                                 vertical-alignment: center;
+                                wrap: word-wrap;
                             }
                             if root.edit_current != "": Text {
                                 text: "= \{root.edit_current}";
@@ -1745,6 +1764,7 @@ export component MainWindow inherits Window {
                                 font-size: 11px;
                                 font-family: "JetBrains Mono";
                                 vertical-alignment: center;
+                                wrap: word-wrap;
                             }
                         }
                     }
@@ -1818,6 +1838,7 @@ export component MainWindow inherits Window {
                             text: "chords (" + root.edit_layer + ") \u{2014} click 2+ keys on the board, then set an action";
                             color: #7d8694;
                             font-size: 11px;
+                            wrap: word-wrap;
                         }
                         for c in root.chord_rows: HorizontalLayout {
                             spacing: 8px;
