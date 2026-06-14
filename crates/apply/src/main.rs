@@ -42,6 +42,9 @@ use keydviz_apply::{deadman, valid_name, MAX_CONFIG_BYTES};
 
 const KEYD_DIR: &str = "/etc/keyd";
 const DEFAULT_TIMEOUT_SECS: u64 = 20;
+/// How many timestamped backups to retain per config after a kept apply/delete.
+/// Enough to roll back a few mistakes; bounded so /etc/keyd doesn't grow forever.
+const MAX_BACKUPS: usize = 10;
 /// Deadline for the client to deliver the complete request line + payload. A
 /// stalled client must not wedge a root process (review finding F2).
 const REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -172,6 +175,10 @@ fn run(opts: &Opts) -> io::Result<ExitCode> {
     let verdict = deadman::await_keep(&input, opts.timeout);
     if verdict == deadman::Verdict::Keep {
         txn.keep();
+        // Retention: now that this change is permanent, trim this config's backup
+        // history to the newest few. Best-effort housekeeping *after* keep — never
+        // gates the already-committed apply (§5.5 backup/restore).
+        txn::prune_backups(&dir, &format!("{name}.conf"), MAX_BACKUPS);
         say("kept");
         return Ok(ExitCode::SUCCESS);
     }

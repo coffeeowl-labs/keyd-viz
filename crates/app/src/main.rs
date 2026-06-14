@@ -407,6 +407,12 @@ fn drive_render_state(win: &MainWindow, state: &str) {
     win.invoke_toggle_edit();
     match state {
         "edit" => {} // edit mode entered, no key selected
+        "backups" => {
+            // Dev-dir apply makes apply_available genuinely true; refresh_backups then
+            // lists the real .keydviz-bak files placed there (see the smoke-test setup).
+            win.invoke_show_backups();
+            win.set_backups_open(true);
+        }
         "key-selected" => win.invoke_select_key("a".into()),
         "tap-hold" => {
             win.invoke_select_key("f".into()); // lettermod(nav, …) → seeds the editor
@@ -898,6 +904,15 @@ struct ApplyCtx {
     /// tells the event handler to remove that config's board and leave edit mode
     /// instead of re-opening the session; cleared on every terminal event.
     deleting: RefCell<Option<PathBuf>>,
+    /// `Some(bytes)` while a *restore* is the pending apply: `launch_apply` writes
+    /// these (a backup's contents) instead of the session's current bytes, so restore
+    /// reuses the whole scan → auth → countdown → keep/revert path. Set by
+    /// `restore_backup`, consumed (taken) by `launch_apply`, and cleared by both the
+    /// normal apply entry and every terminal event so it can never hijack a later apply.
+    restore_bytes: RefCell<Option<Vec<u8>>>,
+    /// The backups last shown in the restore panel, newest first; `restore_backup(i)`
+    /// indexes this. Refreshed on edit-enter and after each kept apply.
+    backups: RefCell<Vec<applying::Backup>>,
 }
 
 thread_local! {
@@ -1045,6 +1060,8 @@ fn main() -> Result<(), slint::PlatformError> {
             timer: RefCell::new(None),
             dialog: RefCell::new(None),
             deleting: RefCell::new(None),
+            restore_bytes: RefCell::new(None),
+            backups: RefCell::new(Vec::new()),
         });
     });
     {
@@ -2196,6 +2213,13 @@ fn main() -> Result<(), slint::PlatformError> {
             if win.get_apply_state() != "idle" || !win.get_edit_dirty() {
                 return;
             }
+            // The normal apply button commits the *session's* edits — never a stale
+            // restore override left set if a restore was armed then abandoned.
+            APPLY.with(|a| {
+                if let Some(c) = a.borrow().as_ref() {
+                    *c.restore_bytes.borrow_mut() = None;
+                }
+            });
             let sb = session.borrow();
             let Some(s) = sb.as_ref() else { return };
             let bytes = s.serialized();
@@ -2331,6 +2355,21 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
                 _ => {}
             }
+        });
+    }
+    // ---- backup / restore (§5.5) ----
+    {
+        let weak = win.as_weak();
+        win.on_show_backups(move || {
+            let Some(win) = weak.upgrade() else { return };
+            refresh_backups(&win);
+        });
+    }
+    {
+        let weak = win.as_weak();
+        win.on_restore_backup(move |idx| {
+            let Some(win) = weak.upgrade() else { return };
+            restore_backup(&win, idx);
         });
     }
     // The dead-man's switch GUI half (KEEP / revert during the countdown) lives on
@@ -2857,6 +2896,7 @@ fn enter_edit_session(
     refresh_warnings(win, &s);
     reset_apply_ui(win);
     *session.borrow_mut() = Some(s);
+    refresh_backups(win); // populate the restore panel (reads the now-set session)
     win.set_edit_mode(true);
     render_board(win); // freeze the board to the chosen section
 }
@@ -2867,6 +2907,8 @@ fn enter_edit_session(
 /// sources, or `edit_mode` — the caller owns those.
 fn reset_edit_ui(win: &MainWindow) {
     win.set_capture_armed(false);
+    win.set_backups_open(false);
+    win.set_has_backups(false);
     win.set_selected_phys("".into());
     win.set_edit_banner("".into());
     win.set_draft_info("".into());
@@ -3006,6 +3048,7 @@ fn with_apply_run(f: impl FnOnce(&applying::ApplyHandle)) {
 fn reset_apply_ui(win: &MainWindow) {
     win.set_apply_state("idle".into());
     win.set_apply_info("".into());
+    win.set_backups_open(false);
 }
 
 /// Open the always-on-top countdown dialog: a test field (auto-focused, so the
@@ -3128,7 +3171,12 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
             win.set_apply_info("keyd-viz can't apply this config directly anymore".into());
             return;
         };
-        let bytes = s.serialized().into_bytes();
+        // A pending restore applies the backup's bytes; otherwise the session's.
+        let bytes = ctx
+            .restore_bytes
+            .borrow_mut()
+            .take()
+            .unwrap_or_else(|| s.serialized().into_bytes());
         drop(sb);
         // keyd reload bounces the virtual device mid-apply; don't leave a stale
         // capture armed across the hiccup.
@@ -3157,6 +3205,121 @@ fn launch_apply(win: &MainWindow, sensitive_ok: bool) {
             }
         }
     });
+}
+
+/// A byte count as a compact human size for the restore list ("843 B" / "1.2 KB").
+fn human_size(n: u64) -> String {
+    if n < 1024 {
+        format!("{n} B")
+    } else {
+        format!("{:.1} KB", n as f64 / 1024.0)
+    }
+}
+
+/// Re-list this config's timestamped backups and publish them to the restore panel.
+/// Cheap (one dir read, no auth); called on edit-enter and after each kept apply (a
+/// kept apply just created a fresh backup and pruned old ones). Sets `has_backups`
+/// so the "restore from backup…" button only appears when there's something to roll
+/// back to. A no-op (empty list) when one-click apply isn't available for this config.
+fn refresh_backups(win: &MainWindow) {
+    APPLY.with(|a| {
+        let actx = a.borrow();
+        let Some(ctx) = actx.as_ref() else { return };
+        let mut rows: Vec<BackupRow> = Vec::new();
+        if let Some(how) = applying::one_click() {
+            let sb = ctx.session.borrow();
+            if let Some(name) = sb.as_ref().and_then(|s| s.apply_target(how.config_dir())) {
+                let baks = applying::list_backups(how.config_dir(), &name);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                rows = baks
+                    .iter()
+                    .map(|b| BackupRow {
+                        ago: applying::describe_age(b.stamp, now).into(),
+                        detail: format!("{} \u{00b7} {}", applying::fmt_utc(b.stamp), human_size(b.size))
+                            .into(),
+                    })
+                    .collect();
+                *ctx.backups.borrow_mut() = baks;
+            } else {
+                ctx.backups.borrow_mut().clear();
+            }
+        } else {
+            ctx.backups.borrow_mut().clear();
+        }
+        win.set_has_backups(!rows.is_empty());
+        win.set_backups(model(rows));
+    });
+}
+
+/// Restore the `idx`-th backup (as shown in the panel, newest first): read its bytes,
+/// pre-flight them exactly like a normal apply (size, `keyd check`, sensitive-construct
+/// scan), arm the restore override, and route into the apply flow. The override makes
+/// `launch_apply` write the backup's bytes instead of the session's, so the restore is
+/// syntax-checked, backs up the *current* config first (undoable), and rides the
+/// countdown/dead-man's switch — a bad backup self-reverts just like a bad edit.
+fn restore_backup(win: &MainWindow, idx: i32) {
+    let backup = APPLY.with(|a| {
+        a.borrow().as_ref().and_then(|c| c.backups.borrow().get(idx as usize).cloned())
+    });
+    let Some(backup) = backup else { return };
+    let bytes = match std::fs::read(&backup.path) {
+        Ok(b) => b,
+        Err(e) => {
+            win.set_apply_state("failed".into());
+            win.set_apply_info(format!("couldn't read the backup file: {e}").into());
+            return;
+        }
+    };
+    if bytes.len() > keydviz_apply::MAX_CONFIG_BYTES {
+        win.set_apply_state("failed".into());
+        win.set_apply_info("this backup is too large to restore".into());
+        return;
+    }
+    // Configs are text; a non-UTF-8 backup is corrupt — refuse rather than mangle it.
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        win.set_apply_state("failed".into());
+        win.set_apply_info("this backup file is corrupt (not valid text)".into());
+        return;
+    };
+    // The backup was valid when written, but the installed keyd may have changed —
+    // catch a now-invalid config here, before paying the auth prompt.
+    if let Some(Err(e)) = editing::keyd_check_bytes(text) {
+        win.set_apply_state("failed".into());
+        win.set_apply_info(
+            format!("this backup is no longer valid for your keyd and can't be restored:\n{e}")
+                .into(),
+        );
+        return;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let mut info = format!(
+        "Restoring the backup from {} ({}). The current config is backed up first, so \
+         this is undoable.\n",
+        applying::describe_age(backup.stamp, now),
+        applying::fmt_utc(backup.stamp),
+    );
+    let findings = keydviz_apply::scan::scan(&bytes);
+    for f in &findings {
+        if let Some(s) = applying::finding_summary(f) {
+            info.push_str(&format!("\u{26a0} {s}\n"));
+        }
+    }
+    // Arm the override so launch_apply writes these bytes, then run the normal path.
+    APPLY.with(|a| {
+        if let Some(c) = a.borrow().as_ref() {
+            *c.restore_bytes.borrow_mut() = Some(bytes);
+        }
+    });
+    win.set_apply_info(info.into());
+    if findings.iter().any(|f| f.needs_ack()) {
+        win.set_apply_state("confirm".into());
+    } else {
+        launch_apply(win, false);
+    }
 }
 
 /// Spawn the apply tool to *delete* `<dir>/<name>.conf` (the caller has confirmed
@@ -3247,6 +3410,7 @@ fn handle_apply_event(win: &MainWindow, ev: applying::ApplyEvent) {
             *ctx.timer.borrow_mut() = None;
             *ctx.run.borrow_mut() = None;
             *ctx.deleting.borrow_mut() = None;
+            *ctx.restore_bytes.borrow_mut() = None;
             if let Some(d) = ctx.dialog.borrow_mut().take() {
                 let _ = d.hide();
             }
@@ -3364,6 +3528,9 @@ fn reopen_after_kept(win: &MainWindow, ctx: &ApplyCtx) {
                 publish_sheet(win, idx, src);
             }
             drop(srcs);
+            // The kept apply/restore just wrote a fresh backup (and pruned old ones);
+            // re-list so the restore panel reflects the new history.
+            refresh_backups(win);
             render_board(win);
         }
         Err(v) => {

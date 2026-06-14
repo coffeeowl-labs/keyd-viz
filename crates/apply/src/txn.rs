@@ -144,6 +144,55 @@ impl Dir {
     fn sync(&self) -> io::Result<()> {
         self.fd.sync_all()
     }
+
+    /// The plain file names directly inside this directory (non-recursive). Used by
+    /// [`prune_backups`] to find timestamped backups. Reads via the stored path: the
+    /// directory is fixed and root-owned (this only runs in the privileged tool), and
+    /// enumeration needs no symlink hardening — every name found is re-opened through
+    /// the `*at` fd (with `O_NOFOLLOW`) before it is ever unlinked.
+    pub fn entries(&self) -> io::Result<Vec<String>> {
+        let mut out = Vec::new();
+        for ent in std::fs::read_dir(&self.path)? {
+            if let Some(n) = ent?.file_name().to_str() {
+                out.push(n.to_string());
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// Best-effort retention: keep only the `keep` newest timestamped backups of `name`
+/// (the full config file name, e.g. `hhkb.conf`), unlinking the rest. Matches the
+/// `.{name}.keydviz-bak.{stamp}.{pid}` scheme *strictly* — both `{stamp}` and
+/// `{pid}` must be all-digits and be the only two trailing dot-parts — so a
+/// hand-named or unrelated file can never be selected, and the live config (no
+/// `.keydviz-bak.` marker, no leading dot) never matches. Pure housekeeping: every
+/// error is swallowed, because a failed prune must never turn an otherwise-kept
+/// apply into a failure.
+pub fn prune_backups(dir: &Dir, name: &str, keep: usize) {
+    let prefix = format!(".{name}.keydviz-bak.");
+    let Ok(entries) = dir.entries() else { return };
+    let mut baks: Vec<(String, u64)> = entries
+        .into_iter()
+        .filter_map(|f| {
+            let rest = f.strip_prefix(&prefix)?; // expect exactly "{stamp}.{pid}"
+            let mut it = rest.split('.');
+            let stamp = it.next()?;
+            let pid = it.next()?;
+            // Exactly two parts, both non-empty digit runs — nothing else qualifies.
+            if it.next().is_some() || stamp.is_empty() || pid.is_empty() {
+                return None;
+            }
+            if !pid.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            Some((f.clone(), stamp.parse::<u64>().ok()?))
+        })
+        .collect();
+    baks.sort_by(|a, b| b.1.cmp(&a.1)); // newest first
+    for (fname, _) in baks.into_iter().skip(keep) {
+        let _ = dir.unlink(&fname);
+    }
 }
 
 /// Apply a write-set: for each op, capture the prior (backing up existing bytes to
@@ -528,5 +577,70 @@ mod tests {
         assert_eq!(err.to_string(), "second op rejected");
         assert_eq!(std::fs::read(td.0.join("a.conf")).unwrap(), b"a-old");
         assert!(!td.0.join("b.conf").exists());
+    }
+
+    fn bak(td: &TempDir, name: &str, stamp: u64, pid: u32) {
+        std::fs::write(td.0.join(format!(".{name}.keydviz-bak.{stamp}.{pid}")), b"x").unwrap();
+    }
+    fn exists(td: &TempDir, fname: &str) -> bool {
+        td.0.join(fname).exists()
+    }
+
+    #[test]
+    fn prune_keeps_newest_n_and_deletes_older() {
+        let td = TempDir::new("prune");
+        std::fs::write(td.0.join("a.conf"), "live").unwrap(); // the live config
+        for s in [10u64, 20, 30, 40, 50] {
+            bak(&td, "a.conf", s, 100);
+        }
+        let dir = Dir::open(&td.0).unwrap();
+        prune_backups(&dir, "a.conf", 2);
+        // Newest two (50, 40) survive; older three are gone.
+        assert!(exists(&td, ".a.conf.keydviz-bak.50.100"));
+        assert!(exists(&td, ".a.conf.keydviz-bak.40.100"));
+        for s in [10, 20, 30] {
+            assert!(!exists(&td, &format!(".a.conf.keydviz-bak.{s}.100")), "stamp {s} should be pruned");
+        }
+        // The live config is never touched.
+        assert_eq!(std::fs::read(td.0.join("a.conf")).unwrap(), b"live");
+    }
+
+    #[test]
+    fn prune_is_a_noop_below_the_limit() {
+        let td = TempDir::new("prune-few");
+        bak(&td, "a.conf", 10, 1);
+        bak(&td, "a.conf", 20, 1);
+        let dir = Dir::open(&td.0).unwrap();
+        prune_backups(&dir, "a.conf", 5);
+        assert!(exists(&td, ".a.conf.keydviz-bak.10.1"));
+        assert!(exists(&td, ".a.conf.keydviz-bak.20.1"));
+    }
+
+    #[test]
+    fn prune_never_touches_other_configs_or_unrelated_files() {
+        let td = TempDir::new("prune-strict");
+        // Backups of a DIFFERENT config, plus look-alikes that must NOT match.
+        bak(&td, "b.conf", 10, 1);
+        bak(&td, "b.conf", 20, 1);
+        std::fs::write(td.0.join(".a.conf.keydviz-bak.notanumber.1"), b"x").unwrap();
+        std::fs::write(td.0.join(".a.conf.keydviz-bak.30.notapid"), b"x").unwrap();
+        std::fs::write(td.0.join(".a.conf.keydviz-bak.40.1.extra"), b"x").unwrap();
+        std::fs::write(td.0.join("a.conf"), "live").unwrap();
+        // Two real backups of a.conf so the keep=0 prune has something to remove.
+        bak(&td, "a.conf", 100, 1);
+        bak(&td, "a.conf", 200, 1);
+        let dir = Dir::open(&td.0).unwrap();
+        prune_backups(&dir, "a.conf", 0); // delete every *valid* a.conf backup
+        // Real a.conf backups gone…
+        assert!(!exists(&td, ".a.conf.keydviz-bak.100.1"));
+        assert!(!exists(&td, ".a.conf.keydviz-bak.200.1"));
+        // …but the other config's backups, the malformed look-alikes, and the live
+        // config are all untouched.
+        assert!(exists(&td, ".b.conf.keydviz-bak.10.1"));
+        assert!(exists(&td, ".b.conf.keydviz-bak.20.1"));
+        assert!(exists(&td, ".a.conf.keydviz-bak.notanumber.1"));
+        assert!(exists(&td, ".a.conf.keydviz-bak.30.notapid"));
+        assert!(exists(&td, ".a.conf.keydviz-bak.40.1.extra"));
+        assert_eq!(std::fs::read(td.0.join("a.conf")).unwrap(), b"live");
     }
 }

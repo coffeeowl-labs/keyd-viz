@@ -56,6 +56,81 @@ pub fn keyd_data_dir() -> &'static Path {
     Path::new("/usr/share/keyd")
 }
 
+/// One timestamped backup the privileged tool wrote before overwriting/deleting a
+/// config (`crates/apply/src/txn.rs`): `/etc/keyd/.{name}.conf.keydviz-bak.{stamp}.{pid}`.
+/// Listed (and read) directly by the unprivileged GUI — the keyd dir is world-readable,
+/// so *viewing* backups costs no auth prompt; restoring routes back through the apply
+/// path, and pruning happens root-side after a kept apply.
+#[derive(Debug, Clone)]
+pub struct Backup {
+    pub stamp: u64,    // unix seconds the backup was taken
+    pub path: PathBuf, // absolute path to the backup file
+    pub size: u64,     // bytes
+}
+
+/// Existing backups of `<name>.conf` in `dir`, newest first. Reads the directory
+/// directly; returns empty if it can't be read (unusual perms) — viewing backups is
+/// never worth an auth prompt or an error. Same filename scheme as `txn::prune_backups`.
+pub fn list_backups(dir: &Path, name: &str) -> Vec<Backup> {
+    let prefix = format!(".{name}.conf.keydviz-bak.");
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else { return out };
+    for ent in rd.flatten() {
+        let fname = ent.file_name();
+        let Some(fname) = fname.to_str() else { continue };
+        let Some(rest) = fname.strip_prefix(&prefix) else { continue }; // "{stamp}.{pid}"
+        let mut it = rest.split('.');
+        let (Some(stamp), Some(pid)) = (it.next(), it.next()) else { continue };
+        if it.next().is_some() || !pid.bytes().all(|b| b.is_ascii_digit()) {
+            continue; // exactly stamp.pid, pid all-digits — ignore look-alikes
+        }
+        let Ok(stamp) = stamp.parse::<u64>() else { continue };
+        let size = ent.metadata().map(|m| m.len()).unwrap_or(0);
+        out.push(Backup { stamp, path: ent.path(), size });
+    }
+    out.sort_by(|a, b| b.stamp.cmp(&a.stamp)); // newest first
+    out
+}
+
+/// Human-friendly "how long ago", from `now - stamp` (both unix seconds). Coarse on
+/// purpose — picking a backup needs "yesterday", not "27h3m". Future stamps (clock
+/// skew) read as "just now".
+pub fn describe_age(stamp: u64, now: u64) -> String {
+    let secs = now.saturating_sub(stamp);
+    let (n, unit) = match secs {
+        0..=44 => return "just now".to_string(),
+        45..=2699 => ((secs + 30) / 60, "minute"), // ~1 min .. ~45 min
+        2700..=129_599 => ((secs + 1800) / 3600, "hour"), // ~1 h .. ~35 h
+        _ => ((secs + 43_200) / 86_400, "day"),
+    };
+    let n = n.max(1);
+    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+}
+
+/// `stamp` (unix seconds) as `YYYY-MM-DD HH:MM UTC`. UTC avoids dragging in a
+/// timezone database; paired with [`describe_age`] for the at-a-glance relative time.
+pub fn fmt_utc(stamp: u64) -> String {
+    let days = (stamp / 86_400) as i64;
+    let sod = stamp % 86_400;
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02} UTC", sod / 3600, (sod % 3600) / 60)
+}
+
+/// Civil date from a count of days since the Unix epoch (Howard Hinnant's
+/// `civil_from_days`, the public-domain algorithm). Valid for any realistic stamp.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
 /// A `command(`/`macro(` found inside a file an `include` directive pulls in. The
 /// inline byte scan ([`keydviz_apply::scan`]) can't see across the include boundary,
 /// so the one-click apply path reads **one level** of includes and surfaces these for
@@ -402,6 +477,42 @@ pub fn start(
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn fmt_utc_is_correct() {
+        // 2021-06-13 14:30:00 UTC = 1623594600 (verified against `date -u`).
+        assert_eq!(fmt_utc(1_623_594_600), "2021-06-13 14:30 UTC");
+        assert_eq!(fmt_utc(0), "1970-01-01 00:00 UTC");
+    }
+
+    #[test]
+    fn describe_age_buckets() {
+        let now = 1_000_000_000;
+        assert_eq!(describe_age(now, now), "just now");
+        assert_eq!(describe_age(now - 90, now), "2 minutes ago"); // 90s rounds to 2 min
+        assert_eq!(describe_age(now - 60, now), "1 minute ago");
+        assert_eq!(describe_age(now - 7200, now), "2 hours ago");
+        assert_eq!(describe_age(now - 3600, now), "1 hour ago");
+        assert_eq!(describe_age(now - 172_800, now), "2 days ago");
+        assert_eq!(describe_age(now + 100, now), "just now"); // clock skew, no panic
+    }
+
+    #[test]
+    fn list_backups_finds_and_orders_and_filters() {
+        let sb = Sandbox::new();
+        let dir = sb.conf_dir();
+        std::fs::write(dir.join("hhkb.conf"), "live").unwrap(); // live config, not a backup
+        std::fs::write(dir.join(".hhkb.conf.keydviz-bak.100.5"), "a").unwrap();
+        std::fs::write(dir.join(".hhkb.conf.keydviz-bak.300.6"), "ccc").unwrap();
+        std::fs::write(dir.join(".hhkb.conf.keydviz-bak.200.5"), "bb").unwrap();
+        // Look-alikes that must be ignored:
+        std::fs::write(dir.join(".hhkb.conf.keydviz-bak.bad.5"), "x").unwrap();
+        std::fs::write(dir.join(".other.conf.keydviz-bak.999.5"), "x").unwrap();
+        let baks = list_backups(&dir, "hhkb");
+        let stamps: Vec<u64> = baks.iter().map(|b| b.stamp).collect();
+        assert_eq!(stamps, vec![300, 200, 100], "newest first, look-alikes excluded");
+        assert_eq!(baks[0].size, 3); // "ccc"
+    }
 
     #[test]
     fn parses_every_protocol_line() {

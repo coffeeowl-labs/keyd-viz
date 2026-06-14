@@ -441,6 +441,14 @@ export struct GlobalRow {
     known: bool,
 }
 
+// One timestamped backup in the restore panel: `ago` is the relative time ("2 hours
+// ago"), `detail` the absolute UTC stamp + size ("2026-06-13 14:30 UTC · 1.2 KB").
+// Restored by row index (newest first), matching the Rust `backups` list.
+export struct BackupRow {
+    ago: string,
+    detail: string,
+}
+
 // ---- apply countdown dialog ---------------------------------------------------
 // A separate always-on-top window shown only during the dead-man countdown. Its
 // reason to exist is the test field: keyd remaps at the device level, so typing
@@ -764,6 +772,17 @@ export component MainWindow inherits Window {
     callback confirm_apply();  // explicit command()/macro() acknowledgement
     callback cancel_apply();   // leave confirm / cancel auth / dismiss a terminal state
     // KEEP / revert during the countdown live on ApplyDialog, not here.
+
+    // ---- backup / restore (Phase 6 v1.3, §5.5) ----
+    // Every kept apply/delete leaves a timestamped backup in /etc/keyd (root-side,
+    // auto-pruned to the newest few). Listing reads the dir directly (no auth); a
+    // restore feeds the chosen backup's bytes back through the apply path (scan →
+    // auth → countdown → keep/revert), so it's checked, undoable, and recoverable.
+    in property <bool> has_backups: false;     // any backups exist for this config
+    in property <[BackupRow]> backups;         // newest first; restore_backup(i) indexes this
+    in-out property <bool> backups_open: false; // the restore list is expanded
+    callback show_backups();          // refresh + open the list
+    callback restore_backup(int);     // restore the i-th backup (→ apply flow)
 
     // ---- delete config (Phase 6 E2: remove a whole config file, §5.5) ----
     // A destructive, confirm-gated counterpart to create-config. For a persisted
@@ -2482,6 +2501,17 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
+                        // roll back to an earlier saved state (timestamped backups the
+                        // apply tool keeps). Neutral — recovery, not a commit; the
+                        // restore itself runs through the same countdown-protected path.
+                        if root.apply_available && root.has_backups && root.apply_state == "idle" && !root.backups_open && !root.delete_config_prompt: IconButton {
+                            wide: true;
+                            text: "restore from backup\u{2026}";
+                            clicked => {
+                                root.show_backups();
+                                root.backups_open = true;
+                            }
+                        }
                         // delete this whole config (destructive — confirm-gated).
                         // Only when one-click apply can reach it and nothing's in flight.
                         if root.apply_available && root.apply_state == "idle" && !root.delete_config_prompt: IconButton {
@@ -2497,6 +2527,70 @@ export component MainWindow inherits Window {
                             color: #8c96a4;
                             font-size: 11px;
                             vertical-alignment: center;
+                        }
+                    }
+                    // restore panel: the timestamped backups, newest first. Picking one
+                    // feeds its bytes back through the apply flow (scan → auth → countdown
+                    // → keep/revert) — so a restore is checked, undoable (the current
+                    // config is backed up first), and self-reverts if it locks you out.
+                    if root.backups_open && root.apply_state == "idle": Rectangle {
+                        background: #0e151b;
+                        border-color: #2a3340;
+                        border-width: 1px;
+                        border-radius: 8px;
+                        height: blist.preferred-height + 16px;
+                        blist := VerticalLayout {
+                            x: 8px;
+                            y: 8px;
+                            width: parent.width - 16px;
+                            spacing: 6px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: "restore a backup \u{2014} replaces the live config (the current one is backed up first)";
+                                    color: #8c96a4;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    wrap: word-wrap;
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "close";
+                                    clicked => {
+                                        root.backups_open = false;
+                                    }
+                                }
+                            }
+                            for b[i] in root.backups: HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 1px;
+                                    horizontal-stretch: 1;
+                                    Text {
+                                        text: b.ago;
+                                        color: #cfd6df;
+                                        font-size: 12px;
+                                        font-weight: 700;
+                                    }
+                                    Text {
+                                        text: b.detail;
+                                        color: #7d8694;
+                                        font-size: 10px;
+                                        font-family: "JetBrains Mono";
+                                    }
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "restore";
+                                    clicked => {
+                                        root.backups_open = false;
+                                        root.restore_backup(i);
+                                    }
+                                }
+                            }
                         }
                     }
                     // delete-config confirm: destructive, so an explicit second step.
