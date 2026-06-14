@@ -1649,21 +1649,23 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             let mut sb = session.borrow_mut();
             let Some(s) = sb.as_mut() else { return };
-            match s.set_binding(&layer, &phys, &value) {
-                Ok(()) => {
-                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
-                    seed_tap_hold(&win, s, &layer, &phys); // keep the tap/hold panel in sync
-                    seed_macro(&win, s, &layer, &phys, &macro_draft); // and the macro panel
-                    refresh_warnings(&win, s); // a binding change can add/clear an orphan
-                    drop(sb);
-                    set_current_binding(&win, value.clone());
+            let result = s.set_binding(&layer, &phys, &value);
+            commit_edit(
+                &win,
+                &srcs,
+                sb,
+                result,
+                |win, s| {
+                    seed_tap_hold(win, s, &layer, &phys); // keep the tap/hold panel in sync
+                    seed_macro(win, s, &layer, &phys, &macro_draft); // and the macro panel
+                    refresh_warnings(win, s); // a binding change can add/clear an orphan
+                },
+                move |win| {
+                    set_current_binding(win, value.clone());
                     win.set_edit_value(value.into());
-                    win.set_edit_dirty(dirty);
                     win.set_capture_armed(false);
-                    refresh_preview(&win, &srcs, &path, cfg);
-                }
-                Err(e) => win.set_edit_banner(format!("\u{26a0} {e}").into()),
-            }
+                },
+            );
         });
     }
 
@@ -1687,21 +1689,23 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             let mut sb = session.borrow_mut();
             let Some(s) = sb.as_mut() else { return };
-            match s.clear_binding(&layer, &phys) {
-                Ok(()) => {
-                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
-                    seed_tap_hold(&win, s, &layer, &phys); // keep the tap/hold panel in sync
-                    seed_macro(&win, s, &layer, &phys, &macro_draft); // and the macro panel
-                    refresh_warnings(&win, s); // a binding change can add/clear an orphan
-                    drop(sb);
-                    set_current_binding(&win, "");
+            let result = s.clear_binding(&layer, &phys);
+            commit_edit(
+                &win,
+                &srcs,
+                sb,
+                result,
+                |win, s| {
+                    seed_tap_hold(win, s, &layer, &phys); // keep the tap/hold panel in sync
+                    seed_macro(win, s, &layer, &phys, &macro_draft); // and the macro panel
+                    refresh_warnings(win, s); // a binding change can add/clear an orphan
+                },
+                |win| {
+                    set_current_binding(win, "");
                     win.set_edit_value("".into());
-                    win.set_edit_dirty(dirty);
                     win.set_capture_armed(false);
-                    refresh_preview(&win, &srcs, &path, cfg);
-                }
-                Err(e) => win.set_edit_banner(format!("\u{26a0} {e}").into()),
-            }
+                },
+            );
         });
     }
 
@@ -1725,16 +1729,15 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             let mut sb = session.borrow_mut();
             let Some(s) = sb.as_mut() else { return };
-            match s.set_label(&layer, &phys, &text) {
-                Ok(()) => {
-                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
-                    seed_label(&win, s, &layer, &phys);
-                    drop(sb);
-                    win.set_edit_dirty(dirty);
-                    refresh_preview(&win, &srcs, &path, cfg);
-                }
-                Err(e) => win.set_edit_banner(format!("\u{26a0} {e}").into()),
-            }
+            let result = s.set_label(&layer, &phys, &text);
+            commit_edit(
+                &win,
+                &srcs,
+                sb,
+                result,
+                |win, s| seed_label(win, s, &layer, &phys),
+                |_win| {},
+            );
         });
     }
 
@@ -1755,16 +1758,15 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             let mut sb = session.borrow_mut();
             let Some(s) = sb.as_mut() else { return };
-            match s.clear_label(&layer, &phys) {
-                Ok(()) => {
-                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
-                    seed_label(&win, s, &layer, &phys);
-                    drop(sb);
-                    win.set_edit_dirty(dirty);
-                    refresh_preview(&win, &srcs, &path, cfg);
-                }
-                Err(e) => win.set_edit_banner(format!("\u{26a0} {e}").into()),
-            }
+            let result = s.clear_label(&layer, &phys);
+            commit_edit(
+                &win,
+                &srcs,
+                sb,
+                result,
+                |win, s| seed_label(win, s, &layer, &phys),
+                |_win| {},
+            );
         });
     }
 
@@ -1798,22 +1800,30 @@ fn main() -> Result<(), slint::PlatformError> {
             let feel = feel_from_str(&win.get_th_feel());
             let mut sb = session.borrow_mut();
             let Some(s) = sb.as_mut() else { return };
-            match s.set_tap_hold(&layer, &phys, &target, tap, feel) {
-                Ok(()) => {
-                    let cur = s.current_binding(&layer, &phys).unwrap_or_default();
-                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
-                    seed_tap_hold(&win, s, &layer, &phys);
-                    seed_macro(&win, s, &layer, &phys, &macro_draft); // keep the macro panel in sync
-                    refresh_warnings(&win, s); // a tap/hold can target a missing layer
-                    drop(sb);
-                    set_current_binding(&win, cur.clone());
+            let result = s.set_tap_hold(&layer, &phys, &target, tap, feel);
+            // The canonical written binding (read while `s` is still borrowed) seeds the
+            // value slot after commit.
+            let cur = if result.is_ok() {
+                s.current_binding(&layer, &phys).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            commit_edit(
+                &win,
+                &srcs,
+                sb,
+                result,
+                |win, s| {
+                    seed_tap_hold(win, s, &layer, &phys);
+                    seed_macro(win, s, &layer, &phys, &macro_draft); // keep the macro panel in sync
+                    refresh_warnings(win, s); // a tap/hold can target a missing layer
+                },
+                move |win| {
+                    set_current_binding(win, cur.clone());
                     win.set_edit_value(cur.into());
-                    win.set_edit_dirty(dirty);
                     win.set_capture_armed(false);
-                    refresh_preview(&win, &srcs, &path, cfg);
-                }
-                Err(e) => win.set_edit_banner(format!("\u{26a0} {e}").into()),
-            }
+                },
+            );
         });
     }
 
@@ -1972,24 +1982,30 @@ fn main() -> Result<(), slint::PlatformError> {
             let mac = Macro { tokens, repeat };
             let mut sb = session.borrow_mut();
             let Some(s) = sb.as_mut() else { return };
-            match s.set_macro(&layer, &phys, &mac) {
-                Ok(()) => {
-                    let cur = s.current_binding(&layer, &phys).unwrap_or_default();
-                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+            let result = s.set_macro(&layer, &phys, &mac);
+            let cur = if result.is_ok() {
+                s.current_binding(&layer, &phys).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            commit_edit(
+                &win,
+                &srcs,
+                sb,
+                result,
+                |win, s| {
                     // Reseed from the stored binding so the panel shows the canonical
                     // (possibly normalized) form that was actually written.
-                    seed_macro(&win, s, &layer, &phys, &macro_draft);
-                    refresh_warnings(&win, s); // a macro can't orphan a layer, but keep parity
-                    drop(sb);
-                    set_current_binding(&win, cur.clone());
+                    seed_macro(win, s, &layer, &phys, &macro_draft);
+                    refresh_warnings(win, s); // a macro can't orphan a layer, but keep parity
+                },
+                move |win| {
+                    set_current_binding(win, cur.clone());
                     win.set_edit_value(cur.into());
-                    win.set_edit_dirty(dirty);
                     win.set_capture_armed(false);
                     win.set_edit_banner("".into());
-                    refresh_preview(&win, &srcs, &path, cfg);
-                }
-                Err(e) => win.set_edit_banner(format!("\u{26a0} {e}").into()),
-            }
+                },
+            );
         });
     }
 
@@ -2108,34 +2124,32 @@ fn main() -> Result<(), slint::PlatformError> {
             let orig = win.get_chord_edit_orig().to_string();
             let mut sb = session.borrow_mut();
             let Some(s) = sb.as_mut() else { return };
-            match s.set_chord(&layer, &keys, &action) {
-                Ok(()) => {
-                    // Editing an existing chord whose key set was changed: the new key set
-                    // is a different line, so drop the original (set ran first, so on a
-                    // validation error nothing was removed). Unchanged keys → same canonical
-                    // form → set_chord already rewrote it in place, so skip the remove.
-                    if !orig.is_empty()
-                        && keydviz_core::canonical_chord(&orig)
-                            != keydviz_core::canonical_chord(&keys.join("+"))
-                    {
-                        let _ = s.remove_chord(&layer, &orig);
-                    }
-                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
-                    refresh_warnings(&win, s); // a chord can target a missing layer
-                    let rows = chord_rows_for_layer(s, &layer);
-                    drop(sb);
-                    win.set_chord_rows(model(rows));
-                    clear_chord_builder(&win); // also clears chord_edit_orig
-                    win.set_chord_action("".into());
-                    win.set_edit_dirty(dirty);
-                    refresh_preview(&win, &srcs, &path, cfg);
-                    render_board(&win); // clear the now-committed members' highlight
-                }
-                Err(e) => {
-                    drop(sb);
-                    win.set_edit_banner(format!("\u{26a0} {e}").into());
-                }
+            let result = s.set_chord(&layer, &keys, &action);
+            // Editing an existing chord whose key set was changed: the new key set is a
+            // different line, so drop the original (set ran first, so on a validation error
+            // nothing was removed). Unchanged keys → same canonical form → set_chord already
+            // rewrote it in place, so skip the remove. Run while `s` is still borrowed.
+            if result.is_ok()
+                && !orig.is_empty()
+                && keydviz_core::canonical_chord(&orig)
+                    != keydviz_core::canonical_chord(&keys.join("+"))
+            {
+                let _ = s.remove_chord(&layer, &orig);
             }
+            let rows = if result.is_ok() { chord_rows_for_layer(s, &layer) } else { Vec::new() };
+            commit_edit(
+                &win,
+                &srcs,
+                sb,
+                result,
+                refresh_warnings, // a chord can target a missing layer
+                move |win| {
+                    win.set_chord_rows(model(rows));
+                    clear_chord_builder(win); // also clears chord_edit_orig
+                    win.set_chord_action("".into());
+                    render_board(win); // clear the now-committed members' highlight
+                },
+            );
         });
     }
 
@@ -2199,21 +2213,16 @@ fn main() -> Result<(), slint::PlatformError> {
             let layer = win.get_edit_layer().to_string();
             let mut sb = session.borrow_mut();
             let Some(s) = sb.as_mut() else { return };
-            match s.remove_chord(&layer, &chord) {
-                Ok(()) => {
-                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
-                    refresh_warnings(&win, s);
-                    let rows = chord_rows_for_layer(s, &layer);
-                    drop(sb);
-                    win.set_chord_rows(model(rows));
-                    win.set_edit_dirty(dirty);
-                    refresh_preview(&win, &srcs, &path, cfg);
-                }
-                Err(e) => {
-                    drop(sb);
-                    win.set_edit_banner(format!("\u{26a0} {e}").into());
-                }
-            }
+            let result = s.remove_chord(&layer, &chord);
+            let rows = if result.is_ok() { chord_rows_for_layer(s, &layer) } else { Vec::new() };
+            commit_edit(
+                &win,
+                &srcs,
+                sb,
+                result,
+                refresh_warnings,
+                move |win| win.set_chord_rows(model(rows)),
+            );
         });
     }
 
@@ -2250,20 +2259,16 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             let mut sb = session.borrow_mut();
             let Some(s) = sb.as_mut() else { return };
-            match s.set_global(&name, &value) {
-                Ok(()) => {
-                    let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
-                    let rows = global_rows_for(s);
-                    drop(sb);
-                    win.set_global_rows(model(rows));
-                    win.set_edit_dirty(dirty);
-                    refresh_preview(&win, &srcs, &path, cfg);
-                }
-                Err(e) => {
-                    drop(sb);
-                    win.set_edit_banner(format!("\u{26a0} {e}").into());
-                }
-            }
+            let result = s.set_global(&name, &value);
+            let rows = if result.is_ok() { global_rows_for(s) } else { Vec::new() };
+            commit_edit(
+                &win,
+                &srcs,
+                sb,
+                result,
+                |_win, _s| {},
+                move |win| win.set_global_rows(model(rows)),
+            );
         });
     }
     {
@@ -2278,12 +2283,15 @@ fn main() -> Result<(), slint::PlatformError> {
             let mut sb = session.borrow_mut();
             let Some(s) = sb.as_mut() else { return };
             s.clear_global(&name);
-            let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
             let rows = global_rows_for(s);
-            drop(sb);
-            win.set_global_rows(model(rows));
-            win.set_edit_dirty(dirty);
-            refresh_preview(&win, &srcs, &path, cfg);
+            commit_edit(
+                &win,
+                &srcs,
+                sb,
+                Ok(()),
+                |_win, _s| {},
+                move |win| win.set_global_rows(model(rows)),
+            );
         });
     }
 
@@ -3150,6 +3158,38 @@ fn refresh_preview(win: &MainWindow, srcs: &Rc<RefCell<Vec<SheetSrc>>>, path: &P
     }
     drop(srcs);
     render_board(win);
+}
+
+/// The shared tail of a successful in-place edit, used by every mutating edit-op
+/// callback. Given the still-borrowed session guard `sb` and the mutator's `result`,
+/// on `Ok` it snapshots the new config + dirty flag, runs `after_model` (panel reseeds
+/// / warning recompute that still need the session `s`), drops the borrow, runs
+/// `after_ui` (window-only property updates), then pushes the universal `edit_dirty`
+/// flag + board-preview refresh. On `Err` it shows the banner and does nothing else.
+/// Anything a callback needs to read from `s` for `after_ui` (e.g. row models, the
+/// canonical written binding) is computed before the call, while `s` is still borrowed.
+/// Centralizing this means no callback can forget a step or get the read-cfg → drop →
+/// refresh ordering wrong.
+fn commit_edit(
+    win: &MainWindow,
+    srcs: &Rc<RefCell<Vec<SheetSrc>>>,
+    sb: std::cell::RefMut<Option<editing::EditSession>>,
+    result: Result<(), String>,
+    after_model: impl FnOnce(&MainWindow, &editing::EditSession),
+    after_ui: impl FnOnce(&MainWindow),
+) {
+    match result {
+        Ok(()) => {
+            let Some(s) = sb.as_ref() else { return };
+            let (cfg, dirty, path) = (s.config(), s.dirty(), s.path.clone());
+            after_model(win, s);
+            drop(sb);
+            after_ui(win);
+            win.set_edit_dirty(dirty);
+            refresh_preview(win, srcs, &path, cfg);
+        }
+        Err(e) => win.set_edit_banner(format!("\u{26a0} {e}").into()),
+    }
 }
 
 /// Human summary of a saved draft for the panel: verdict, staleness, the change
