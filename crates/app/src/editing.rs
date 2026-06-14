@@ -15,22 +15,10 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use keydviz_core::edit::{starter_config, EditConfig, EntryKind, Section, SectionKind};
+use keydviz_core::edit::{starter_config, EditConfig, EntryKind};
 use keydviz_core::{
     canonical_chord, is_chord_key, parser, round_trips, Behavior, Config, Macro, TapHold,
 };
-
-/// Does `section` belong to the layer named `layer`? `"main"` matches the base
-/// (`[main]`); any other name matches its layer/composite section(s), including a
-/// modset-qualified `[nav:C]` (same base name) so chord ops span every spelling.
-fn section_is_layer(section: &Section, layer: &str) -> bool {
-    if layer == "main" {
-        section.kind == SectionKind::Main
-    } else {
-        matches!(section.kind, SectionKind::Layer | SectionKind::Composite)
-            && section.base_name().trim() == layer
-    }
-}
 
 /// The single user-facing "this board doesn't exist" message, used by every
 /// mutator that can fail for that reason — one string, so they can't drift
@@ -316,7 +304,7 @@ impl EditSession {
     pub fn chords(&self, layer: &str) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = Vec::new();
         for s in &self.edit.sections {
-            if !section_is_layer(s, layer) {
+            if !s.feeds_board(layer) {
                 continue;
             }
             for e in &s.entries {
@@ -375,7 +363,7 @@ impl EditSession {
         let canon = canonical_chord(chord_key.trim());
         let mut found = false;
         for s in &mut self.edit.sections {
-            if !section_is_layer(s, layer) {
+            if !s.feeds_board(layer) {
                 continue;
             }
             found = true;
@@ -503,10 +491,7 @@ impl EditSession {
     pub fn editable_sections(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for s in &self.edit.sections {
-            if matches!(
-                s.kind,
-                SectionKind::Main | SectionKind::Layer | SectionKind::Composite
-            ) {
+            if s.kind.is_board() {
                 let base = s.base_name().trim().to_string();
                 if !base.is_empty() && !out.contains(&base) {
                     out.push(base);
@@ -566,12 +551,7 @@ impl EditSession {
             .sections
             .iter()
             .rev()
-            .filter(|s| {
-                matches!(
-                    s.kind,
-                    SectionKind::Main | SectionKind::Layer | SectionKind::Composite
-                ) && s.base_name().trim() == layer
-            })
+            .filter(|s| s.feeds_board(layer))
             .find_map(|s| s.get_binding(key).map(str::to_string))
     }
 

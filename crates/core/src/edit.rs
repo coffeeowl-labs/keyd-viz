@@ -104,6 +104,14 @@ pub enum SectionKind {
     Layer,
 }
 
+impl SectionKind {
+    /// True for the layer-bearing kinds (`Main` / `Layer` / `Composite`) that render as
+    /// a board, as opposed to the `[ids]`/`[global]`/`[aliases]` exact-match specials.
+    pub fn is_board(self) -> bool {
+        matches!(self, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
+    }
+}
+
 /// A `[...]` section: its header line plus its body lines, all order-preserving.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Section {
@@ -123,6 +131,13 @@ impl Section {
     /// The section name before any `:` qualifier (`nav:C` → `nav`).
     pub fn base_name(&self) -> &str {
         self.name.split(':').next().unwrap_or(&self.name)
+    }
+
+    /// True if this section feeds the board named `layer` — a board-bearing section
+    /// (see [`SectionKind::is_board`]) whose base name is `layer`. keyd merges every
+    /// such section into one board last-wins, so `[nav]` and `[nav:C]` both feed "nav".
+    pub fn feeds_board(&self, layer: &str) -> bool {
+        self.kind.is_board() && self.base_name().trim() == layer
     }
 
     /// The `:` qualifier, if any (`nav:C` → `C`; `mylay:layout` → `layout`).
@@ -424,8 +439,7 @@ impl EditConfig {
     /// treats those caps as not-editable in E1; creating sections is E2).
     pub fn target_section_mut(&mut self, layer: &str) -> Option<&mut Section> {
         self.sections.iter_mut().rev().find(|s| {
-            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
-                && s.base_name().trim() == layer
+            s.feeds_board(layer)
         })
     }
 
@@ -438,8 +452,7 @@ impl EditConfig {
     /// [`Self::global_section_mut`].
     pub fn target_or_create_section_mut(&mut self, layer: &str) -> Option<&mut Section> {
         if let Some(i) = self.sections.iter().rposition(|s| {
-            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
-                && s.base_name().trim() == layer
+            s.feeds_board(layer)
         }) {
             return Some(&mut self.sections[i]);
         }
@@ -459,8 +472,7 @@ impl EditConfig {
     pub fn clear_binding(&mut self, layer: &str, key: &str) -> bool {
         let mut removed = false;
         for s in self.sections.iter_mut().filter(|s| {
-            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
-                && s.base_name().trim() == layer
+            s.feeds_board(layer)
         }) {
             removed |= s.remove_binding(key);
         }
@@ -479,18 +491,14 @@ impl EditConfig {
         if c_trim(text).is_empty() {
             return self.clear_label(layer, key);
         }
-        let is_board = |s: &Section| {
-            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
-                && s.base_name().trim() == layer
-        };
         if let Some(i) =
-            self.sections.iter().rposition(|s| is_board(s) && s.label_index(key).is_some())
+            self.sections.iter().rposition(|s| s.feeds_board(layer) && s.label_index(key).is_some())
         {
             self.sections[i].set_label(key, text, style);
             return true;
         }
         if let Some(i) =
-            self.sections.iter().rposition(|s| is_board(s) && s.get_binding(key).is_some())
+            self.sections.iter().rposition(|s| s.feeds_board(layer) && s.get_binding(key).is_some())
         {
             self.sections[i].set_label(key, text, style);
             return true;
@@ -510,8 +518,7 @@ impl EditConfig {
     pub fn clear_label(&mut self, layer: &str, key: &str) -> bool {
         let mut removed = false;
         for s in self.sections.iter_mut().filter(|s| {
-            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
-                && s.base_name().trim() == layer
+            s.feeds_board(layer)
         }) {
             removed |= s.clear_label(key);
         }
@@ -528,12 +535,8 @@ impl EditConfig {
     /// local section). The single write path for [`Self::set_or_add_binding`]'s callers.
     pub fn set_layer_binding(&mut self, layer: &str, key: &str, val: &str) -> bool {
         let style = self.file_eol();
-        let is_board = |s: &Section| {
-            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
-                && s.base_name().trim() == layer
-        };
         if let Some(i) =
-            self.sections.iter().rposition(|s| is_board(s) && s.get_binding(key).is_some())
+            self.sections.iter().rposition(|s| s.feeds_board(layer) && s.get_binding(key).is_some())
         {
             self.sections[i].set_binding(key, val);
             return true;
@@ -555,14 +558,10 @@ impl EditConfig {
     /// [`Self::set_layer_binding`].
     pub fn set_layer_chord(&mut self, layer: &str, canon: &str, new_key: &str, val: &str) -> bool {
         let style = self.file_eol();
-        let is_board = |s: &Section| {
-            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
-                && s.base_name().trim() == layer
-        };
         // The last (file-order) section feeding the board that already holds this chord,
         // and the literal key string it's stored under (whichever order the user typed).
         let mut hit: Option<(usize, String)> = None;
-        for (i, s) in self.sections.iter().enumerate().filter(|(_, s)| is_board(s)) {
+        for (i, s) in self.sections.iter().enumerate().filter(|(_, s)| s.feeds_board(layer)) {
             for e in &s.entries {
                 if let EntryKind::Binding { key: k, .. } = &e.kind {
                     if crate::parser::is_chord_key(k) && crate::parser::canonical_chord(k) == canon {
@@ -682,10 +681,7 @@ impl EditConfig {
     /// Returns whether anything was removed.
     pub fn remove_layer(&mut self, base: &str) -> bool {
         let before = self.sections.len();
-        self.sections.retain(|s| {
-            !(matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
-                && s.base_name().trim() == base)
-        });
+        self.sections.retain(|s| !s.feeds_board(base));
         let removed = self.sections.len() != before;
         self.dirty |= removed;
         removed
@@ -696,11 +692,8 @@ impl EditConfig {
     /// ("N bindings still point here"). One `(section-base, key)` per offending
     /// binding, in file order. Same precision rules as [`layer_ref_spans`].
     pub fn references_to(&self, layer: &str) -> Vec<(String, String)> {
-        let is_layer = |s: &&Section| {
-            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
-        };
         let mut out = Vec::new();
-        for s in self.sections.iter().filter(is_layer) {
+        for s in self.sections.iter().filter(|s| s.kind.is_board()) {
             for e in &s.entries {
                 let EntryKind::Binding { key, val: Some(val), .. } = &e.kind else { continue };
                 if layer_ref_spans(val).iter().any(|sp| &val[sp.clone()] == layer) {
@@ -790,9 +783,7 @@ impl EditConfig {
         // 3. Every binding that activates the layer, in any layer-bearing section —
         //    splice in the new name, keep the rest of the value byte-for-byte.
         let mut rewritten = 0usize;
-        for s in self.sections.iter_mut().filter(|s| {
-            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
-        }) {
+        for s in self.sections.iter_mut().filter(|s| s.kind.is_board()) {
             let kind = s.kind;
             for e in &mut s.entries {
                 let new_line = match &e.kind {
@@ -916,9 +907,7 @@ impl EditConfig {
     /// (keyd's built-in modifier layers) are never flagged, and composite `a+b`
     /// targets are skipped (their definition rules are subtle) — see [`layer_ref_spans`].
     pub fn orphan_layer_refs(&self) -> Vec<OrphanRef> {
-        let is_layer = |s: &&Section| {
-            matches!(s.kind, SectionKind::Main | SectionKind::Layer | SectionKind::Composite)
-        };
+        let is_layer = |s: &&Section| s.kind.is_board();
         let defined: std::collections::HashSet<&str> =
             self.sections.iter().filter(is_layer).map(|s| s.base_name().trim()).collect();
 
@@ -1188,7 +1177,7 @@ fn classify_in(section: Option<SectionKind>, val: Option<&str>) -> Typed {
 /// `[ids]`/`[global]`/`[aliases]` entries are always `Raw` (a `[global]`
 /// `macro_timeout = 600` is not a remap). When unsure, `Raw`.
 fn classify(section: SectionKind, val: Option<&str>) -> Typed {
-    if !matches!(section, SectionKind::Main | SectionKind::Layer | SectionKind::Composite) {
+    if !section.is_board() {
         return Typed::Raw;
     }
     match val {
