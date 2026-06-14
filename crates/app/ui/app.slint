@@ -80,6 +80,38 @@ export struct CreateCandidateData {
     suggested: string,  // suggested config file name (no .conf), already allow-list-safe
 }
 
+// Single source of truth for the app's colors. Every value here is a literal that was
+// previously repeated inline (the brand green alone appeared 27 times); names are by role
+// so a theme tweak is one edit. One-off colors used in a single spot stay inline.
+global Palette {
+    out property <color> text: #cfd6df;
+    out property <color> text_bright: #e6e6e6;
+    out property <color> white: #ffffff;
+    out property <color> text_muted: #7d8694;
+    out property <color> text_dim: #8c96a4;
+    out property <color> text_faint: #8a93a0;
+    out property <color> accent: #3ddc84;
+    out property <color> accent_bg: #16341f;
+    out property <color> accent_bg_dim: #122117;
+    out property <color> accent_bg_deep: #08130c;
+    out property <color> bg: #161b22;
+    out property <color> surface: #1b2129;
+    out property <color> surface_alt: #11191d;
+    out property <color> bg_dark: #11151c;
+    out property <color> bg_deep: #0c0f14;
+    out property <color> border: #2a3340;
+    out property <color> border_strong: #4a525e;
+    out property <color> warn: #f0b429;
+    out property <color> warn_bg: #3a2f14;
+    out property <color> warn_bg_dim: #241d10;
+    out property <color> danger: #e5534b;
+    out property <color> danger_bright: #ff8b82;
+    out property <color> danger_bg: #2a1d1d;
+    out property <color> info: #6fc3cf;
+    out property <color> info_bg: #2f5d63;
+    out property <color> link: #1f6feb;
+}
+
 // ---- one key cap --------------------------------------------------------------
 // Absolutely positioned on a 51px grid (46px cap + 5px gap), so any geometry —
 // staggered, ortho, split, tall ISO-enter — renders from its (x, y, w, h) in key units.
@@ -100,9 +132,9 @@ component KeyCapView inherits Rectangle {
     height: (data.height * 46px + (data.height - 1) * 5px) * scale;
     border-radius: 7px * scale;
     // selection (edit mode) outranks the live glow; else pressed > dim/hold/normal.
-    background: selected ? #3a2f14 : (data.pressed ? #26405f : (data.state == 1 ? #161b22 : #1b2129));
+    background: selected ? Palette.warn_bg : (data.pressed ? #26405f : (data.state == 1 ? Palette.bg : Palette.surface));
     border-width: (selected || data.pressed || data.state == 2) ? 2px : 1px;
-    border-color: selected ? #f0b429 : (data.pressed ? #7cc4ff : (data.state == 2 ? data.accent : #2a3340));
+    border-color: selected ? Palette.warn : (data.pressed ? #7cc4ff : (data.state == 2 ? data.accent : Palette.border));
 
     // Click-to-select, edit mode only. Decorative slots (no key name) aren't targets.
     // The TouchArea is disabled in the viewer so hover/click behavior there is unchanged;
@@ -125,7 +157,7 @@ component KeyCapView inherits Rectangle {
         width: 100%;
         height: 100%;
         text: data.label;
-        color: data.pressed ? #ffffff : (data.state == 1 ? #4a525e : (data.has_accent ? data.accent : #cfd6df));
+        color: data.pressed ? Palette.white : (data.state == 1 ? Palette.border_strong : (data.has_accent ? data.accent : Palette.text));
         font-size: (data.emphasized ? 16px : 15px) * scale;
         font-weight: data.emphasized ? 700 : 400;
         font-family: "JetBrains Mono";
@@ -155,7 +187,7 @@ component KeyCapView inherits Rectangle {
             x: 3px * scale;
             y: 1px * scale;
             text: data.badge_left;
-            color: #11151c;
+            color: Palette.bg_dark;
             font-size: 9px * scale;
             font-weight: 700;
             font-family: "JetBrains Mono";
@@ -174,7 +206,7 @@ component KeyCapView inherits Rectangle {
             x: 3px * scale;
             y: 1px * scale;
             text: data.badge_right;
-            color: #11151c;
+            color: Palette.bg_dark;
             font-size: 9px * scale;
             font-weight: 700;
             font-family: "JetBrains Mono";
@@ -205,7 +237,7 @@ component BoardView inherits VerticalLayout {
     property <bool> is_active: data.is_base ? (active_layer == "") : (data.title == active_layer);
     property <bool> highlight: live && is_active;
     // accent used for the live highlight (green for the base/resting layer)
-    property <brush> live_accent: data.is_base ? #3ddc84 : data.accent;
+    property <brush> live_accent: data.is_base ? Palette.accent : data.accent;
 
     // No per-board header: the active layer name is already in the window's LIVE pill, and
     // the green active border identifies the resting layer. Dropping it also means the board
@@ -216,7 +248,7 @@ component BoardView inherits VerticalLayout {
     HorizontalLayout {
         alignment: start;
         Rectangle {
-            background: #0c0f14;
+            background: Palette.bg_deep;
             border-color: highlight ? live_accent : #1e2630;
             border-width: highlight ? 2px : 1px;
             border-radius: 12px;
@@ -271,10 +303,10 @@ component IconButton inherits Rectangle {
     height: 24px;
     border-radius: 6px;
     background: danger ? (bta.has-hover ? #3a2020 : #2a1a1a)
-        : primary ? (bta.has-hover ? #4ee89a : #3ddc84)
-        : (active ? #16341f : (bta.has-hover ? #1b2129 : #161b22));
+        : primary ? (bta.has-hover ? #4ee89a : Palette.accent)
+        : (active ? Palette.accent_bg : (bta.has-hover ? Palette.surface : Palette.bg));
     border-width: 1px;
-    border-color: danger ? #e5534b : (primary ? #3ddc84 : (active ? #3ddc84 : #2a3340));
+    border-color: danger ? Palette.danger : (primary ? Palette.accent : (active ? Palette.accent : Palette.border));
     bta := TouchArea {
         enabled: root.enabled;
         clicked => {
@@ -290,14 +322,14 @@ component IconButton inherits Rectangle {
         source: root.icon;
         image-fit: contain;
         // SVGs are monochrome; tint to the theme (green when engaged, dark on filled-green).
-        colorize: primary ? #08130c : (active ? #3ddc84 : (bta.has-hover ? #ffffff : #cfd6df));
+        colorize: primary ? Palette.accent_bg_deep : (active ? Palette.accent : (bta.has-hover ? Palette.white : Palette.text));
     }
     lbl := Text {
         visible: !root.use_icon;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         text: root.text;
-        color: danger ? #ff8b82 : (primary ? #08130c : (active ? #3ddc84 : #cfd6df));
+        color: danger ? Palette.danger_bright : (primary ? Palette.accent_bg_deep : (active ? Palette.accent : Palette.text));
         font-size: 13px;
         font-weight: 700;
         font-family: "JetBrains Mono";
@@ -317,9 +349,9 @@ component UnbindButton inherits Rectangle {
     width: utxt.preferred-width + 14px;
     height: 24px;
     border-radius: 6px;
-    background: already ? #12161c : (uta.has-hover ? #16242a : #11191d);
+    background: already ? #12161c : (uta.has-hover ? #16242a : Palette.surface_alt);
     border-width: 1px;
-    border-color: already ? #2a3340 : #2f5d63;
+    border-color: already ? Palette.border : Palette.info_bg;
     uta := TouchArea {
         enabled: !already;
         mouse-cursor: already ? default : pointer;
@@ -331,7 +363,7 @@ component UnbindButton inherits Rectangle {
         x: 7px;
         y: (parent.height - self.height) / 2;
         text: "unbind";
-        color: already ? #4a525e : #6fc3cf;
+        color: already ? Palette.border_strong : Palette.info;
         font-size: 12px;
         font-weight: 700;
         font-family: "JetBrains Mono";
@@ -357,9 +389,9 @@ component ViewControls inherits HorizontalLayout {
         width: pct.preferred-width + 12px;
         height: 24px;
         border-radius: 6px;
-        background: pcta.has-hover ? #1b2129 : #161b22;
+        background: pcta.has-hover ? Palette.surface : Palette.bg;
         border-width: 1px;
-        border-color: #2a3340;
+        border-color: Palette.border;
         pcta := TouchArea {
             clicked => {
                 root.zoom = 1.0;
@@ -369,7 +401,7 @@ component ViewControls inherits HorizontalLayout {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             text: "\{Math.round(root.zoom * 100)}%";
-            color: #7d8694;
+            color: Palette.text_muted;
             font-size: 12px;
             font-weight: 700;
             font-family: "JetBrains Mono";
@@ -458,7 +490,7 @@ export struct BackupRow {
 // this window reverts, like every non-KEEP exit.
 export component ApplyDialog inherits Window {
     title: "keyd-viz — does your keyboard work?";
-    background: #0c0f14;
+    background: Palette.bg_deep;
     // Fixed width, height auto-fit to content (same auto-fit trick MainWindow
     // uses): the window must drive its own size — sizing a child doesn't size the
     // window, so without this it opens at Slint's default minimum width.
@@ -479,14 +511,14 @@ export component ApplyDialog inherits Window {
 
         Text {
             text: "Your change is live. Test it, then keep or revert.";
-            color: #e6e6e6;
+            color: Palette.text_bright;
             font-size: 15px;
             font-weight: 700;
             wrap: word-wrap;
         }
         if root.change_summary != "": Rectangle {
-            background: #11151c;
-            border-color: #2a3340;
+            background: Palette.bg_dark;
+            border-color: Palette.border;
             border-width: 1px;
             border-radius: 8px;
             height: csum.preferred-height + 14px;
@@ -497,7 +529,7 @@ export component ApplyDialog inherits Window {
                 read-only: true;
                 wrap: word-wrap;
                 text: root.change_summary;
-                color: #cfd6df;
+                color: Palette.text;
                 font-size: 12px;
                 font-family: "JetBrains Mono";
             }
@@ -505,7 +537,7 @@ export component ApplyDialog inherits Window {
 
         Text {
             text: "Type here to test your keyboard:";
-            color: #7d8694;
+            color: Palette.text_muted;
             font-size: 12px;
             wrap: word-wrap;
         }
@@ -523,14 +555,14 @@ export component ApplyDialog inherits Window {
                 width: tcd.preferred-width + 16px;
                 height: 28px;
                 border-radius: 6px;
-                background: #122117;
+                background: Palette.accent_bg_dim;
                 border-width: 1px;
-                border-color: #3ddc84;
+                border-color: Palette.accent;
                 tcd := Text {
                     x: 8px;
                     y: (parent.height - self.height) / 2;
                     text: "reverting in \{root.seconds_left}s";
-                    color: #3ddc84;
+                    color: Palette.accent;
                     font-size: 13px;
                     font-weight: 700;
                 }
@@ -555,14 +587,14 @@ export component ApplyDialog inherits Window {
 
         Text {
             text: "\u{26a0} keyboard dead? Backspace+Escape+Enter restarts keyd";
-            color: #f0b429;
+            color: Palette.warn;
             font-size: 12px;
             font-weight: 700;
             wrap: word-wrap;
         }
         Text {
             text: "anything but KEEP reverts \u{2014} timeout, revert, or closing this window";
-            color: #7d8694;
+            color: Palette.text_muted;
             font-size: 11px;
             wrap: word-wrap;
         }
@@ -572,7 +604,7 @@ export component ApplyDialog inherits Window {
 // ---- main window --------------------------------------------------------------
 export component MainWindow inherits Window {
     title: "keyd-viz";
-    background: #11151c;
+    background: Palette.bg_dark;
     // Auto-fit the window to its content. `body`'s preferred size is intrinsic (driven by
     // the board extent), so the window resizes itself when you pick a different layout or
     // switch keyboards — no manual resizing to match a layout.
@@ -844,9 +876,9 @@ export component MainWindow inherits Window {
                         width: kb.preferred-width + 20px;
                         height: kb.preferred-height + 12px;
                         border-radius: 7px;
-                        background: sel ? #3ddc84 : (kta.has-hover ? #1b2129 : #161b22);
+                        background: sel ? Palette.accent : (kta.has-hover ? Palette.surface : Palette.bg);
                         border-width: 1px;
-                        border-color: sel ? #3ddc84 : #2a3340;
+                        border-color: sel ? Palette.accent : Palette.border;
                         kta := TouchArea {
                             clicked => {
                                 root.pick_keyboard(idx);
@@ -856,7 +888,7 @@ export component MainWindow inherits Window {
                             x: 10px;
                             y: 6px;
                             text: sheet.device != "" ? sheet.device : sheet.name;
-                            color: sel ? #11151c : #cfd6df;
+                            color: sel ? Palette.bg_dark : Palette.text;
                             font-size: 13px;
                             font-weight: sel ? 700 : 400;
                             font-family: "JetBrains Mono";
@@ -865,7 +897,7 @@ export component MainWindow inherits Window {
                 }
                 if root.sheets.length <= 1: Text {
                     text: root.active_sheet.device != "" ? root.active_sheet.device : root.active_sheet.name;
-                    color: #e6e6e6;
+                    color: Palette.text_bright;
                     font-size: 18px;
                     font-weight: 700;
                     vertical-alignment: center;
@@ -918,7 +950,7 @@ export component MainWindow inherits Window {
             // EDIT banner takes over) and in compact mode.
             if !root.compact && !root.edit_mode: Text {
                 text: "keyd config viewer & editor \u{2014} click \u{201c}edit\u{201d} to remap keys";
-                color: #8c96a4;
+                color: Palette.text_dim;
                 font-size: 12px;
             }
 
@@ -935,7 +967,7 @@ export component MainWindow inherits Window {
                     alignment: start;
                     Text {
                         text: root.active_sheet.path;
-                        color: #7d8694;
+                        color: Palette.text_muted;
                         font-size: 12px;
                         vertical-alignment: center;
                     }
@@ -943,14 +975,14 @@ export component MainWindow inherits Window {
                         width: idt.preferred-width + 12px;
                         height: idt.preferred-height + 5px;
                         border-radius: 5px;
-                        background: tag.matched ? #133a2a : #161b22;
+                        background: tag.matched ? #133a2a : Palette.bg;
                         border-width: 1px;
-                        border-color: tag.matched ? #3ddc84 : #2a3340;
+                        border-color: tag.matched ? Palette.accent : Palette.border;
                         idt := Text {
                             x: 6px;
                             y: 2px;
                             text: tag.text;
-                            color: tag.matched ? #3ddc84 : #7d8694;
+                            color: tag.matched ? Palette.accent : Palette.text_muted;
                             font-size: 11px;
                             font-weight: tag.matched ? 700 : 400;
                             font-family: "JetBrains Mono";
@@ -965,9 +997,9 @@ export component MainWindow inherits Window {
                     width: pill.preferred-width + 18px;
                     height: pill.preferred-height + 8px;
                     border-radius: 8px;
-                    background: any_live ? #122017 : #161b22;
+                    background: any_live ? #122017 : Palette.bg;
                     border-width: 1px;
-                    border-color: any_live ? #3ddc84 : #2a3340;
+                    border-color: any_live ? Palette.accent : Palette.border;
                     pill := Text {
                         x: 9px;
                         y: 4px;
@@ -976,7 +1008,7 @@ export component MainWindow inherits Window {
                             : (root.keys_connected
                                 ? "\u{25cf} LIVE keys  \u{b7}  layers need the 'keyd' group"
                                 : "\u{25cb} live view off  \u{b7}  add yourself to the 'keyd' group");
-                        color: any_live ? #3ddc84 : #7d8694;
+                        color: any_live ? Palette.accent : Palette.text_muted;
                         font-size: 12px;
                         font-weight: 700;
                     }
@@ -990,7 +1022,7 @@ export component MainWindow inherits Window {
                 alignment: start;
                 Text {
                     text: "layout";
-                    color: #7d8694;
+                    color: Palette.text_muted;
                     font-size: 12px;
                     vertical-alignment: center;
                 }
@@ -999,9 +1031,9 @@ export component MainWindow inherits Window {
                     width: chip.preferred-width + 18px;
                     height: chip.preferred-height + 8px;
                     border-radius: 7px;
-                    background: sel ? #1f6feb : (ta.has-hover ? #1b2129 : #161b22);
+                    background: sel ? Palette.link : (ta.has-hover ? Palette.surface : Palette.bg);
                     border-width: 1px;
-                    border-color: sel ? #1f6feb : #2a3340;
+                    border-color: sel ? Palette.link : Palette.border;
                     ta := TouchArea {
                         clicked => {
                             root.pick_layout(choice.id);
@@ -1011,7 +1043,7 @@ export component MainWindow inherits Window {
                         x: 9px;
                         y: 4px;
                         text: choice.name;
-                        color: sel ? #ffffff : #cfd6df;
+                        color: sel ? Palette.white : Palette.text;
                         font-size: 12px;
                         font-weight: sel ? 700 : 400;
                         font-family: "JetBrains Mono";
@@ -1023,7 +1055,7 @@ export component MainWindow inherits Window {
             // shown in the viewer, since the edit panel never opened to show it.
             if !root.edit_mode && !root.compact && root.edit_banner != "": Text {
                 text: "\u{26a0} \{root.edit_banner}";
-                color: #f0b429;
+                color: Palette.warn;
                 font-size: 12px;
             }
 
@@ -1031,8 +1063,8 @@ export component MainWindow inherits Window {
             // (or both the wildcard) at the same rank — keyd picks one by file order.
             // Viewer-only (the user should see it without entering edit mode); §5.5.
             if !root.edit_mode && !root.compact && root.load_warnings != "": Rectangle {
-                background: #241d10;
-                border-color: #f0b429;
+                background: Palette.warn_bg_dim;
+                border-color: Palette.warn;
                 border-width: 1px;
                 border-radius: 8px;
                 height: lwarn.preferred-height + 14px;
@@ -1041,7 +1073,7 @@ export component MainWindow inherits Window {
                     y: 7px;
                     width: parent.width - 18px;
                     text: root.load_warnings;
-                    color: #f0b429;
+                    color: Palette.warn;
                     font-size: 12px;
                     font-family: "JetBrains Mono";
                     wrap: word-wrap;
@@ -1054,8 +1086,8 @@ export component MainWindow inherits Window {
             // starter. Creating enters edit mode on the new config; the rest of the
             // edit/preview/draft/apply flow is unchanged from here.
             if root.create_open && !root.edit_mode && !root.compact: Rectangle {
-                background: #0c0f14;
-                border-color: #3ddc84;
+                background: Palette.bg_deep;
+                border-color: Palette.accent;
                 border-width: 1px;
                 border-radius: 12px;
                 height: createbody.preferred-height;
@@ -1065,13 +1097,13 @@ export component MainWindow inherits Window {
 
                     Text {
                         text: "New config";
-                        color: #e6e6e6;
+                        color: Palette.text_bright;
                         font-size: 15px;
                         font-weight: 700;
                     }
                     Text {
                         text: "Which keyboard should this config govern?";
-                        color: #7d8694;
+                        color: Palette.text_muted;
                         font-size: 12px;
                     }
 
@@ -1086,9 +1118,9 @@ export component MainWindow inherits Window {
                             width: cc.preferred-width + 18px;
                             height: cc.preferred-height + 8px;
                             border-radius: 7px;
-                            background: sel ? #16341f : (cca.has-hover ? #1b2129 : #161b22);
+                            background: sel ? Palette.accent_bg : (cca.has-hover ? Palette.surface : Palette.bg);
                             border-width: 1px;
-                            border-color: sel ? #3ddc84 : #2a3340;
+                            border-color: sel ? Palette.accent : Palette.border;
                             cca := TouchArea {
                                 clicked => {
                                     // Only seed the suggested name when switching to a
@@ -1105,7 +1137,7 @@ export component MainWindow inherits Window {
                                 x: 9px;
                                 y: 4px;
                                 text: cand.label;
-                                color: sel ? #3ddc84 : #cfd6df;
+                                color: sel ? Palette.accent : Palette.text;
                                 font-size: 12px;
                                 font-weight: sel ? 700 : 400;
                                 font-family: "JetBrains Mono";
@@ -1117,9 +1149,9 @@ export component MainWindow inherits Window {
                             width: wc.preferred-width + 18px;
                             height: wc.preferred-height + 8px;
                             border-radius: 7px;
-                            background: sel ? #16341f : (wca.has-hover ? #1b2129 : #161b22);
+                            background: sel ? Palette.accent_bg : (wca.has-hover ? Palette.surface : Palette.bg);
                             border-width: 1px;
-                            border-color: sel ? #3ddc84 : #2a3340;
+                            border-color: sel ? Palette.accent : Palette.border;
                             wca := TouchArea {
                                 clicked => {
                                     if (root.create_selected_id != "*") {
@@ -1133,7 +1165,7 @@ export component MainWindow inherits Window {
                                 x: 9px;
                                 y: 4px;
                                 text: "All keyboards (*)";
-                                color: sel ? #3ddc84 : #cfd6df;
+                                color: sel ? Palette.accent : Palette.text;
                                 font-size: 12px;
                                 font-weight: sel ? 700 : 400;
                                 font-family: "JetBrains Mono";
@@ -1146,7 +1178,7 @@ export component MainWindow inherits Window {
                     // create a colliding second config (§5.5). Name them so it's not a mystery.
                     if root.create_governed != "": Text {
                         text: root.create_governed;
-                        color: #7d8694;
+                        color: Palette.text_muted;
                         font-size: 11px;
                         wrap: word-wrap;
                     }
@@ -1157,7 +1189,7 @@ export component MainWindow inherits Window {
                         alignment: start;
                         Text {
                             text: "name:";
-                            color: #7d8694;
+                            color: Palette.text_muted;
                             font-size: 12px;
                             vertical-alignment: center;
                         }
@@ -1175,7 +1207,7 @@ export component MainWindow inherits Window {
                         }
                         Text {
                             text: ".conf";
-                            color: #7d8694;
+                            color: Palette.text_muted;
                             font-size: 13px;
                             font-family: "JetBrains Mono";
                             vertical-alignment: center;
@@ -1202,7 +1234,7 @@ export component MainWindow inherits Window {
 
                     if root.create_error != "": Text {
                         text: "\u{26a0} \{root.create_error}";
-                        color: #e5534b;
+                        color: Palette.danger;
                         font-size: 12px;
                     }
                 }
@@ -1210,8 +1242,8 @@ export component MainWindow inherits Window {
 
             // ---- edit panel (edit mode only; the viewer never renders any of this) ----
             if root.edit_mode && !root.compact: Rectangle {
-                background: #0c0f14;
-                border-color: #f0b429;
+                background: Palette.bg_deep;
+                border-color: Palette.warn;
                 border-width: 1px;
                 border-radius: 12px;
                 height: editbody.preferred-height;
@@ -1229,16 +1261,16 @@ export component MainWindow inherits Window {
                     if root.discard_prompt: Rectangle {
                         height: dbar.preferred-height + 12px;
                         border-radius: 8px;
-                        background: #2a1d1d;
+                        background: Palette.danger_bg;
                         border-width: 1px;
-                        border-color: #e5534b;
+                        border-color: Palette.danger;
                         dbar := HorizontalLayout {
                             padding-left: 10px;
                             padding-right: 10px;
                             spacing: 10px;
                             Text {
                                 text: "\u{26a0} Unsaved changes will be lost.";
-                                color: #ff8b82;
+                                color: Palette.danger_bright;
                                 font-size: 12px;
                                 font-weight: 700;
                                 vertical-alignment: center;
@@ -1272,25 +1304,25 @@ export component MainWindow inherits Window {
                             width: edp.preferred-width + 12px;
                             height: edp.preferred-height + 5px;
                             border-radius: 5px;
-                            background: #f0b429;
+                            background: Palette.warn;
                             edp := Text {
                                 x: 6px;
                                 y: 2px;
                                 text: "EDIT";
-                                color: #11151c;
+                                color: Palette.bg_dark;
                                 font-size: 11px;
                                 font-weight: 700;
                             }
                         }
                         Text {
                             text: root.edit_banner;
-                            color: #7d8694;
+                            color: Palette.text_muted;
                             font-size: 12px;
                             vertical-alignment: center;
                         }
                         if root.edit_dirty: Text {
                             text: "\u{25cf} unsaved";
-                            color: #f0b429;
+                            color: Palette.warn;
                             font-size: 12px;
                             font-weight: 700;
                             vertical-alignment: center;
@@ -1301,8 +1333,8 @@ export component MainWindow inherits Window {
                     // never defines (keyd would reject the file). Config-level, so shown
                     // regardless of selection; recomputed after every edit.
                     if root.edit_warnings != "": Rectangle {
-                        background: #241d10;
-                        border-color: #f0b429;
+                        background: Palette.warn_bg_dim;
+                        border-color: Palette.warn;
                         border-width: 1px;
                         border-radius: 8px;
                         height: owarn.preferred-height + 14px;
@@ -1311,7 +1343,7 @@ export component MainWindow inherits Window {
                             y: 7px;
                             width: parent.width - 18px;
                             text: root.edit_warnings;
-                            color: #f0b429;
+                            color: Palette.warn;
                             font-size: 12px;
                             font-family: "JetBrains Mono";
                             wrap: word-wrap;
@@ -1324,16 +1356,16 @@ export component MainWindow inherits Window {
                     if root.delete_prompt != "": Rectangle {
                         height: delbar.preferred-height + 12px;
                         border-radius: 8px;
-                        background: #2a1d1d;
+                        background: Palette.danger_bg;
                         border-width: 1px;
-                        border-color: #e5534b;
+                        border-color: Palette.danger;
                         delbar := HorizontalLayout {
                             padding-left: 10px;
                             padding-right: 10px;
                             spacing: 10px;
                             Text {
                                 text: root.delete_detail;
-                                color: #ff8b82;
+                                color: Palette.danger_bright;
                                 font-size: 12px;
                                 font-weight: 700;
                                 vertical-alignment: center;
@@ -1371,9 +1403,9 @@ export component MainWindow inherits Window {
                             width: gbl.preferred-width + 16px;
                             height: gbl.preferred-height + 8px;
                             border-radius: 7px;
-                            background: sel ? #f0b429 : (gblta.has-hover ? #1b2129 : #161b22);
+                            background: sel ? Palette.warn : (gblta.has-hover ? Palette.surface : Palette.bg);
                             border-width: 1px;
-                            border-color: sel ? #f0b429 : #2a3340;
+                            border-color: sel ? Palette.warn : Palette.border;
                             gblta := TouchArea {
                                 clicked => {
                                     root.edit_global();
@@ -1385,7 +1417,7 @@ export component MainWindow inherits Window {
                                 // when open, show a ✕ so it's clear the chip also closes
                                 // the form (the form hides the board, so it's the way out).
                                 text: sel ? "\u{2699} global \u{2715}" : "\u{2699} global";
-                                color: sel ? #11151c : #cfd6df;
+                                color: sel ? Palette.bg_dark : Palette.text;
                                 font-size: 12px;
                                 font-weight: sel ? 700 : 400;
                                 font-family: "JetBrains Mono";
@@ -1402,7 +1434,7 @@ export component MainWindow inherits Window {
                         alignment: start;
                         Text {
                             text: "layer";
-                            color: #7d8694;
+                            color: Palette.text_muted;
                             font-size: 12px;
                             vertical-alignment: center;
                         }
@@ -1411,9 +1443,9 @@ export component MainWindow inherits Window {
                             width: elt.preferred-width + 16px;
                             height: elt.preferred-height + 8px;
                             border-radius: 7px;
-                            background: sel ? #f0b429 : (elta.has-hover ? #1b2129 : #161b22);
+                            background: sel ? Palette.warn : (elta.has-hover ? Palette.surface : Palette.bg);
                             border-width: 1px;
-                            border-color: sel ? #f0b429 : #2a3340;
+                            border-color: sel ? Palette.warn : Palette.border;
                             elta := TouchArea {
                                 clicked => {
                                     root.pick_edit_layer(lay.name);
@@ -1423,7 +1455,7 @@ export component MainWindow inherits Window {
                                 x: 8px;
                                 y: 4px;
                                 text: lay.display;
-                                color: sel ? #11151c : #cfd6df;
+                                color: sel ? Palette.bg_dark : Palette.text;
                                 font-size: 12px;
                                 font-weight: sel ? 700 : 400;
                                 font-family: "JetBrains Mono";
@@ -1436,7 +1468,7 @@ export component MainWindow inherits Window {
                             width: addl.preferred-width + 16px;
                             height: addl.preferred-height + 8px;
                             border-radius: 7px;
-                            background: addlta.has-hover ? #16341f : #131a14;
+                            background: addlta.has-hover ? Palette.accent_bg : #131a14;
                             border-width: 1px;
                             border-color: #2f5d3a;
                             addlta := TouchArea {
@@ -1449,7 +1481,7 @@ export component MainWindow inherits Window {
                                 x: 8px;
                                 y: 4px;
                                 text: "+ layer";
-                                color: #3ddc84;
+                                color: Palette.accent;
                                 font-size: 12px;
                                 font-weight: 700;
                                 font-family: "JetBrains Mono";
@@ -1503,7 +1535,7 @@ export component MainWindow inherits Window {
                                 x: 8px;
                                 y: 4px;
                                 text: "\u{2715} delete";
-                                color: #ff8b82;
+                                color: Palette.danger_bright;
                                 font-size: 12px;
                                 font-weight: 700;
                                 font-family: "JetBrains Mono";
@@ -1518,7 +1550,7 @@ export component MainWindow inherits Window {
                         alignment: start;
                         Text {
                             text: "new layer:";
-                            color: #7d8694;
+                            color: Palette.text_muted;
                             font-size: 12px;
                             vertical-alignment: center;
                         }
@@ -1563,7 +1595,7 @@ export component MainWindow inherits Window {
                         alignment: start;
                         Text {
                             text: "rename [" + root.rename_target + "] to:";
-                            color: #7d8694;
+                            color: Palette.text_muted;
                             font-size: 12px;
                             vertical-alignment: center;
                         }
@@ -1610,7 +1642,7 @@ export component MainWindow inherits Window {
                         alignment: start;
                         Text {
                             text: "remap:";
-                            color: #7d8694;
+                            color: Palette.text_muted;
                             font-size: 12px;
                             vertical-alignment: center;
                         }
@@ -1652,7 +1684,7 @@ export component MainWindow inherits Window {
                         // Only in chord mode — glosses what a "chord" is.
                         if root.board_mode == "chord": Text {
                             text: "pick 2+ keys to press together \u{2192} one action (a combo)";
-                            color: #8c96a4;
+                            color: Palette.text_dim;
                             font-size: 11px;
                             vertical-alignment: center;
                         }
@@ -1665,7 +1697,7 @@ export component MainWindow inherits Window {
                         spacing: 7px;
                         Text {
                             text: "global options \u{2014} keyd daemon settings (blank a field to reset to default)";
-                            color: #7d8694;
+                            color: Palette.text_muted;
                             font-size: 11px;
                             wrap: word-wrap;
                         }
@@ -1674,7 +1706,7 @@ export component MainWindow inherits Window {
                             alignment: start;
                             Text {
                                 text: g.label;
-                                color: g.value != "" ? #cfd6df : #7d8694;
+                                color: g.value != "" ? Palette.text : Palette.text_muted;
                                 font-size: 12px;
                                 width: 200px;
                                 vertical-alignment: center;
@@ -1705,14 +1737,14 @@ export component MainWindow inherits Window {
                             // missed (µs is amber to flag the one microsecond row).
                             if g.unit != "": Text {
                                 text: g.unit;
-                                color: g.unit == "\u{00b5}s" ? #f0b429 : #cfd6df;
+                                color: g.unit == "\u{00b5}s" ? Palette.warn : Palette.text;
                                 font-size: 11px;
                                 font-weight: 700;
                                 vertical-alignment: center;
                             }
                             Text {
                                 text: g.known ? g.hint : "(unrecognized \u{2014} kept as-is)";
-                                color: #8c96a4;
+                                color: Palette.text_dim;
                                 font-size: 11px;
                                 vertical-alignment: center;
                                 horizontal-stretch: 1;
@@ -1734,7 +1766,7 @@ export component MainWindow inherits Window {
                     // are a separate construct (the ⌨ chords panel), so nothing stacks here.
                     if !root.editing_global && root.board_mode != "chord" && root.selected_phys == "": Text {
                         text: "click a key on the board to edit its binding";
-                        color: #7d8694;
+                        color: Palette.text_muted;
                         font-size: 12px;
                         wrap: word-wrap;
                     }
@@ -1747,14 +1779,14 @@ export component MainWindow inherits Window {
                             width: selk.preferred-width + 14px;
                             height: 28px;
                             border-radius: 6px;
-                            background: #3a2f14;
+                            background: Palette.warn_bg;
                             border-width: 1px;
-                            border-color: #f0b429;
+                            border-color: Palette.warn;
                             selk := Text {
                                 x: 7px;
                                 y: (parent.height - self.height) / 2;
                                 text: root.selected_phys;
-                                color: #f0b429;
+                                color: Palette.warn;
                                 font-size: 13px;
                                 font-weight: 700;
                                 font-family: "JetBrains Mono";
@@ -1777,7 +1809,7 @@ export component MainWindow inherits Window {
                                     : (root.edit_layer == "main" || root.edit_layer == "")
                                         ? "no remap \u{2014} sends the real key"
                                         : "inherits base";
-                                color: root.edit_current == "" ? #8c96a4 : #cfd6df;
+                                color: root.edit_current == "" ? Palette.text_dim : Palette.text;
                                 font-size: 13px;
                                 font-weight: root.edit_current == "" ? 400 : 700;
                                 vertical-alignment: center;
@@ -1785,7 +1817,7 @@ export component MainWindow inherits Window {
                             }
                             if root.edit_current != "": Text {
                                 text: "= \{root.edit_current}";
-                                color: #8c96a4;
+                                color: Palette.text_dim;
                                 font-size: 11px;
                                 font-family: "JetBrains Mono";
                                 vertical-alignment: center;
@@ -1801,7 +1833,7 @@ export component MainWindow inherits Window {
                         alignment: start;
                         Text {
                             text: "label";
-                            color: #7d8694;
+                            color: Palette.text_muted;
                             font-size: 13px;
                             vertical-alignment: center;
                         }
@@ -1840,7 +1872,7 @@ export component MainWindow inherits Window {
                         alignment: start;
                         Text {
                             text: "\u{2192}";
-                            color: #7d8694;
+                            color: Palette.text_muted;
                             font-size: 13px;
                             vertical-alignment: center;
                         }
@@ -1888,7 +1920,7 @@ export component MainWindow inherits Window {
                         }
                         if !root.keys_connected: Text {
                             text: "(no live key stream to capture from)";
-                            color: #8c96a4;
+                            color: Palette.text_dim;
                             font-size: 11px;
                             vertical-alignment: center;
                         }
@@ -1901,7 +1933,7 @@ export component MainWindow inherits Window {
                         spacing: 6px;
                         Text {
                             text: "chords (" + root.edit_layer + ") \u{2014} click 2+ keys on the board, then set an action";
-                            color: #7d8694;
+                            color: Palette.text_muted;
                             font-size: 11px;
                             wrap: word-wrap;
                         }
@@ -1912,14 +1944,14 @@ export component MainWindow inherits Window {
                                 width: crow.preferred-width + 14px;
                                 height: 26px;
                                 border-radius: 6px;
-                                background: #11191d;
+                                background: Palette.surface_alt;
                                 border-width: 1px;
-                                border-color: #2a3340;
+                                border-color: Palette.border;
                                 crow := Text {
                                     x: 7px;
                                     y: (parent.height - self.height) / 2;
                                     text: "\{c.display} \u{2192} \{c.action}";
-                                    color: #cfd6df;
+                                    color: Palette.text;
                                     font-size: 12px;
                                     font-family: "JetBrains Mono";
                                 }
@@ -1949,14 +1981,14 @@ export component MainWindow inherits Window {
                                 width: chint.preferred-width + 14px;
                                 height: 28px;
                                 border-radius: 6px;
-                                background: #11191d;
+                                background: Palette.surface_alt;
                                 border-width: 1px;
-                                border-color: #2a3340;
+                                border-color: Palette.border;
                                 chint := Text {
                                     x: 7px;
                                     y: (parent.height - self.height) / 2;
                                     text: "click 2+ keys on the board\u{2026}";
-                                    color: #7d8694;
+                                    color: Palette.text_muted;
                                     font-size: 13px;
                                 }
                             }
@@ -1964,7 +1996,7 @@ export component MainWindow inherits Window {
                                 spacing: 6px;
                                 if i > 0: Text {
                                     text: "+";
-                                    color: #7d8694;
+                                    color: Palette.text_muted;
                                     font-size: 14px;
                                     vertical-alignment: center;
                                 }
@@ -1972,14 +2004,14 @@ export component MainWindow inherits Window {
                                     width: ckk.preferred-width + 28px;
                                     height: 28px;
                                     border-radius: 6px;
-                                    background: #3a2f14;
+                                    background: Palette.warn_bg;
                                     border-width: 1px;
-                                    border-color: #f0b429;
+                                    border-color: Palette.warn;
                                     ckk := Text {
                                         x: 7px;
                                         y: (parent.height - self.height) / 2;
                                         text: k;
-                                        color: #f0b429;
+                                        color: Palette.warn;
                                         font-size: 13px;
                                         font-weight: 700;
                                         font-family: "JetBrains Mono";
@@ -2012,7 +2044,7 @@ export component MainWindow inherits Window {
                             alignment: start;
                             Text {
                                 text: "\u{2192}";
-                                color: #7d8694;
+                                color: Palette.text_muted;
                                 font-size: 13px;
                                 vertical-alignment: center;
                             }
@@ -2048,10 +2080,10 @@ export component MainWindow inherits Window {
                     // (or none, for a momentary hold). keyd's per-key timeouts aren't
                     // exposed; an existing key's timings are preserved on the Rust side.
                     if !root.editing_global && root.board_mode != "chord" && root.selected_phys != "" && root.key_mode == "taphold": Rectangle {
-                        background: #11151c;
+                        background: Palette.bg_dark;
                         border-radius: 8px;
                         border-width: 1px;
-                        border-color: #2a3340;
+                        border-color: Palette.border;
                         thp := VerticalLayout {
                             padding: 9px;
                             spacing: 7px;
@@ -2059,14 +2091,14 @@ export component MainWindow inherits Window {
                                 spacing: 8px;
                                 Text {
                                     text: "tap / hold (dual-function)";
-                                    color: #8a93a0;
+                                    color: Palette.text_faint;
                                     font-size: 12px;
                                     font-weight: 700;
                                     vertical-alignment: center;
                                 }
                                 if root.selected_is_tap_hold: Text {
                                     text: "\u{2022} editing existing \u{2014} any timings preserved";
-                                    color: #8c96a4;
+                                    color: Palette.text_dim;
                                     font-size: 11px;
                                     vertical-alignment: center;
                                 }
@@ -2077,7 +2109,7 @@ export component MainWindow inherits Window {
                                 alignment: start;
                                 Text {
                                     text: "hold:";
-                                    color: #cfd6df;
+                                    color: Palette.text;
                                     font-size: 12px;
                                     font-family: "JetBrains Mono";
                                     vertical-alignment: center;
@@ -2105,7 +2137,7 @@ export component MainWindow inherits Window {
                                 alignment: start;
                                 Text {
                                     text: "tap:";
-                                    color: #cfd6df;
+                                    color: Palette.text;
                                     font-size: 12px;
                                     font-family: "JetBrains Mono";
                                     vertical-alignment: center;
@@ -2149,7 +2181,7 @@ export component MainWindow inherits Window {
                                     alignment: start;
                                     Text {
                                         text: "feel:";
-                                        color: #cfd6df;
+                                        color: Palette.text;
                                         font-size: 12px;
                                         font-family: "JetBrains Mono";
                                         vertical-alignment: center;
@@ -2159,9 +2191,9 @@ export component MainWindow inherits Window {
                                         width: tf.preferred-width + 16px;
                                         height: tf.preferred-height + 8px;
                                         border-radius: 6px;
-                                        background: sel ? #16341f : (fastta.has-hover ? #1b2129 : #161b22);
+                                        background: sel ? Palette.accent_bg : (fastta.has-hover ? Palette.surface : Palette.bg);
                                         border-width: 1px;
-                                        border-color: sel ? #3ddc84 : #2a3340;
+                                        border-color: sel ? Palette.accent : Palette.border;
                                         fastta := TouchArea {
                                             clicked => {
                                                 root.th_feel = "fast";
@@ -2171,7 +2203,7 @@ export component MainWindow inherits Window {
                                             x: 8px;
                                             y: 4px;
                                             text: "fast typing";
-                                            color: parent.sel ? #3ddc84 : #cfd6df;
+                                            color: parent.sel ? Palette.accent : Palette.text;
                                             font-size: 12px;
                                             font-family: "JetBrains Mono";
                                         }
@@ -2181,9 +2213,9 @@ export component MainWindow inherits Window {
                                         width: ts.preferred-width + 16px;
                                         height: ts.preferred-height + 8px;
                                         border-radius: 6px;
-                                        background: sel ? #16341f : (safeta.has-hover ? #1b2129 : #161b22);
+                                        background: sel ? Palette.accent_bg : (safeta.has-hover ? Palette.surface : Palette.bg);
                                         border-width: 1px;
-                                        border-color: sel ? #3ddc84 : #2a3340;
+                                        border-color: sel ? Palette.accent : Palette.border;
                                         safeta := TouchArea {
                                             clicked => {
                                                 root.th_feel = "safe";
@@ -2193,7 +2225,7 @@ export component MainWindow inherits Window {
                                             x: 8px;
                                             y: 4px;
                                             text: "avoid misfires";
-                                            color: parent.sel ? #3ddc84 : #cfd6df;
+                                            color: parent.sel ? Palette.accent : Palette.text;
                                             font-size: 12px;
                                             font-family: "JetBrains Mono";
                                         }
@@ -2210,7 +2242,7 @@ export component MainWindow inherits Window {
                                             : (root.selected_is_tap_hold && root.th_feel == "")
                                                 ? "custom form kept as-is — pick a feel to change it"
                                                 : "";
-                                    color: #8c96a4;
+                                    color: Palette.text_dim;
                                     font-size: 11px;
                                     vertical-alignment: center;
                                     overflow: elide;
@@ -2246,10 +2278,10 @@ export component MainWindow inherits Window {
                     // (keys, typed text, chords, pauses) that keyd plays back. Optional
                     // "repeat while held" wraps it as macro2.
                     if !root.editing_global && root.board_mode != "chord" && root.selected_phys != "" && root.key_mode == "macro": Rectangle {
-                        background: #11151c;
+                        background: Palette.bg_dark;
                         border-radius: 8px;
                         border-width: 1px;
-                        border-color: #2a3340;
+                        border-color: Palette.border;
                         VerticalLayout {
                             padding: 9px;
                             spacing: 7px;
@@ -2257,14 +2289,14 @@ export component MainWindow inherits Window {
                                 spacing: 8px;
                                 Text {
                                     text: "macro (types a sequence of steps)";
-                                    color: #8a93a0;
+                                    color: Palette.text_faint;
                                     font-size: 12px;
                                     font-weight: 700;
                                     vertical-alignment: center;
                                 }
                                 if root.selected_is_macro: Text {
                                     text: "\u{2022} editing existing";
-                                    color: #8c96a4;
+                                    color: Palette.text_dim;
                                     font-size: 11px;
                                     vertical-alignment: center;
                                 }
@@ -2272,7 +2304,7 @@ export component MainWindow inherits Window {
                             // the ordered steps, each with reorder + remove controls.
                             if root.macro_rows.length == 0: Text {
                                 text: "no steps yet \u{2014} add a key, text, chord, or pause below";
-                                color: #8c96a4;
+                                color: Palette.text_dim;
                                 font-size: 11px;
                             }
                             for m[idx] in root.macro_rows: HorizontalLayout {
@@ -2282,14 +2314,14 @@ export component MainWindow inherits Window {
                                     width: mrow.preferred-width + 16px;
                                     height: 26px;
                                     border-radius: 6px;
-                                    background: #11191d;
+                                    background: Palette.surface_alt;
                                     border-width: 1px;
-                                    border-color: #2a3340;
+                                    border-color: Palette.border;
                                     mrow := Text {
                                         x: 8px;
                                         y: (parent.height - self.height) / 2;
                                         text: m.display;
-                                        color: #cfd6df;
+                                        color: Palette.text;
                                         font-size: 12px;
                                         font-family: "JetBrains Mono";
                                     }
@@ -2319,7 +2351,7 @@ export component MainWindow inherits Window {
                                 alignment: start;
                                 Text {
                                     text: "add:";
-                                    color: #cfd6df;
+                                    color: Palette.text;
                                     font-size: 12px;
                                     font-family: "JetBrains Mono";
                                     vertical-alignment: center;
@@ -2372,7 +2404,7 @@ export component MainWindow inherits Window {
                                 alignment: start;
                                 Text {
                                     text: "chord:";
-                                    color: #cfd6df;
+                                    color: Palette.text;
                                     font-size: 12px;
                                     font-family: "JetBrains Mono";
                                     vertical-alignment: center;
@@ -2453,7 +2485,7 @@ export component MainWindow inherits Window {
                                 }
                                 if root.macro_repeat_on: Text {
                                     text: "wait";
-                                    color: #cfd6df;
+                                    color: Palette.text;
                                     font-size: 12px;
                                     font-family: "JetBrains Mono";
                                     vertical-alignment: center;
@@ -2467,7 +2499,7 @@ export component MainWindow inherits Window {
                                 }
                                 if root.macro_repeat_on: Text {
                                     text: "then every";
-                                    color: #cfd6df;
+                                    color: Palette.text;
                                     font-size: 12px;
                                     font-family: "JetBrains Mono";
                                     vertical-alignment: center;
@@ -2513,7 +2545,7 @@ export component MainWindow inherits Window {
                         text: root.apply_available
                             ? "Edits preview on the board as you go. \u{201c}save draft\u{201d} writes them to the file; \u{201c}apply\u{201d} loads them into keyd now; \u{201c}done\u{201d} just leaves edit mode."
                             : "Edits preview on the board as you go. \u{201c}save draft\u{201d} writes them to a file; \u{201c}done\u{201d} just leaves edit mode.";
-                        color: #8c96a4;
+                        color: Palette.text_dim;
                         font-size: 11px;
                         wrap: word-wrap;
                     }
@@ -2570,7 +2602,7 @@ export component MainWindow inherits Window {
                         }
                         if root.apply_hint != "": Text {
                             text: root.apply_hint;
-                            color: #8c96a4;
+                            color: Palette.text_dim;
                             font-size: 11px;
                             vertical-alignment: center;
                         }
@@ -2581,7 +2613,7 @@ export component MainWindow inherits Window {
                     // config is backed up first), and self-reverts if it locks you out.
                     if root.backups_open && root.apply_state == "idle": Rectangle {
                         background: #0e151b;
-                        border-color: #2a3340;
+                        border-color: Palette.border;
                         border-width: 1px;
                         border-radius: 8px;
                         height: blist.preferred-height + 16px;
@@ -2594,7 +2626,7 @@ export component MainWindow inherits Window {
                                 spacing: 8px;
                                 Text {
                                     text: "restore a backup \u{2014} replaces the live config (the current one is backed up first)";
-                                    color: #8c96a4;
+                                    color: Palette.text_dim;
                                     font-size: 11px;
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;
@@ -2617,13 +2649,13 @@ export component MainWindow inherits Window {
                                     horizontal-stretch: 1;
                                     Text {
                                         text: b.ago;
-                                        color: #cfd6df;
+                                        color: Palette.text;
                                         font-size: 12px;
                                         font-weight: 700;
                                     }
                                     Text {
                                         text: b.detail;
-                                        color: #7d8694;
+                                        color: Palette.text_muted;
                                         font-size: 10px;
                                         font-family: "JetBrains Mono";
                                     }
@@ -2643,16 +2675,16 @@ export component MainWindow inherits Window {
                     if root.delete_config_prompt: Rectangle {
                         height: dcbar.preferred-height + 12px;
                         border-radius: 8px;
-                        background: #2a1d1d;
+                        background: Palette.danger_bg;
                         border-width: 1px;
-                        border-color: #e5534b;
+                        border-color: Palette.danger;
                         dcbar := HorizontalLayout {
                             padding-left: 10px;
                             padding-right: 10px;
                             spacing: 10px;
                             Text {
                                 text: "\u{26a0} Delete this config from /etc/keyd? The keyboard returns to its default mapping. A timestamped backup is kept.";
-                                color: #ff8b82;
+                                color: Palette.danger_bright;
                                 font-size: 12px;
                                 font-weight: 700;
                                 vertical-alignment: center;
@@ -2679,8 +2711,8 @@ export component MainWindow inherits Window {
                         }
                     }
                     if root.draft_info != "": Rectangle {
-                        background: #11151c;
-                        border-color: #2a3340;
+                        background: Palette.bg_dark;
+                        border-color: Palette.border;
                         border-width: 1px;
                         border-radius: 8px;
                         height: dinfo.preferred-height + 16px;
@@ -2693,7 +2725,7 @@ export component MainWindow inherits Window {
                             read-only: true;
                             wrap: word-wrap;
                             text: root.draft_info;
-                            color: #cfd6df;
+                            color: Palette.text;
                             font-size: 12px;
                             font-family: "JetBrains Mono";
                         }
@@ -2705,8 +2737,8 @@ export component MainWindow inherits Window {
                     // the user sees what they're committing before the buttons. Selectable
                     // (read-only TextInput) so revert-failed instructions copy-paste.
                     if root.apply_state != "idle" && root.apply_info != "": Rectangle {
-                        background: #11151c;
-                        border-color: #2a3340;
+                        background: Palette.bg_dark;
+                        border-color: Palette.border;
                         border-width: 1px;
                         border-radius: 8px;
                         height: ainfo.preferred-height + 16px;
@@ -2717,7 +2749,7 @@ export component MainWindow inherits Window {
                             read-only: true;
                             wrap: word-wrap;
                             text: root.apply_info;
-                            color: #cfd6df;
+                            color: Palette.text;
                             font-size: 12px;
                             font-family: "JetBrains Mono";
                         }
@@ -2728,16 +2760,16 @@ export component MainWindow inherits Window {
                     if root.apply_state == "confirm": Rectangle {
                         height: cbar.preferred-height + 12px;
                         border-radius: 8px;
-                        background: #2a1d1d;
+                        background: Palette.danger_bg;
                         border-width: 1px;
-                        border-color: #e5534b;
+                        border-color: Palette.danger;
                         cbar := HorizontalLayout {
                             padding-left: 10px;
                             padding-right: 10px;
                             spacing: 10px;
                             Text {
                                 text: "\u{26a0} This config can run a command or send keystrokes when you press a key \u{2014} and commands run as root (here, or in a file it includes). Apply anyway?";
-                                color: #ff8b82;
+                                color: Palette.danger_bright;
                                 font-size: 12px;
                                 font-weight: 700;
                                 vertical-alignment: center;
@@ -2770,7 +2802,7 @@ export component MainWindow inherits Window {
                         alignment: start;
                         Text {
                             text: "waiting for authentication\u{2026}";
-                            color: #f0b429;
+                            color: Palette.warn;
                             font-size: 12px;
                             font-weight: 700;
                             vertical-alignment: center;
@@ -2789,7 +2821,7 @@ export component MainWindow inherits Window {
                     // the user can type to verify. Here we just point at it.
                     if root.apply_state == "countdown": Text {
                         text: "\u{2192} change is live \u{2014} keep or revert it in the test window";
-                        color: #3ddc84;
+                        color: Palette.accent;
                         font-size: 12px;
                         font-weight: 700;
                     }
@@ -2799,11 +2831,11 @@ export component MainWindow inherits Window {
                         || root.apply_state == "revert-failed" || root.apply_state == "failed": Rectangle {
                         height: tbar.preferred-height + 12px;
                         border-radius: 8px;
-                        background: root.apply_state == "kept" ? #122117
-                            : (root.apply_state == "reverted" ? #241d10 : #2a1d1d);
+                        background: root.apply_state == "kept" ? Palette.accent_bg_dim
+                            : (root.apply_state == "reverted" ? Palette.warn_bg_dim : Palette.danger_bg);
                         border-width: 1px;
-                        border-color: root.apply_state == "kept" ? #3ddc84
-                            : (root.apply_state == "reverted" ? #f0b429 : #e5534b);
+                        border-color: root.apply_state == "kept" ? Palette.accent
+                            : (root.apply_state == "reverted" ? Palette.warn : Palette.danger);
                         tbar := HorizontalLayout {
                             padding-left: 10px;
                             padding-right: 10px;
@@ -2812,8 +2844,8 @@ export component MainWindow inherits Window {
                                 text: root.apply_state == "kept" ? "\u{2713} applied and kept"
                                     : (root.apply_state == "reverted" ? "\u{21a9} reverted \u{2014} your edits are still here"
                                     : (root.apply_state == "revert-failed" ? "\u{26a0} REVERT FAILED \u{2014} see details below" : "\u{26a0} apply did not run"));
-                                color: root.apply_state == "kept" ? #3ddc84
-                                    : (root.apply_state == "reverted" ? #f0b429 : #ff8b82);
+                                color: root.apply_state == "kept" ? Palette.accent
+                                    : (root.apply_state == "reverted" ? Palette.warn : Palette.danger_bright);
                                 font-size: 12px;
                                 font-weight: 700;
                                 vertical-alignment: center;
@@ -2853,10 +2885,10 @@ export component MainWindow inherits Window {
                         y: 12px;
                         width: parent.width - 24px;
                         height: parent.height - 24px;
-                        background: #11151c;
+                        background: Palette.bg_dark;
                         border-radius: 10px;
                         border-width: 1px;
-                        border-color: #2f5d63;
+                        border-color: Palette.info_bg;
                         TouchArea {}   // swallow clicks inside the card (don't close)
                         VerticalLayout {
                             padding: 10px;
@@ -2865,7 +2897,7 @@ export component MainWindow inherits Window {
                                 spacing: 8px;
                                 Text {
                                     text: "pick a key";
-                                    color: #8a93a0;
+                                    color: Palette.text_faint;
                                     font-size: 12px;
                                     font-weight: 700;
                                     vertical-alignment: center;
@@ -2874,7 +2906,7 @@ export component MainWindow inherits Window {
                                     text: root.picker_target == "tap" ? "\u{2192} tap"
                                         : root.picker_target == "chord_action" ? "\u{2192} chord action"
                                         : "\u{2192} binding";
-                                    color: #6fc3cf;
+                                    color: Palette.info;
                                     font-size: 12px;
                                     font-family: "JetBrains Mono";
                                     vertical-alignment: center;
@@ -2906,7 +2938,7 @@ export component MainWindow inherits Window {
                             // the full scrollable list.
                             if root.picker_query == "": Text {
                                 text: "common";
-                                color: #8c96a4;
+                                color: Palette.text_dim;
                                 font-size: 11px;
                             }
                             if root.picker_query == "": HorizontalLayout {
@@ -2916,9 +2948,9 @@ export component MainWindow inherits Window {
                                     width: cpal.preferred-width + 14px;
                                     height: cpal.preferred-height + 7px;
                                     border-radius: 6px;
-                                    background: cpalta.has-hover ? #1b2129 : #161b22;
+                                    background: cpalta.has-hover ? Palette.surface : Palette.bg;
                                     border-width: 1px;
-                                    border-color: #2a3340;
+                                    border-color: Palette.border;
                                     cpalta := TouchArea {
                                         clicked => {
                                             root.pick_key(act);
@@ -2928,7 +2960,7 @@ export component MainWindow inherits Window {
                                         x: 7px;
                                         y: 3px;
                                         text: act;
-                                        color: #cfd6df;
+                                        color: Palette.text;
                                         font-size: 11px;
                                         font-family: "JetBrains Mono";
                                     }
@@ -2942,7 +2974,7 @@ export component MainWindow inherits Window {
                                     for name in root.picker_results: Rectangle {
                                         height: 26px;
                                         border-radius: 5px;
-                                        background: rowta.has-hover ? #1b2129 : transparent;
+                                        background: rowta.has-hover ? Palette.surface : transparent;
                                         rowta := TouchArea {
                                             clicked => {
                                                 root.pick_key(name);
@@ -2952,7 +2984,7 @@ export component MainWindow inherits Window {
                                             x: 8px;
                                             height: 100%;
                                             text: name;
-                                            color: #cfd6df;
+                                            color: Palette.text;
                                             font-size: 12px;
                                             font-family: "JetBrains Mono";
                                             vertical-alignment: center;
@@ -2964,7 +2996,7 @@ export component MainWindow inherits Window {
                                 text: root.picker_truncated > 0
                                     ? root.picker_source + " \u{00b7} +\{root.picker_truncated} more \u{2014} refine search"
                                     : root.picker_source;
-                                color: #8c96a4;
+                                color: Palette.text_dim;
                                 font-size: 11px;
                                 vertical-alignment: center;
                             }
