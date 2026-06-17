@@ -711,9 +711,10 @@ export component MainWindow inherits Window {
     in property <bool> selected_has_label;   // a label is currently set (→ show "clear")
     callback set_label(string);              // write/update the selection's label
     callback clear_label();                  // remove the selection's label
-    // A selected key's binding is remap XOR tap/hold — one binding line, never both.
-    // `key_mode` ("simple" | "taphold") picks which editor shows; Rust seeds it from
-    // the current binding on select. (Chords are a SEPARATE construct — see board_mode.)
+    // A selected key's binding is one kind at a time — one binding line, never two.
+    // `key_mode` ("simple" | "taphold" | "macro" | "layer") picks which editor shows;
+    // Rust seeds it from the current binding on select. (Chords are a SEPARATE
+    // construct — see board_mode.)
     in-out property <string> key_mode: "simple";
     callback set_key_mode(string);
     // ---- tap/hold (dual-function) editor: VIA's Mod-Tap / Layer-Tap ----
@@ -723,9 +724,14 @@ export component MainWindow inherits Window {
     in property <bool> selected_is_tap_hold; // the selection is already a tap/hold binding
     in-out property <string> th_hold;        // chosen hold target (a layer or modifier)
     in-out property <string> th_tap;         // tap action (defaults to the physical key)
-    in-out property <bool> th_hold_only;     // momentary: hold only, no tap action
     in-out property <string> th_feel;        // tap-vs-hold "feel": "fast" | "safe"
     callback apply_tap_hold();               // compose th_hold/th_tap into the binding
+    // ---- layer-action editor: a key that PURELY drives a layer (no tap). The three
+    // bare keyd forms: layer() momentary, toggle() persistent latch, oneshot() next-key.
+    in property <bool> selected_is_layer_action; // the selection is already a layer action
+    in-out property <string> layer_action_target;       // chosen target layer
+    in-out property <string> layer_action_kind: "momentary"; // "momentary"|"toggle"|"oneshot"
+    callback apply_layer_action();           // write layer/toggle/oneshot(target) as the binding
     // ---- macro editor: an ordered list of typed steps (keyd macro(...)/macro2(...)) ----
     // The draft steps live in Rust (the real tokens); `macro_rows` is the rebuilt view.
     // Pending sub-form fields stage one not-yet-added step; "set macro" commits the list.
@@ -1675,6 +1681,15 @@ export component MainWindow inherits Window {
                         }
                         IconButton {
                             wide: true;
+                            text: "layer";
+                            enabled: root.board_mode != "chord" && root.selected_phys != "";
+                            active: root.board_mode != "chord" && root.selected_phys != "" && root.key_mode == "layer";
+                            clicked => {
+                                root.set_key_mode("layer");
+                            }
+                        }
+                        IconButton {
+                            wide: true;
                             text: "\u{2328} chord";
                             active: root.board_mode == "chord";
                             clicked => {
@@ -2131,7 +2146,8 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                            // when tapped: a key (disabled for a momentary hold).
+                            // when tapped: a key. A tap/hold ALWAYS has a tap (a hold-only
+                            // key that purely drives a layer lives in "layer" mode now).
                             HorizontalLayout {
                                 spacing: 8px;
                                 alignment: start;
@@ -2146,35 +2162,24 @@ export component MainWindow inherits Window {
                                     width: 160px;
                                     height: 28px;
                                     font-size: 13px;
-                                    enabled: !root.th_hold_only;
-                                    // Blank tap falls back to the key itself; use the
-                                    // "hold only" toggle for a true no-tap (momentary) key.
-                                    placeholder-text: root.th_hold_only
-                                        ? "(hold only)"
-                                        : "taps " + root.selected_phys;
+                                    // Blank tap falls back to the key itself (keyd's
+                                    // overload(layer) short form).
+                                    placeholder-text: "taps " + root.selected_phys;
                                     text <=> root.th_tap;
                                 }
-                                if !root.th_hold_only: IconButton {
+                                IconButton {
                                     wide: true;
                                     text: "pick from list\u{2026}";
                                     clicked => {
                                         root.open_picker("tap");
                                     }
                                 }
-                                IconButton {
-                                    wide: true;
-                                    text: "hold only";
-                                    active: root.th_hold_only;
-                                    clicked => {
-                                        root.th_hold_only = !root.th_hold_only;
-                                    }
-                                }
                             }
                             // feel: how the key disambiguates tap vs hold. Labels say
                             // what they do (no keyd jargon, no ms); hovering reveals the
                             // one-line detail on its own fixed-height line (blank at
-                            // rest → no layout jitter). Only meaningful when there's a tap.
-                            if !root.th_hold_only: VerticalLayout {
+                            // rest → no layout jitter).
+                            VerticalLayout {
                                 spacing: 4px;
                                 HorizontalLayout {
                                     spacing: 8px;
@@ -2238,7 +2243,7 @@ export component MainWindow inherits Window {
                                     text: fastta.has-hover
                                         ? "engages on overlap, no pause — best for fast typing"
                                         : safeta.has-hover
-                                            ? "ignores quick taps — won’t trigger by accident"
+                                            ? "ignores quick taps — won’t trigger by accident; the home-row-mod feel"
                                             : (root.selected_is_tap_hold && root.th_feel == "")
                                                 ? "custom form kept as-is — pick a feel to change it"
                                                 : "";
@@ -2264,6 +2269,125 @@ export component MainWindow inherits Window {
                                     }
                                 }
                                 // clear the key's binding without switching to the simple kind
+                                UnbindButton {
+                                    already: root.edit_current == "";
+                                    clicked => {
+                                        root.make_transparent();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // layer-action editor — shown in "layer" mode: a key that PURELY
+                    // drives a layer (no tap). Pick a target layer + how it behaves
+                    // (momentary while held / persistent toggle / one-shot next key).
+                    if !root.editing_global && root.board_mode != "chord" && root.selected_phys != "" && root.key_mode == "layer": Rectangle {
+                        background: Palette.bg_dark;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: Palette.border;
+                        VerticalLayout {
+                            padding: 9px;
+                            spacing: 7px;
+                            Text {
+                                text: "layer key";
+                                color: Palette.text_faint;
+                                font-size: 12px;
+                                font-weight: 700;
+                            }
+                            // target: which layer this key drives (the config's layers).
+                            if root.hold_layers.length == 0: Text {
+                                text: "no layers to target yet \u{2014} create a layer first";
+                                color: Palette.text_dim;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                            }
+                            if root.hold_layers.length > 0: HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                Text {
+                                    text: "layer:";
+                                    color: Palette.text;
+                                    font-size: 12px;
+                                    font-family: "JetBrains Mono";
+                                    vertical-alignment: center;
+                                }
+                                for lay in root.hold_layers: IconButton {
+                                    wide: true;
+                                    text: lay;
+                                    active: root.layer_action_target == lay;
+                                    clicked => {
+                                        root.layer_action_target = lay;
+                                    }
+                                }
+                            }
+                            // behavior: momentary / toggle / one-shot. Labels name the
+                            // outcome; the line below describes the selected one (fixed
+                            // height → no layout jitter as the selection changes).
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                Text {
+                                    text: "behavior:";
+                                    color: Palette.text;
+                                    font-size: 12px;
+                                    font-family: "JetBrains Mono";
+                                    vertical-alignment: center;
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "momentary";
+                                    active: root.layer_action_kind == "momentary";
+                                    clicked => {
+                                        root.layer_action_kind = "momentary";
+                                    }
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "toggle";
+                                    active: root.layer_action_kind == "toggle";
+                                    clicked => {
+                                        root.layer_action_kind = "toggle";
+                                    }
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "one-shot";
+                                    active: root.layer_action_kind == "oneshot";
+                                    clicked => {
+                                        root.layer_action_kind = "oneshot";
+                                    }
+                                }
+                            }
+                            Text {
+                                height: 15px;
+                                text: root.layer_action_kind == "toggle"
+                                    ? "tap to turn the layer on, tap again to turn it off"
+                                    : root.layer_action_kind == "oneshot"
+                                        ? "applies to the next key press only, then clears"
+                                        : "active only while the key is held";
+                                color: Palette.text_dim;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            HorizontalLayout {
+                                alignment: start;
+                                spacing: 8px;
+                                IconButton {
+                                    wide: true;
+                                    text: "set layer";
+                                    // dimmed until a target layer is picked (the one
+                                    // required input), then filled green to invite the commit.
+                                    enabled: root.layer_action_target != "";
+                                    primary: root.layer_action_target != "";
+                                    clicked => {
+                                        if (root.layer_action_target != "") {
+                                            root.apply_layer_action();
+                                        }
+                                    }
+                                }
                                 UnbindButton {
                                     already: root.edit_current == "";
                                     clicked => {

@@ -339,7 +339,8 @@ pub(crate) fn seed_tap_hold(win: &MainWindow, s: &editing::EditSession, layer: &
             // preserves the form rather than silently converting it.
             win.set_th_feel(feel_str(th.behavior()).into());
             win.set_th_hold(th.target.into());
-            win.set_th_hold_only(th.tap.is_none());
+            // `current_tap_hold` only returns tap-bearing forms now (pure momentary
+            // `layer()` is owned by Layer mode), so `tap` is always present here.
             win.set_th_tap(th.tap.unwrap_or_default().into());
         }
         None => {
@@ -354,8 +355,32 @@ pub(crate) fn seed_tap_hold(win: &MainWindow, s: &editing::EditSession, layer: &
             // A fresh dual-function key defaults to the eager feel.
             win.set_th_feel("fast".into());
             win.set_th_hold("".into());
-            win.set_th_hold_only(false);
             win.set_th_tap(default_tap.into());
+        }
+    }
+}
+
+/// Pre-fill the Layer-mode picker for the selected key: if its binding is a pure
+/// layer action (`layer()`/`toggle()`/`oneshot()`), light the matching target +
+/// behavior; otherwise default to momentary with no target chosen (a sensible start
+/// for a fresh layer key). `selected_is_layer_action` drives the select-time mode
+/// classifier in `main.rs`.
+pub(crate) fn seed_layer_action(
+    win: &MainWindow,
+    s: &editing::EditSession,
+    layer: &str,
+    phys: &str,
+) {
+    match s.current_layer_action(layer, phys) {
+        Some(la) => {
+            win.set_selected_is_layer_action(true);
+            win.set_layer_action_kind(la.kind.token().into());
+            win.set_layer_action_target(la.target.into());
+        }
+        None => {
+            win.set_selected_is_layer_action(false);
+            win.set_layer_action_kind("momentary".into());
+            win.set_layer_action_target("".into());
         }
     }
 }
@@ -429,6 +454,9 @@ pub(crate) fn enter_edit_session(
     win.set_chord_rows(model(chord_rows_for_layer(&s, default_layer.as_str())));
     win.set_edit_layer(default_layer);
     win.set_key_mode("simple".into());
+    win.set_selected_is_layer_action(false);
+    win.set_layer_action_target("".into());
+    win.set_layer_action_kind("momentary".into());
     win.set_board_mode("single".into());
     clear_chord_builder(win);
     win.set_chord_action("".into());
@@ -492,6 +520,9 @@ pub(crate) fn reset_edit_ui(win: &MainWindow) {
     win.set_edit_label("".into());
     win.set_selected_has_label(false);
     win.set_key_mode("simple".into());
+    win.set_selected_is_layer_action(false);
+    win.set_layer_action_target("".into());
+    win.set_layer_action_kind("momentary".into());
     win.set_board_mode("single".into());
     win.set_chord_rows(model(Vec::<ChordRow>::new()));
     clear_chord_builder(win);

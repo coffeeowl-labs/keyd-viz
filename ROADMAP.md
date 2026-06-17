@@ -1401,3 +1401,41 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
   explicitly); no auto rename-carry (no single rename op to hook); composite v1 shows own-section labels only.
   Full core+session test coverage; editor row + board demote verified via the render harness. **v1.3 is now
   feature-complete.**
+- *(2026-06-17 — v1.3 RE-REOPENED for keyd feature-parity; BUILT + reviewed, pending Ryan click-through + commit)* Ryan
+  raised that shipping v1.3 without a discoverable **layer toggle** risks churning the exact audience most
+  likely to evangelise — keyd veterans who'd find the GUI covers ~75% of what they use and ditch it. Did a
+  keyd-grammar-vs-editor gap audit (full inventory in the session); decided **two parity gaps block the tag**,
+  the rest → v1.4. Plan **critiqued by two adversarial agents**; findings folded in. Full design + resolved
+  blockers in **[`docs/layer-control-design.md`](docs/layer-control-design.md)**.
+  - **(A) Layer-action picker (HEADLINE, real work).** keyd `toggle()`/`oneshot()` round-trip losslessly today
+    but are only creatable by typing raw keyd into the simple field — undiscoverable. Add a 4th key-mode
+    **"Layer"** (target-layer dropdown + momentary/toggle/oneshot radio) next to simple/tap-hold/macro.
+    Decision **D1**: pure momentary `layer()` moves OUT of the tap/hold panel ("hold only" removed — strictly
+    dual-function now) INTO Layer mode → clean "tap/hold = two functions; Layer = pure layer activation" split.
+    Critic BLOCKERs now resolved in the doc: pinned classifier precedence `macro→layer_action→taphold→simple`;
+    `current_layer_action` must reject composite `a+b` / `layerm`-family (arity>1) / tap-bearing forms; the
+    `th_hold_only` removal is a **cross-file excision** (8+ sites: `.slint` props+panel, `on_apply_tap_hold`,
+    `seed_tap_hold`), not a no-op; new `seed_layer_action` must wire into all 6 `seed_tap_hold` sites + the
+    layer create/delete/rename resets or stale target commits onto the wrong key; `swap`/`clear`/`setlayout`
+    **excluded** from v1.3 Layer mode (clear has no layer arg; setlayout targets a *layout* namespace — a
+    category error in a layer dropdown; swap is rare). Add a `"layer"` `--render` state for the UX gate.
+  - **(B) Home-row mods — cut to ONE line of copy (post-critic).** Verified home-row mods are **already
+    buildable**: `lettermod` is the tap/hold "avoid misfires" feel + modifier hold-targets are already offered.
+    The gap is **search-time vocabulary**, not a control. Minimal fix: append "the home-row-mod feel" to the
+    EXISTING "avoid misfires" hover-detail string (`app.slint:~2241`) — zero new widgets/state. **CUT** (violate
+    Ryan's explicit Apple-minimalism constraint): the conditional "this is a home-row mod" hint (fires after you
+    already built one — condescending) and a one-click preset (redundant 3rd path to a 2-click result). The
+    "granular HOW-control" Ryan felt missing on his D/F keys is the **momentary layer-hold**, delivered by (A);
+    the only refused axis is per-key millisecond tuning. `overloadi` decompose → v1.4 (round-trips as raw text
+    today; `lettermod` is the superset for new authoring).
+  - **→ v1.4 (deferred from this groom):** (1) **layer-TYPE creation** in the editor — modifier `[nav:C-S]` +
+    layout `[x:layout]` headings (today `add_layer` only emits plain `[name]`; the parser preserves `:MODS` but
+    can't create it). NB: this is distinct from the prior groom's "layout layers already covered by
+    `setlayout`/`default_layout`" — that was about *activation*; the gap is *creating the typed section*.
+    (2) `overloadi` slot-decompose. **Aliases editing stays DROPPED** (prior groom: supplanted by labels) unless
+    a user explicitly asks — not silently revived here.
+  - **Process for these (Ryan, explicit):** proper plan + plan-critic *before* code (done); after EACH feature
+    is implemented, an **adversarial "try to break it" review** + a **UI/UX review** (render-harness screenshots)
+    — see [[adversarial-review-before-release]], [[render-harness-screenshot-capture]].
+  - **Release-plumbing impact:** v1.3 CHANGELOG/AUR are already STAGED — once these land, refresh the [1.3.0]
+    CHANGELOG entry and the AUR `sha256` re-pends on the new tag (post-tag `updpkgsums`+`printsrcinfo`).

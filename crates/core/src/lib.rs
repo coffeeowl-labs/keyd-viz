@@ -12,6 +12,7 @@ pub mod globals;
 pub mod humanizer;
 pub mod ids;
 pub mod keycodes;
+pub mod layeraction;
 pub mod live;
 pub mod layout;
 pub mod macros;
@@ -32,6 +33,7 @@ pub use humanizer::humanize;
 pub use qmk::{import as import_qmk, QmkImport};
 pub use ids::{find_conflicts, DeviceFlags, IdConflict, Ids, MatchKind};
 pub use keycodes::keycode_name;
+pub use layeraction::{LayerAction, LayerKind};
 pub use live::{
     parse_listen_line, parse_monitor_line, ActiveLayers, KeyAction, KeyEvent, LayerEvent,
     LiveEvent, MonitorEvent,

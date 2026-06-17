@@ -17,7 +17,8 @@ use std::path::{Path, PathBuf};
 
 use keydviz_core::edit::{starter_config, EditConfig, EntryKind};
 use keydviz_core::{
-    canonical_chord, is_chord_key, parser, round_trips, Behavior, Config, Macro, TapHold,
+    canonical_chord, is_chord_key, parser, round_trips, Behavior, Config, LayerAction, LayerKind,
+    Macro, TapHold,
 };
 
 /// The single user-facing "this board doesn't exist" message, used by every
@@ -206,7 +207,45 @@ impl EditSession {
     /// bound to something that isn't a tap/hold (plain remap, macro, etc.).
     pub fn current_tap_hold(&self, layer: &str, key: &str) -> Option<TapHold> {
         let rhs = self.current_binding(layer, key)?;
-        TapHold::parse(key, &rhs)
+        let th = TapHold::parse(key, &rhs)?;
+        // A pure momentary `layer()` (no tap) is owned by the Layer-mode picker now
+        // (see [`Self::current_layer_action`]), so don't claim it for the tap/hold
+        // panel — that panel is strictly dual-function (always has a tap). The core
+        // `TapHold::parse` still recognises momentary for the read-only viewer; this
+        // edit-mode filter is what keeps the two panels from both claiming `layer()`.
+        th.tap.as_ref()?;
+        Some(th)
+    }
+
+    /// The selected key's current binding as a pure layer action (`layer()`/`toggle()`/
+    /// `oneshot()` with no tap), if it is one — so the Layer-mode picker can show the
+    /// target + behavior. `None` when the key is unbound or bound to anything else
+    /// (a tap/hold, macro, plain remap, the macro-bearing `…m` variants, or a composite
+    /// target), which keeps those editable as raw text in simple mode.
+    pub fn current_layer_action(&self, layer: &str, key: &str) -> Option<LayerAction> {
+        let rhs = self.current_binding(layer, key)?;
+        LayerAction::parse(&rhs)
+    }
+
+    /// Bind `key` on `layer` to a pure layer action — `layer(target)` / `toggle(target)`
+    /// / `oneshot(target)` per `kind`. Creates the `[layer]` section if the config
+    /// doesn't declare one locally (same as [`Self::set_binding`]). `Err` when there is
+    /// no such board.
+    pub fn set_layer_action(
+        &mut self,
+        layer: &str,
+        key: &str,
+        target: &str,
+        kind: LayerKind,
+    ) -> Result<(), String> {
+        let action = LayerAction {
+            kind,
+            target: target.to_string(),
+        };
+        if !self.edit.set_layer_binding(layer, key, &action.serialize()) {
+            return Err(no_board_err(layer));
+        }
+        Ok(())
     }
 
     /// Make `key` a dual-function (tap/hold) key on the `layer` board: hold →
@@ -977,13 +1016,41 @@ mod tests {
     }
 
     #[test]
-    fn tap_hold_momentary_has_no_tap() {
+    fn momentary_layer_is_owned_by_layer_mode_not_tap_hold() {
         let td = TempDir::new("th-mom");
         let mut s = session(&td);
-        s.set_tap_hold("main", "capslock", "nav", None, Some(Behavior::Responsive)).unwrap();
+        // A pure momentary layer key is created via the Layer-mode picker.
+        s.set_layer_action("main", "capslock", "nav", LayerKind::Momentary).unwrap();
         assert_eq!(s.diff(), "- capslock = esc\n+ capslock = layer(nav)\n");
-        let th = s.current_tap_hold("main", "capslock").unwrap();
-        assert_eq!(th.tap, None);
+        // The tap/hold panel no longer claims it (it's strictly dual-function now)...
+        assert!(s.current_tap_hold("main", "capslock").is_none());
+        // ...the Layer-mode picker does.
+        let la = s.current_layer_action("main", "capslock").unwrap();
+        assert_eq!(la.kind, LayerKind::Momentary);
+        assert_eq!(la.target, "nav");
+    }
+
+    #[test]
+    fn set_layer_action_writes_each_kind() {
+        let td = TempDir::new("la-kinds");
+        let mut s = session(&td);
+        s.set_layer_action("main", "capslock", "game", LayerKind::Toggle).unwrap();
+        assert_eq!(s.diff(), "- capslock = esc\n+ capslock = toggle(game)\n");
+        let la = s.current_layer_action("main", "capslock").unwrap();
+        assert_eq!(la.kind, LayerKind::Toggle);
+
+        s.set_layer_action("main", "capslock", "nav", LayerKind::OneShot).unwrap();
+        assert_eq!(s.current_binding("main", "capslock").as_deref(), Some("oneshot(nav)"));
+    }
+
+    #[test]
+    fn current_layer_action_rejects_tap_hold_and_macro_forms() {
+        let td = TempDir::new("la-reject");
+        let mut s = session(&td);
+        // A tap-bearing form stays a tap/hold, not a layer action.
+        s.set_tap_hold("main", "f", "nav", Some("f".into()), Some(Behavior::Responsive)).unwrap();
+        assert!(s.current_layer_action("main", "f").is_none());
+        assert!(s.current_tap_hold("main", "f").is_some());
     }
 
     #[test]

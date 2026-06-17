@@ -35,7 +35,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use keydviz_core::{catalog, parse_file, Config, Geometry, Macro, MacroToken, Sheet};
+use keydviz_core::{catalog, parse_file, Config, Geometry, LayerKind, Macro, MacroToken, Sheet};
 
 slint::include_modules!();
 
@@ -170,6 +170,13 @@ fn drive_render_state(win: &MainWindow, state: &str) {
             win.set_macro_chord_c(true);
             win.set_macro_chord_key("enter".into());
             win.invoke_macro_add_chord();
+        }
+        "layer" => {
+            win.invoke_select_key("a".into());
+            win.invoke_set_key_mode("layer".into());
+            // Populate the picker as a real click-path would: a target layer + behavior.
+            win.set_layer_action_target("nav".into());
+            win.set_layer_action_kind("toggle".into());
         }
         "picker" => {
             win.invoke_select_key("f".into());
@@ -609,12 +616,17 @@ fn main() -> Result<(), slint::PlatformError> {
             let layer = win.get_edit_layer().to_string();
             let cur = s.current_binding(&layer, &phys).unwrap_or_default();
             seed_tap_hold(&win, s, &layer, &phys);
+            seed_layer_action(&win, s, &layer, &phys);
             seed_macro(&win, s, &layer, &phys, &macro_draft);
             seed_label(&win, s, &layer, &phys);
-            // Default the editor mode to match the key's current binding: an existing
-            // macro opens in macro mode, a tap/hold in tap/hold mode, else simple.
+            // Default the editor mode to match the key's current binding: macro → macro,
+            // a pure layer action → layer, a dual-function key → tap/hold, else simple.
+            // Order matters — layer actions are checked before tap/hold (a pure layer()
+            // is no longer a tap/hold, see EditSession::current_tap_hold).
             let mode = if win.get_selected_is_macro() {
                 "macro"
+            } else if win.get_selected_is_layer_action() {
+                "layer"
             } else if win.get_selected_is_tap_hold() {
                 "taphold"
             } else {
@@ -663,12 +675,15 @@ fn main() -> Result<(), slint::PlatformError> {
                 if let Some(s) = session.borrow().as_ref() {
                     let cur = s.current_binding(&name, &phys).unwrap_or_default();
                     seed_tap_hold(&win, s, &name, &phys);
+                    seed_layer_action(&win, s, &name, &phys);
                     // Reseed the macro panel/draft for the new layer too, or a stale
                     // draft from the old layer could be committed onto this key here.
                     seed_macro(&win, s, &name, &phys, &macro_draft);
                     seed_label(&win, s, &name, &phys);
                     let mode = if win.get_selected_is_macro() {
                         "macro"
+                    } else if win.get_selected_is_layer_action() {
+                        "layer"
                     } else if win.get_selected_is_tap_hold() {
                         "taphold"
                     } else {
@@ -716,6 +731,8 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_edit_layer(created.into());
                     win.set_selected_phys("".into());
                     win.set_key_mode("simple".into()); // no key selected: reset the editor mode
+                    win.set_layer_action_target("".into()); // drop any stale layer-action target
+                    win.set_layer_action_kind("momentary".into());
                     set_current_binding(&win, "");
                     win.set_edit_value("".into());
                     win.set_new_layer_open(false);
@@ -803,6 +820,8 @@ fn main() -> Result<(), slint::PlatformError> {
                     win.set_edit_layer(next.into());
                     win.set_selected_phys("".into());
                     win.set_key_mode("simple".into()); // no key selected: reset the editor mode
+                    win.set_layer_action_target("".into()); // drop any stale layer-action target
+                    win.set_layer_action_kind("momentary".into());
                     set_current_binding(&win, "");
                     win.set_edit_value("".into());
                     win.set_edit_dirty(dirty);
@@ -865,6 +884,8 @@ fn main() -> Result<(), slint::PlatformError> {
                     // The selection's section changed name; reset the picked key.
                     win.set_selected_phys("".into());
                     win.set_key_mode("simple".into()); // no key selected: reset the editor mode
+                    win.set_layer_action_target("".into()); // drop any stale layer-action target
+                    win.set_layer_action_kind("momentary".into());
                     set_current_binding(&win, "");
                     win.set_edit_value("".into());
                     win.set_edit_dirty(dirty);
@@ -910,6 +931,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 result,
                 |win, s| {
                     seed_tap_hold(win, s, &layer, &phys); // keep the tap/hold panel in sync
+                    seed_layer_action(win, s, &layer, &phys); // and the layer-action panel
                     seed_macro(win, s, &layer, &phys, &macro_draft); // and the macro panel
                     refresh_warnings(win, s); // a binding change can add/clear an orphan
                 },
@@ -950,6 +972,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 result,
                 |win, s| {
                     seed_tap_hold(win, s, &layer, &phys); // keep the tap/hold panel in sync
+                    seed_layer_action(win, s, &layer, &phys); // and the layer-action panel
                     seed_macro(win, s, &layer, &phys, &macro_draft); // and the macro panel
                     refresh_warnings(win, s); // a binding change can add/clear an orphan
                 },
@@ -1042,11 +1065,10 @@ fn main() -> Result<(), slint::PlatformError> {
             if phys.is_empty() || target.is_empty() {
                 return;
             }
-            // Momentary → no tap; otherwise the tap field (defaulting to the key
-            // itself when left blank, matching keyd's overload(layer) short form).
-            let tap = if win.get_th_hold_only() {
-                None
-            } else {
+            // A tap/hold always has a tap (a pure hold-only layer key lives in "layer"
+            // mode now). Default the tap to the key itself when left blank, matching
+            // keyd's overload(layer) short form.
+            let tap = {
                 let t = win.get_th_tap().trim().to_string();
                 Some(if t.is_empty() { phys.clone() } else { t })
             };
@@ -1068,8 +1090,56 @@ fn main() -> Result<(), slint::PlatformError> {
                 result,
                 |win, s| {
                     seed_tap_hold(win, s, &layer, &phys);
+                    seed_layer_action(win, s, &layer, &phys);
                     seed_macro(win, s, &layer, &phys, &macro_draft); // keep the macro panel in sync
                     refresh_warnings(win, s); // a tap/hold can target a missing layer
+                },
+                move |win| {
+                    set_current_binding(win, cur.clone());
+                    win.set_edit_value(cur.into());
+                    win.set_capture_armed(false);
+                },
+            );
+        });
+    }
+
+    // Layer-action editor: bind the selected key to a pure layer action —
+    // layer()/toggle()/oneshot() pointing at the chosen target — on "set layer action".
+    {
+        let weak = win.as_weak();
+        let srcs = srcs.clone();
+        let session = session.clone();
+        let macro_draft = macro_draft.clone();
+        win.on_apply_layer_action(move || {
+            let Some(win) = weak.upgrade() else { return };
+            if refuse_if_applying(&win) {
+                return;
+            }
+            let layer = win.get_edit_layer().to_string();
+            let phys = win.get_selected_phys().to_string();
+            let target = win.get_layer_action_target().trim().to_string();
+            if phys.is_empty() || target.is_empty() {
+                return;
+            }
+            let kind = LayerKind::from_token(&win.get_layer_action_kind());
+            let mut sb = session.borrow_mut();
+            let Some(s) = sb.as_mut() else { return };
+            let result = s.set_layer_action(&layer, &phys, &target, kind);
+            let cur = if result.is_ok() {
+                s.current_binding(&layer, &phys).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            commit_edit(
+                &win,
+                &srcs,
+                sb,
+                result,
+                |win, s| {
+                    seed_layer_action(win, s, &layer, &phys);
+                    seed_tap_hold(win, s, &layer, &phys); // keep the other panels in sync
+                    seed_macro(win, s, &layer, &phys, &macro_draft);
+                    refresh_warnings(win, s); // a layer action can target a missing layer
                 },
                 move |win| {
                     set_current_binding(win, cur.clone());
