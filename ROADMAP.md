@@ -1439,3 +1439,15 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
     — see [[adversarial-review-before-release]], [[render-harness-screenshot-capture]].
   - **Release-plumbing impact:** v1.3 CHANGELOG/AUR are already STAGED — once these land, refresh the [1.3.0]
     CHANGELOG entry and the AUR `sha256` re-pends on the new tag (post-tag `updpkgsums`+`printsrcinfo`).
+  - *(2026-06-17/18 — TWO follow-on edit-mode fixes from Ryan's live click-through, built + reviewed)*
+    (1) **Layer actions for CHORDS** — the chord action was free-text-only, so toggle()/oneshot()/momentary
+    weren't discoverable for chords (Ryan's existing `leftshift+rightshift = toggle(game)` proved they work
+    but couldn't be built without raw syntax). Added an inline layer picker to the chord editor ("or make it
+    drive a layer (fills the action above)" + layer chips + momentary/toggle/one-shot + a description line),
+    mirroring "layer" mode and composing via the SAME `LayerAction::serialize` so they never drift; seeds
+    lit-state from an existing layer-action chord on edit, resets in `clear_chord_builder`. (2) **Macro "add"
+    row clarity** — split the crammed single `add:` row into labeled per-type rows (`key:`/`text:`/`pause:`),
+    matching the existing `combo:` row. Adversarial review clean; UX review applied (reframed the chord
+    picker label to say it fills the action; added the behavior description line). Pure-Slint macro change +
+    chord picker logic in main.rs/edit_ui.rs. (Note: macro `combo:` label alignment left for the separate
+    chord→combo WIP commit.)

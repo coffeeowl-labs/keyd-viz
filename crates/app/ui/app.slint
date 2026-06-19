@@ -784,6 +784,13 @@ export component MainWindow inherits Window {
     // the builder; lets a commit REPLACE that chord even if its key set changed (add/remove
     // a member), instead of appending a new chord and orphaning the original.
     in-out property <string> chord_edit_orig: "";
+    // Inline layer-action picker for a chord's action — the same discoverable
+    // layer/toggle/oneshot a regular key gets in "layer" mode. Picking composes the
+    // action string (e.g. toggle(nav)) into chord_action. Rust seeds these from an
+    // existing layer-action chord on edit, and clears them on reset.
+    in-out property <string> chord_layer_target;        // chosen target layer ("" = none)
+    in-out property <string> chord_layer_kind: "momentary"; // "momentary"|"toggle"|"oneshot"
+    pure callback chord_layer_str(string, string) -> string; // (target, kind) → "toggle(nav)"
     callback toggle_chord_key(string);  // arg = phys clicked on the board → add/remove member
     callback clear_chord_keys();        // reset the builder's member list
     callback add_chord();               // commit chord_keys → chord_action
@@ -2069,6 +2076,13 @@ export component MainWindow inherits Window {
                                 font-size: 13px;
                                 placeholder-text: "action (e.g. esc)";
                                 text <=> root.chord_action;
+                                // Typing the action by hand un-lights the layer picker if
+                                // the text no longer matches what the picker composed.
+                                edited(t) => {
+                                    if (root.chord_layer_target != "" && t != root.chord_layer_str(root.chord_layer_target, root.chord_layer_kind)) {
+                                        root.chord_layer_target = "";
+                                    }
+                                }
                                 accepted(t) => {
                                     root.add_chord();
                                 }
@@ -2086,6 +2100,98 @@ export component MainWindow inherits Window {
                                 clicked => {
                                     root.add_chord();
                                 }
+                            }
+                        }
+                        // or make the chord drive a layer — the same discoverable
+                        // toggle/oneshot/momentary a regular key gets in "layer" mode.
+                        // Picking composes the action (e.g. toggle(nav)) into the field above.
+                        if root.hold_layers.length > 0: VerticalLayout {
+                            spacing: 6px;
+                            Text {
+                                // The picker is a builder for the action above — picking
+                                // fills the field, so the two aren't competing inputs.
+                                text: "or make it drive a layer (fills the action above):";
+                                color: Palette.text_dim;
+                                font-size: 11px;
+                            }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                Text {
+                                    text: "layer:";
+                                    width: 64px;
+                                    color: Palette.text;
+                                    font-size: 12px;
+                                    font-family: "JetBrains Mono";
+                                    vertical-alignment: center;
+                                }
+                                for lay in root.hold_layers: IconButton {
+                                    wide: true;
+                                    text: lay;
+                                    active: root.chord_layer_target == lay;
+                                    clicked => {
+                                        root.chord_layer_target = lay;
+                                        root.chord_action = root.chord_layer_str(lay, root.chord_layer_kind);
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                Text {
+                                    text: "behavior:";
+                                    width: 64px;
+                                    color: Palette.text;
+                                    font-size: 12px;
+                                    font-family: "JetBrains Mono";
+                                    vertical-alignment: center;
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "momentary";
+                                    active: root.chord_layer_kind == "momentary";
+                                    clicked => {
+                                        root.chord_layer_kind = "momentary";
+                                        if (root.chord_layer_target != "") {
+                                            root.chord_action = root.chord_layer_str(root.chord_layer_target, "momentary");
+                                        }
+                                    }
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "toggle";
+                                    active: root.chord_layer_kind == "toggle";
+                                    clicked => {
+                                        root.chord_layer_kind = "toggle";
+                                        if (root.chord_layer_target != "") {
+                                            root.chord_action = root.chord_layer_str(root.chord_layer_target, "toggle");
+                                        }
+                                    }
+                                }
+                                IconButton {
+                                    wide: true;
+                                    text: "one-shot";
+                                    active: root.chord_layer_kind == "oneshot";
+                                    clicked => {
+                                        root.chord_layer_kind = "oneshot";
+                                        if (root.chord_layer_target != "") {
+                                            root.chord_action = root.chord_layer_str(root.chord_layer_target, "oneshot");
+                                        }
+                                    }
+                                }
+                            }
+                            // Same outcome-named descriptions as the "layer" key-mode panel.
+                            Text {
+                                height: 15px;
+                                text: root.chord_layer_kind == "toggle"
+                                    ? "press the chord to turn the layer on, again to turn it off"
+                                    : root.chord_layer_kind == "oneshot"
+                                        ? "the layer applies to the next key press only, then clears"
+                                        : "the layer is active only while the chord is held";
+                                color: Palette.text_dim;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                                overflow: elide;
                             }
                         }
                     }
@@ -2469,12 +2575,16 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                            // add a key / text / pause step.
+                            // Each step type gets its own labeled row so the distinct
+                            // "add" actions don't blur together; the labels share a fixed
+                            // width so the controls line up.
+                            // add a single key.
                             HorizontalLayout {
                                 spacing: 6px;
                                 alignment: start;
                                 Text {
-                                    text: "add:";
+                                    text: "key:";
+                                    width: 52px;
                                     color: Palette.text;
                                     font-size: 12px;
                                     font-family: "JetBrains Mono";
@@ -2482,13 +2592,26 @@ export component MainWindow inherits Window {
                                 }
                                 IconButton {
                                     wide: true;
-                                    text: "key\u{2026}";
+                                    text: "pick from list\u{2026}";
                                     clicked => {
                                         root.open_picker("macro_token");
                                     }
                                 }
+                            }
+                            // add typed text.
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                Text {
+                                    text: "text:";
+                                    width: 52px;
+                                    color: Palette.text;
+                                    font-size: 12px;
+                                    font-family: "JetBrains Mono";
+                                    vertical-alignment: center;
+                                }
                                 LineEdit {
-                                    width: 130px;
+                                    width: 160px;
                                     height: 28px;
                                     font-size: 13px;
                                     placeholder-text: "type text";
@@ -2503,6 +2626,19 @@ export component MainWindow inherits Window {
                                     clicked => {
                                         root.macro_add_text();
                                     }
+                                }
+                            }
+                            // add a pause.
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                Text {
+                                    text: "pause:";
+                                    width: 52px;
+                                    color: Palette.text;
+                                    font-size: 12px;
+                                    font-family: "JetBrains Mono";
+                                    vertical-alignment: center;
                                 }
                                 LineEdit {
                                     width: 64px;

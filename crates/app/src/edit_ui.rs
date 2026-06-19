@@ -91,6 +91,9 @@ pub(crate) fn render_board(win: &MainWindow) {
 pub(crate) fn clear_chord_builder(win: &MainWindow) {
     win.set_chord_keys(model(Vec::<slint::SharedString>::new()));
     win.set_chord_edit_orig("".into());
+    // Reset the inline layer-action picker so a stale target can't carry between chords.
+    win.set_chord_layer_target("".into());
+    win.set_chord_layer_kind("momentary".into());
 }
 
 /// Add `phys` to the chord-builder member list, or remove it if already present (a

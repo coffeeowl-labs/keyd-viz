@@ -189,6 +189,12 @@ fn drive_render_state(win: &MainWindow, state: &str) {
             win.invoke_toggle_chord_key("j".into());
             win.invoke_toggle_chord_key("k".into());
         }
+        "chord-layer" => {
+            // Edit the existing leftshift+rightshift = toggle(game) chord: the inline
+            // layer picker should light up game + toggle (seeded from the action).
+            win.invoke_set_board_mode("chord".into());
+            win.invoke_edit_chord("leftshift + rightshift".into());
+        }
         "global" => win.invoke_edit_global(),
         "new-layer" => {
             win.set_new_layer_open(true);
@@ -1486,6 +1492,10 @@ fn main() -> Result<(), slint::PlatformError> {
             // Remember which chord we're editing, so committing replaces it even if its key
             // set is changed (a member added/removed) rather than appending a new chord.
             win.set_chord_edit_orig(chord.clone());
+            // Default the inline layer picker to "nothing chosen"; light it up below only
+            // if the loaded action actually is a layer action.
+            win.set_chord_layer_target("".into());
+            win.set_chord_layer_kind("momentary".into());
             if let Some(s) = session.borrow().as_ref() {
                 let layer = win.get_edit_layer().to_string();
                 let canon = keydviz_core::canonical_chord(&chord);
@@ -1494,12 +1504,30 @@ fn main() -> Result<(), slint::PlatformError> {
                     .into_iter()
                     .find(|(k, _)| keydviz_core::canonical_chord(k) == canon)
                 {
+                    // If this chord drives a layer, pre-select the matching target +
+                    // behavior so the picker reflects it (parity with "layer" mode).
+                    if let Some(la) = keydviz_core::LayerAction::parse(&act) {
+                        win.set_chord_layer_target(la.target.into());
+                        win.set_chord_layer_kind(la.kind.token().into());
+                    }
                     win.set_chord_action(act.into());
                 }
             }
             render_board(&win); // light up the loaded members on the board
         });
     }
+
+    // Compose the chord's inline layer-action picker into the action string, using the
+    // same serializer as "layer" mode so the two never drift (e.g. ("nav","toggle") →
+    // "toggle(nav)"). Pure: no session access, just string composition.
+    win.on_chord_layer_str(|target, kind| {
+        keydviz_core::LayerAction {
+            kind: LayerKind::from_token(&kind),
+            target: target.to_string(),
+        }
+        .serialize()
+        .into()
+    });
 
     // Toggle a clicked board key in/out of the chord builder's member list, and reset it.
     {
