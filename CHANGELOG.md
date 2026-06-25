@@ -4,7 +4,7 @@ All notable changes to keyd-viz are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.0] - 2026-06-13
+## [1.3.0] - 2026-06-24
 
 ### Added
 
@@ -40,6 +40,12 @@ All notable changes to keyd-viz are documented here. The format is based on
   You can **create, rename, and delete layers**, and **create a fresh config** for an
   unconfigured keyboard or **delete** an existing one — both through the same vetted
   one-click apply path.
+- **Discoverable layer actions.** A dedicated **layer** key-mode lets you point a key — or
+  a chord — at a layer and pick *how* it activates: **momentary** (active while held),
+  **toggle** (latches on/off), or **one-shot** (applies to the next key only), without
+  hand-writing `layer()`/`toggle()`/`oneshot()`. Dual-function (tap/hold) keys now also
+  surface the home-row-mod "feel", so a hold-for-modifier / tap-for-letter key is set by
+  the outcome you want rather than raw timeouts.
 - **Backup and restore for applied configs.** Every one-click apply leaves a timestamped
   backup; a restore panel lists them newest-first and rolls any one back through the same
   validate-write-reload-countdown path (so a restore is as safe as an apply).
