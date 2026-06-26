@@ -672,5 +672,9 @@ mod tests {
         assert_eq!(guess("my-tkl.conf"), "tkl");
         assert_eq!(guess("default.conf"), "ansi60");
         assert_eq!(guess("board-65.conf"), "65");
+        // "full" and "104" are independent triggers (||, not &&): either alone maps
+        // to the full-size board.
+        assert_eq!(guess("fullsize.conf"), "full");
+        assert_eq!(guess("logi-104.conf"), "full");
     }
 }

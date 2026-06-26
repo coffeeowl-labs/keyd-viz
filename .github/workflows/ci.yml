@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual trigger for the heavy coverage job (instrumented full-workspace
+  # rebuild) — deliberately NOT run per-PR.
+  workflow_dispatch:
 
 jobs:
   # `core` is pure logic with zero system deps, so it builds anywhere. The `app`
@@ -17,7 +20,12 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # Bounded proptest case count keeps gating CI deterministic & fast; the
+      # committed .proptest-regressions replays any past failure. High-case
+      # entropy exploration is a local/nightly concern.
       - run: cargo test -p keydviz-core --all-targets
+        env:
+          PROPTEST_CASES: "64"
       - run: cargo clippy -p keydviz-core --all-targets -- -D warnings
 
   # The privileged apply tool is deliberately libc-only (no system deps), but it
@@ -51,8 +59,21 @@ jobs:
             libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev \
             libgl1-mesa-dev
+      # Build keyd from source so the differential oracle (keyd as validity gate)
+      # actually runs in CI instead of auto-skipping. `keyd check` needs only the
+      # binary on PATH — no daemon, no root. Just the binary, to skip the full
+      # install's systemd side effects.
+      - name: Build & install keyd (differential oracle)
+        run: |
+          git clone --depth 1 https://github.com/rvaiya/keyd /tmp/keyd
+          make -C /tmp/keyd
+          sudo install -m755 /tmp/keyd/bin/keyd /usr/local/bin/keyd
+          keyd --version || true
       - run: cargo build -p keydviz
       - run: cargo test -p keydviz --all-targets
+        env:
+          PROPTEST_CASES: "64"
+          KEYDVIZ_KEYD_ORACLE: "1"
       - run: cargo clippy -p keydviz --all-targets -- -D warnings
 
   # The broker daemon links libsystemd (logind active-session authz), so the runner
@@ -72,3 +93,29 @@ jobs:
       - run: cargo build -p keydviz-helper
       - run: cargo test -p keydviz-helper --all-targets
       - run: cargo clippy -p keydviz-helper --all-targets -- -D warnings
+
+  # Coverage map — instrumented full-workspace rebuild (~8-10 min, defeats the
+  # build cache), so it runs ONLY on manual dispatch, never per-PR. Produces an
+  # lcov artifact for the dark-corner review; no enforced floor (yet).
+  coverage:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Slint + systemd deps and cargo-llvm-cov
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libfontconfig1-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libgl1-mesa-dev libsystemd-dev
+          cargo install cargo-llvm-cov --locked
+      - run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info

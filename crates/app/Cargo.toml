@@ -32,3 +32,8 @@ png = "0.17"
 
 [build-dependencies]
 slint-build = "1"
+
+# Test-only: property/stateful testing of the EditSession mutation surface.
+# Dev-dependency — never linked into the shipped keydviz binary.
+[dev-dependencies]
+proptest = "1"

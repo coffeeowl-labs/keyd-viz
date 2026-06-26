@@ -10,3 +10,7 @@ uv.lock
 
 # local scratch
 .refactor-progress.md
+
+# cargo-mutants results (regenerate with `cargo mutants`)
+mutants.out/
+mutants.out.old/

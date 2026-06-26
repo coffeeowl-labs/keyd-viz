@@ -1,0 +1,2929 @@
+---
+source: crates/core/tests/snapshot.rs
+expression: project(&sheet)
+---
+- title: Base layer
+  is_base: true
+  accent: ""
+  how: ""
+  hint: ""
+  caps:
+    - phys: "0"
+      key: "0"
+      label: "0"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: "1"
+      key: "1"
+      label: "1"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: "2"
+      key: "2"
+      label: "2"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: "3"
+      key: "3"
+      label: "3"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: "4"
+      key: "4"
+      label: "4"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: "5"
+      key: "5"
+      label: "5"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: "6"
+      key: "6"
+      label: "6"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: "7"
+      key: "7"
+      label: "7"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: "8"
+      key: "8"
+      label: "8"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: "9"
+      key: "9"
+      label: "9"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: a
+      key: a
+      label: A
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: apostrophe
+      key: "'"
+      label: "'"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: b
+      key: b
+      label: B
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: backslash
+      key: "\\"
+      label: "\\"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: backspace
+      key: backspace
+      label: ⌫
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: c
+      key: c
+      label: C
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: comma
+      key: ","
+      label: ","
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: d
+      key: d
+      label: D
+      ghost: ""
+      emphasized: false
+      accent: "#3ddc84"
+      state: Normal
+      badges:
+        - "L ↓num #3ddc84"
+    - phys: dot
+      key: "."
+      label: "."
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: e
+      key: e
+      label: E
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: enter
+      key: enter
+      label: ⏎
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: equal
+      key: "="
+      label: "="
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: esc
+      key: esc
+      label: Esc
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: f
+      key: f
+      label: F
+      ghost: ""
+      emphasized: false
+      accent: "#4aa3ff"
+      state: Normal
+      badges:
+        - "L ↓nav #4aa3ff"
+    - phys: fn
+      key: fn
+      label: Fn
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: g
+      key: g
+      label: G
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: grave
+      key: "`"
+      label: "`"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: h
+      key: h
+      label: H
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: i
+      key: i
+      label: I
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: j
+      key: j
+      label: J
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: k
+      key: k
+      label: K
+      ghost: ""
+      emphasized: false
+      accent: "#ff6b6b"
+      state: Normal
+      badges:
+        - "L ↓Ctrl #ff6b6b"
+    - phys: l
+      key: l
+      label: L
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: leftalt
+      key: leftalt
+      label: Alt
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: leftbrace
+      key: "["
+      label: "["
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: leftcontrol
+      key: leftcontrol
+      label: Ctrl
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: leftmeta
+      key: leftmeta
+      label: ◇
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: leftshift
+      key: leftshift
+      label: ⇧
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges:
+        - "R ⇧⇧ #9aa0a6"
+    - phys: m
+      key: m
+      label: M
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: minus
+      key: "-"
+      label: "-"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: n
+      key: n
+      label: N
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: o
+      key: o
+      label: O
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: p
+      key: p
+      label: P
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: q
+      key: q
+      label: Q
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: r
+      key: r
+      label: R
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: rightalt
+      key: rightalt
+      label: Alt
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: rightbrace
+      key: "]"
+      label: "]"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: rightmeta
+      key: leftmeta
+      label: ◇
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: rightshift
+      key: leftshift
+      label: ⇧
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges:
+        - "R ⇧⇧ #9aa0a6"
+    - phys: s
+      key: s
+      label: S
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: semicolon
+      key: ;
+      label: ;
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: slash
+      key: /
+      label: /
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: space
+      key: space
+      label: Space
+      ghost: ""
+      emphasized: false
+      accent: "#c792ea"
+      state: Normal
+      badges:
+        - "L ↓sym #c792ea"
+    - phys: t
+      key: t
+      label: T
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: tab
+      key: tab
+      label: Tab
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: u
+      key: u
+      label: U
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: v
+      key: v
+      label: V
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: w
+      key: w
+      label: W
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: x
+      key: x
+      label: X
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: y
+      key: y
+      label: Y
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+    - phys: z
+      key: z
+      label: Z
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Normal
+      badges: []
+- title: NAV
+  is_base: false
+  accent: "#4aa3ff"
+  how: hold F
+  hint: highlighted keys change while held
+  caps:
+    - phys: "0"
+      key: "0"
+      label: "0"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "1"
+      key: "1"
+      label: "1"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "2"
+      key: "2"
+      label: "2"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "3"
+      key: "3"
+      label: "3"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "4"
+      key: "4"
+      label: "4"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "5"
+      key: "5"
+      label: "5"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "6"
+      key: "6"
+      label: "6"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "7"
+      key: "7"
+      label: "7"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "8"
+      key: "8"
+      label: "8"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "9"
+      key: "9"
+      label: "9"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: a
+      key: a
+      label: A
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: apostrophe
+      key: delete
+      label: Del
+      ghost: "'"
+      emphasized: true
+      accent: "#4aa3ff"
+      state: Normal
+      badges: []
+    - phys: b
+      key: b
+      label: B
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: backslash
+      key: "\\"
+      label: "\\"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: backspace
+      key: backspace
+      label: ⌫
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: c
+      key: c
+      label: C
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: comma
+      key: ","
+      label: ","
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: d
+      key: d
+      label: D
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: dot
+      key: leftcontrol+right
+      label: ⌃→
+      ghost: "."
+      emphasized: true
+      accent: "#4aa3ff"
+      state: Normal
+      badges: []
+    - phys: e
+      key: e
+      label: E
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: enter
+      key: enter
+      label: ⏎
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: equal
+      key: "="
+      label: "="
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: esc
+      key: esc
+      label: Esc
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: f
+      key: ""
+      label: F
+      ghost: ""
+      emphasized: false
+      accent: "#4aa3ff"
+      state: Hold
+      badges:
+        - "L HOLD #4aa3ff"
+    - phys: fn
+      key: fn
+      label: Fn
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: g
+      key: g
+      label: G
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: grave
+      key: "`"
+      label: "`"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: h
+      key: left
+      label: ←
+      ghost: H
+      emphasized: true
+      accent: "#4aa3ff"
+      state: Normal
+      badges: []
+    - phys: i
+      key: pageup
+      label: PgUp
+      ghost: I
+      emphasized: true
+      accent: "#4aa3ff"
+      state: Normal
+      badges: []
+    - phys: j
+      key: down
+      label: ↓
+      ghost: J
+      emphasized: true
+      accent: "#4aa3ff"
+      state: Normal
+      badges: []
+    - phys: k
+      key: up
+      label: ↑
+      ghost: K
+      emphasized: true
+      accent: "#4aa3ff"
+      state: Normal
+      badges: []
+    - phys: l
+      key: right
+      label: →
+      ghost: L
+      emphasized: true
+      accent: "#4aa3ff"
+      state: Normal
+      badges: []
+    - phys: leftalt
+      key: leftalt
+      label: Alt
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftbrace
+      key: "["
+      label: "["
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftcontrol
+      key: leftcontrol
+      label: Ctrl
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftmeta
+      key: leftmeta
+      label: ◇
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftshift
+      key: leftshift
+      label: ⇧
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: m
+      key: m
+      label: M
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: minus
+      key: "-"
+      label: "-"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: n
+      key: leftcontrol+left
+      label: ⌃←
+      ghost: N
+      emphasized: true
+      accent: "#4aa3ff"
+      state: Normal
+      badges: []
+    - phys: o
+      key: end
+      label: End
+      ghost: O
+      emphasized: true
+      accent: "#4aa3ff"
+      state: Normal
+      badges: []
+    - phys: p
+      key: p
+      label: P
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: q
+      key: q
+      label: Q
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: r
+      key: r
+      label: R
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightalt
+      key: rightalt
+      label: Alt
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightbrace
+      key: "]"
+      label: "]"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightmeta
+      key: leftmeta
+      label: ◇
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightshift
+      key: leftshift
+      label: ⇧
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: s
+      key: s
+      label: S
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: semicolon
+      key: backspace
+      label: ⌫
+      ghost: ;
+      emphasized: true
+      accent: "#4aa3ff"
+      state: Normal
+      badges: []
+    - phys: slash
+      key: /
+      label: /
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: space
+      key: space
+      label: Space
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: t
+      key: t
+      label: T
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: tab
+      key: tab
+      label: Tab
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: u
+      key: pagedown
+      label: PgDn
+      ghost: U
+      emphasized: true
+      accent: "#4aa3ff"
+      state: Normal
+      badges: []
+    - phys: v
+      key: v
+      label: V
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: w
+      key: w
+      label: W
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: x
+      key: x
+      label: X
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: y
+      key: home
+      label: Home
+      ghost: Y
+      emphasized: true
+      accent: "#4aa3ff"
+      state: Normal
+      badges: []
+    - phys: z
+      key: z
+      label: Z
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+- title: NUM
+  is_base: false
+  accent: "#3ddc84"
+  how: hold D
+  hint: highlighted keys change while held
+  caps:
+    - phys: "0"
+      key: "0"
+      label: "0"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "1"
+      key: "1"
+      label: "1"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "2"
+      key: "2"
+      label: "2"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "3"
+      key: "3"
+      label: "3"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "4"
+      key: "4"
+      label: "4"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "5"
+      key: "5"
+      label: "5"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "6"
+      key: "6"
+      label: "6"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "7"
+      key: "7"
+      label: "7"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "8"
+      key: "8"
+      label: "8"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "9"
+      key: "9"
+      label: "9"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: a
+      key: a
+      label: A
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: apostrophe
+      key: "'"
+      label: "'"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: b
+      key: b
+      label: B
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: backslash
+      key: "\\"
+      label: "\\"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: backspace
+      key: backspace
+      label: ⌫
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: c
+      key: c
+      label: C
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: comma
+      key: "2"
+      label: "2"
+      ghost: ","
+      emphasized: true
+      accent: "#3ddc84"
+      state: Normal
+      badges: []
+    - phys: d
+      key: ""
+      label: D
+      ghost: ""
+      emphasized: false
+      accent: "#3ddc84"
+      state: Hold
+      badges:
+        - "L HOLD #3ddc84"
+    - phys: dot
+      key: "3"
+      label: "3"
+      ghost: "."
+      emphasized: true
+      accent: "#3ddc84"
+      state: Normal
+      badges: []
+    - phys: e
+      key: e
+      label: E
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: enter
+      key: enter
+      label: ⏎
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: equal
+      key: "="
+      label: "="
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: esc
+      key: esc
+      label: Esc
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: f
+      key: f
+      label: F
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: fn
+      key: fn
+      label: Fn
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: g
+      key: g
+      label: G
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: grave
+      key: "`"
+      label: "`"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: h
+      key: h
+      label: H
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: i
+      key: "8"
+      label: "8"
+      ghost: I
+      emphasized: true
+      accent: "#3ddc84"
+      state: Normal
+      badges: []
+    - phys: j
+      key: "4"
+      label: "4"
+      ghost: J
+      emphasized: true
+      accent: "#3ddc84"
+      state: Normal
+      badges: []
+    - phys: k
+      key: "5"
+      label: "5"
+      ghost: K
+      emphasized: true
+      accent: "#3ddc84"
+      state: Normal
+      badges: []
+    - phys: l
+      key: "6"
+      label: "6"
+      ghost: L
+      emphasized: true
+      accent: "#3ddc84"
+      state: Normal
+      badges: []
+    - phys: leftalt
+      key: leftalt
+      label: Alt
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftbrace
+      key: "["
+      label: "["
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftcontrol
+      key: leftcontrol
+      label: Ctrl
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftmeta
+      key: leftmeta
+      label: ◇
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftshift
+      key: leftshift
+      label: ⇧
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: m
+      key: "1"
+      label: "1"
+      ghost: M
+      emphasized: true
+      accent: "#3ddc84"
+      state: Normal
+      badges: []
+    - phys: minus
+      key: "-"
+      label: "-"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: n
+      key: n
+      label: N
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: o
+      key: "9"
+      label: "9"
+      ghost: O
+      emphasized: true
+      accent: "#3ddc84"
+      state: Normal
+      badges: []
+    - phys: p
+      key: "="
+      label: "="
+      ghost: P
+      emphasized: true
+      accent: "#3ddc84"
+      state: Normal
+      badges: []
+    - phys: q
+      key: q
+      label: Q
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: r
+      key: r
+      label: R
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightalt
+      key: rightalt
+      label: Alt
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightbrace
+      key: "]"
+      label: "]"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightmeta
+      key: leftmeta
+      label: ◇
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightshift
+      key: leftshift
+      label: ⇧
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: s
+      key: s
+      label: S
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: semicolon
+      key: "-"
+      label: "-"
+      ghost: ;
+      emphasized: true
+      accent: "#3ddc84"
+      state: Normal
+      badges: []
+    - phys: slash
+      key: "."
+      label: "."
+      ghost: /
+      emphasized: true
+      accent: "#3ddc84"
+      state: Normal
+      badges: []
+    - phys: space
+      key: "0"
+      label: "0"
+      ghost: Space
+      emphasized: true
+      accent: "#3ddc84"
+      state: Normal
+      badges: []
+    - phys: t
+      key: t
+      label: T
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: tab
+      key: tab
+      label: Tab
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: u
+      key: "7"
+      label: "7"
+      ghost: U
+      emphasized: true
+      accent: "#3ddc84"
+      state: Normal
+      badges: []
+    - phys: v
+      key: v
+      label: V
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: w
+      key: w
+      label: W
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: x
+      key: x
+      label: X
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: y
+      key: y
+      label: Y
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: z
+      key: z
+      label: Z
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+- title: SYM
+  is_base: false
+  accent: "#c792ea"
+  how: hold Space
+  hint: highlighted keys change while held
+  caps:
+    - phys: "0"
+      key: "0"
+      label: "0"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "1"
+      key: "1"
+      label: "1"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "2"
+      key: "2"
+      label: "2"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "3"
+      key: "3"
+      label: "3"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "4"
+      key: "4"
+      label: "4"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "5"
+      key: "5"
+      label: "5"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "6"
+      key: "6"
+      label: "6"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "7"
+      key: "7"
+      label: "7"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "8"
+      key: "8"
+      label: "8"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "9"
+      key: "9"
+      label: "9"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: a
+      key: a
+      label: A
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: apostrophe
+      key: "'"
+      label: "'"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: b
+      key: b
+      label: B
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: backslash
+      key: "\\"
+      label: "\\"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: backspace
+      key: backspace
+      label: ⌫
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: c
+      key: c
+      label: C
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: comma
+      key: "leftshift+]"
+      label: "}"
+      ghost: ","
+      emphasized: true
+      accent: "#c792ea"
+      state: Normal
+      badges: []
+    - phys: d
+      key: d
+      label: D
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: dot
+      key: "."
+      label: "."
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: e
+      key: e
+      label: E
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: enter
+      key: enter
+      label: ⏎
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: equal
+      key: "="
+      label: "="
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: esc
+      key: esc
+      label: Esc
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: f
+      key: f
+      label: F
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: fn
+      key: fn
+      label: Fn
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: g
+      key: g
+      label: G
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: grave
+      key: "`"
+      label: "`"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: h
+      key: h
+      label: H
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: i
+      key: "]"
+      label: "]"
+      ghost: I
+      emphasized: true
+      accent: "#c792ea"
+      state: Normal
+      badges: []
+    - phys: j
+      key: leftshift+9
+      label: (
+      ghost: J
+      emphasized: true
+      accent: "#c792ea"
+      state: Normal
+      badges: []
+    - phys: k
+      key: leftshift+0
+      label: )
+      ghost: K
+      emphasized: true
+      accent: "#c792ea"
+      state: Normal
+      badges: []
+    - phys: l
+      key: l
+      label: L
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftalt
+      key: leftalt
+      label: Alt
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftbrace
+      key: "["
+      label: "["
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftcontrol
+      key: leftcontrol
+      label: Ctrl
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftmeta
+      key: leftmeta
+      label: ◇
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftshift
+      key: leftshift
+      label: ⇧
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: m
+      key: "leftshift+["
+      label: "{"
+      ghost: M
+      emphasized: true
+      accent: "#c792ea"
+      state: Normal
+      badges: []
+    - phys: minus
+      key: "-"
+      label: "-"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: n
+      key: n
+      label: N
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: o
+      key: o
+      label: O
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: p
+      key: p
+      label: P
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: q
+      key: q
+      label: Q
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: r
+      key: r
+      label: R
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightalt
+      key: rightalt
+      label: Alt
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightbrace
+      key: "]"
+      label: "]"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightmeta
+      key: leftmeta
+      label: ◇
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightshift
+      key: leftshift
+      label: ⇧
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: s
+      key: s
+      label: S
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: semicolon
+      key: ;
+      label: ;
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: slash
+      key: /
+      label: /
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: space
+      key: ""
+      label: Space
+      ghost: ""
+      emphasized: false
+      accent: "#c792ea"
+      state: Hold
+      badges:
+        - "L HOLD #c792ea"
+    - phys: t
+      key: t
+      label: T
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: tab
+      key: tab
+      label: Tab
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: u
+      key: "["
+      label: "["
+      ghost: U
+      emphasized: true
+      accent: "#c792ea"
+      state: Normal
+      badges: []
+    - phys: v
+      key: v
+      label: V
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: w
+      key: w
+      label: W
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: x
+      key: x
+      label: X
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: y
+      key: y
+      label: Y
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: z
+      key: z
+      label: Z
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+- title: SHIFT
+  is_base: false
+  accent: "#ffb454"
+  how: ""
+  hint: highlighted keys change while held
+  caps:
+    - phys: "0"
+      key: "0"
+      label: "0"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "1"
+      key: "1"
+      label: "1"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "2"
+      key: "2"
+      label: "2"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "3"
+      key: "3"
+      label: "3"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "4"
+      key: "4"
+      label: "4"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "5"
+      key: "5"
+      label: "5"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "6"
+      key: "6"
+      label: "6"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "7"
+      key: "7"
+      label: "7"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "8"
+      key: "8"
+      label: "8"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "9"
+      key: "9"
+      label: "9"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: a
+      key: a
+      label: A
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: apostrophe
+      key: "'"
+      label: "'"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: b
+      key: b
+      label: B
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: backslash
+      key: "\\"
+      label: "\\"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: backspace
+      key: backspace
+      label: ⌫
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: c
+      key: c
+      label: C
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: comma
+      key: ","
+      label: ","
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: d
+      key: leftshift+d
+      label: D
+      ghost: D
+      emphasized: true
+      accent: "#ffb454"
+      state: Normal
+      badges: []
+    - phys: dot
+      key: "."
+      label: "."
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: e
+      key: e
+      label: E
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: enter
+      key: enter
+      label: ⏎
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: equal
+      key: "="
+      label: "="
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: esc
+      key: esc
+      label: Esc
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: f
+      key: leftshift+f
+      label: F
+      ghost: F
+      emphasized: true
+      accent: "#ffb454"
+      state: Normal
+      badges: []
+    - phys: fn
+      key: fn
+      label: Fn
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: g
+      key: g
+      label: G
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: grave
+      key: "`"
+      label: "`"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: h
+      key: h
+      label: H
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: i
+      key: i
+      label: I
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: j
+      key: j
+      label: J
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: k
+      key: leftshift+k
+      label: K
+      ghost: K
+      emphasized: true
+      accent: "#ffb454"
+      state: Normal
+      badges: []
+    - phys: l
+      key: l
+      label: L
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftalt
+      key: leftalt
+      label: Alt
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftbrace
+      key: "["
+      label: "["
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftcontrol
+      key: leftcontrol
+      label: Ctrl
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftmeta
+      key: leftmeta
+      label: ◇
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftshift
+      key: leftshift
+      label: ⇧
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: m
+      key: m
+      label: M
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: minus
+      key: "-"
+      label: "-"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: n
+      key: n
+      label: N
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: o
+      key: o
+      label: O
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: p
+      key: p
+      label: P
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: q
+      key: q
+      label: Q
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: r
+      key: r
+      label: R
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightalt
+      key: rightalt
+      label: Alt
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightbrace
+      key: "]"
+      label: "]"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightmeta
+      key: leftmeta
+      label: ◇
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightshift
+      key: leftshift
+      label: ⇧
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: s
+      key: s
+      label: S
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: semicolon
+      key: ;
+      label: ;
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: slash
+      key: /
+      label: /
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: space
+      key: space
+      label: Space
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: t
+      key: t
+      label: T
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: tab
+      key: tab
+      label: Tab
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: u
+      key: u
+      label: U
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: v
+      key: v
+      label: V
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: w
+      key: w
+      label: W
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: x
+      key: x
+      label: X
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: y
+      key: y
+      label: Y
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: z
+      key: z
+      label: Z
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+- title: GAME
+  is_base: false
+  accent: "#9aa0a6"
+  how: "toggle: ⇧ + ⇧"
+  hint: passthrough — these revert to plain keys (gaming)
+  caps:
+    - phys: "0"
+      key: "0"
+      label: "0"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "1"
+      key: "1"
+      label: "1"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "2"
+      key: "2"
+      label: "2"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "3"
+      key: "3"
+      label: "3"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "4"
+      key: "4"
+      label: "4"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "5"
+      key: "5"
+      label: "5"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "6"
+      key: "6"
+      label: "6"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "7"
+      key: "7"
+      label: "7"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "8"
+      key: "8"
+      label: "8"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: "9"
+      key: "9"
+      label: "9"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: a
+      key: a
+      label: A
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: apostrophe
+      key: "'"
+      label: "'"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: b
+      key: b
+      label: B
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: backslash
+      key: "\\"
+      label: "\\"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: backspace
+      key: backspace
+      label: ⌫
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: c
+      key: c
+      label: C
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: comma
+      key: ","
+      label: ","
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: d
+      key: d
+      label: D
+      ghost: ""
+      emphasized: true
+      accent: "#9aa0a6"
+      state: Normal
+      badges: []
+    - phys: dot
+      key: "."
+      label: "."
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: e
+      key: e
+      label: E
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: enter
+      key: enter
+      label: ⏎
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: equal
+      key: "="
+      label: "="
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: esc
+      key: esc
+      label: Esc
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: f
+      key: f
+      label: F
+      ghost: ""
+      emphasized: true
+      accent: "#9aa0a6"
+      state: Normal
+      badges: []
+    - phys: fn
+      key: fn
+      label: Fn
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: g
+      key: g
+      label: G
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: grave
+      key: "`"
+      label: "`"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: h
+      key: h
+      label: H
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: i
+      key: i
+      label: I
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: j
+      key: j
+      label: J
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: k
+      key: k
+      label: K
+      ghost: ""
+      emphasized: true
+      accent: "#9aa0a6"
+      state: Normal
+      badges: []
+    - phys: l
+      key: l
+      label: L
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftalt
+      key: leftalt
+      label: Alt
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftbrace
+      key: "["
+      label: "["
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftcontrol
+      key: leftcontrol
+      label: Ctrl
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftmeta
+      key: leftmeta
+      label: ◇
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: leftshift
+      key: leftshift
+      label: ⇧
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: m
+      key: m
+      label: M
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: minus
+      key: "-"
+      label: "-"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: n
+      key: n
+      label: N
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: o
+      key: o
+      label: O
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: p
+      key: p
+      label: P
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: q
+      key: q
+      label: Q
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: r
+      key: r
+      label: R
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightalt
+      key: rightalt
+      label: Alt
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightbrace
+      key: "]"
+      label: "]"
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightmeta
+      key: leftmeta
+      label: ◇
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: rightshift
+      key: leftshift
+      label: ⇧
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: s
+      key: s
+      label: S
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: semicolon
+      key: ;
+      label: ;
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: slash
+      key: /
+      label: /
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: space
+      key: space
+      label: Space
+      ghost: ""
+      emphasized: true
+      accent: "#9aa0a6"
+      state: Normal
+      badges: []
+    - phys: t
+      key: t
+      label: T
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: tab
+      key: tab
+      label: Tab
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: u
+      key: u
+      label: U
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: v
+      key: v
+      label: V
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: w
+      key: w
+      label: W
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: x
+      key: x
+      label: X
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: y
+      key: y
+      label: Y
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []
+    - phys: z
+      key: z
+      label: Z
+      ghost: ""
+      emphasized: false
+      accent: ""
+      state: Dim
+      badges: []

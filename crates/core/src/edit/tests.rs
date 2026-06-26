@@ -288,6 +288,38 @@
     }
 
     #[test]
+    fn set_label_rewrites_the_label_not_a_later_plain_comment() {
+        // label_index must match the key's label line (key && is-label), not the
+        // last comment of any kind — else a trailing note gets clobbered.
+        let mut cfg =
+            EditConfig::parse("[main]\n# keyd-viz: tab = Old\ntab = layer(nav)\n# just a note\n");
+        assert!(cfg.set_label("main", "tab", "New"));
+        assert_eq!(
+            cfg.serialize(),
+            "[main]\n# keyd-viz: tab = New\ntab = layer(nav)\n# just a note\n"
+        );
+    }
+
+    #[test]
+    fn clear_label_leaves_unrelated_comments() {
+        // clear_label's retain must drop only the key's label (key && is-label),
+        // never every comment in the section.
+        let mut cfg =
+            EditConfig::parse("[main]\n# a plain note\n# keyd-viz: tab = Tab L\ntab = layer(nav)\n");
+        assert!(cfg.clear_label("main", "tab"));
+        assert_eq!(cfg.serialize(), "[main]\n# a plain note\ntab = layer(nav)\n");
+    }
+
+    #[test]
+    fn set_label_on_orphan_preserves_missing_final_newline() {
+        // Appending a label at section end must repair the prior line's missing
+        // newline (push_comment `at == len`) without fusing the comment onto it.
+        let mut cfg = EditConfig::parse("[main]\na = b"); // no trailing newline
+        assert!(cfg.set_label("main", "tab", "Tab L"));
+        assert_eq!(cfg.serialize(), "[main]\na = b\n# keyd-viz: tab = Tab L");
+    }
+
+    #[test]
     fn set_label_lands_beside_the_winning_binding_in_a_merged_section() {
         // The effective binding for `h` lives in [nav:C]; the label must sit with it.
         let src = "[nav]\nh = left\n[nav:C]\nh = right\n";

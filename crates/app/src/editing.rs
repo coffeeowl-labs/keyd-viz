@@ -1649,4 +1649,402 @@ mod tests {
         assert!(s.set_macro("main", "a", &new).is_err());
         assert_eq!(s.current_binding("main", "a").as_deref(), Some("macro(b macro(c))"));
     }
+
+    // ===================================================================
+    // Component 3 — property/stateful tests of the mutation surface.
+    // See docs/testing-harness-design.md. Bug-nest: the stringly-typed
+    // key_mode classifier + seed/reset wiring.
+    // ===================================================================
+    use proptest::prelude::*;
+
+    /// A richer starting config the stateful walk mutates. Valid + orphan-free.
+    const START: &str =
+        "[ids]\n*\n\n[main]\ncapslock = esc\na = b\n\n[nav]\nh = left\n\n[num]\nj = 1\n";
+
+    /// Open a session on arbitrary starting text (per-test TempDir, fixed name —
+    /// proptest runs cases sequentially in one thread, so reuse is safe).
+    fn session_from(td: &TempDir, text: &str) -> EditSession {
+        let p = td.0.join("prop.conf");
+        std::fs::write(&p, text).unwrap();
+        EditSession::open(&p).unwrap()
+    }
+
+    // ---- set-then-read-back: the classifier/typed loop (critic finding N2) ----
+
+    #[test]
+    fn set_binding_reads_back_verbatim() {
+        let td = TempDir::new("rb-bind");
+        let mut s = session_from(&td, START);
+        s.set_binding("nav", "h", "right").unwrap();
+        assert_eq!(s.current_binding("nav", "h").as_deref(), Some("right"));
+    }
+
+    #[test]
+    fn set_layer_action_reads_back() {
+        let td = TempDir::new("rb-la");
+        let mut s = session_from(&td, START);
+        for kind in [LayerKind::Momentary, LayerKind::Toggle, LayerKind::OneShot] {
+            s.set_layer_action("main", "a", "nav", kind).unwrap();
+            let got = s.current_layer_action("main", "a").expect("layer action reads back");
+            assert_eq!(got.kind, kind);
+            assert_eq!(got.target, "nav");
+        }
+    }
+
+    #[test]
+    fn set_tap_hold_reads_back() {
+        let td = TempDir::new("rb-th");
+        let mut s = session_from(&td, START);
+        s.set_tap_hold("main", "capslock", "nav", Some("esc".into()), Some(Behavior::TypingSafe))
+            .unwrap();
+        let th = s.current_tap_hold("main", "capslock").expect("tap/hold reads back");
+        assert_eq!(th.target, "nav");
+        assert_eq!(th.tap.as_deref(), Some("esc"));
+    }
+
+    #[test]
+    fn set_macro_reads_back() {
+        let td = TempDir::new("rb-mac");
+        let mut s = session_from(&td, START);
+        let mac = Macro::parse("macro(a b c)").unwrap();
+        s.set_macro("main", "a", &mac).unwrap();
+        let got = s.current_macro("main", "a").expect("macro reads back");
+        assert_eq!(got.serialize(), mac.serialize());
+    }
+
+    #[test]
+    fn set_chord_reads_back() {
+        let td = TempDir::new("rb-chord");
+        let mut s = session_from(&td, START);
+        s.set_chord("main", &keys(&["a", "b"]), "esc").unwrap();
+        assert!(
+            s.chords("main").iter().any(|(_, action)| action == "esc"),
+            "chord action reads back"
+        );
+    }
+
+    // ---- semantic-inverse pairs (assert derive equality, NOT bytes:
+    //      append_section injects a separator blank line that remove_layer
+    //      doesn't reclaim, and set_binding normalizes spacing — critic B2/S2) --
+
+    #[test]
+    fn add_then_remove_layer_is_semantic_noop() {
+        let td = TempDir::new("inv-layer");
+        let mut s = session_from(&td, START);
+        let before = s.config();
+        let created = s.add_layer("extra").unwrap();
+        s.remove_layer(&created).unwrap();
+        assert_eq!(s.config(), before, "add+remove layer changed the semantic model");
+    }
+
+    #[test]
+    fn set_then_clear_label_is_semantic_noop() {
+        let td = TempDir::new("inv-label");
+        let mut s = session_from(&td, START);
+        let before = s.config();
+        s.set_label("main", "capslock", "Esc").unwrap();
+        s.clear_label("main", "capslock").unwrap();
+        assert_eq!(s.config(), before, "set+clear label changed the semantic model");
+    }
+
+    /// A value containing a newline must never break the editor's round-trip
+    /// guarantee — whether set_binding rejects it or sanitizes it, the serialized
+    /// output must still re-parse. (Critic flagged set_binding/set_macro don't
+    /// strip newlines the way set_label does.)
+    #[test]
+    fn newline_in_binding_value_stays_round_trippable() {
+        let td = TempDir::new("nl-bind");
+        let mut s = session_from(&td, START);
+        let _ = s.set_binding("main", "a", "b\nc"); // Ok or Err, either is fine
+        assert!(
+            keydviz_core::round_trips(&s.serialized()),
+            "newline value broke the round-trip gate:\n{:?}",
+            s.serialized()
+        );
+    }
+
+    // ---- the stateful random walk ----
+
+    const WLAYERS: &[&str] = &["main", "nav", "num"];
+    const WKEYS: &[&str] = &["a", "b", "c", "d", "f", "capslock", "space"];
+
+    fn arb_wlayer() -> impl Strategy<Value = String> {
+        prop::sample::select(WLAYERS).prop_map(String::from)
+    }
+    fn arb_wkey() -> impl Strategy<Value = String> {
+        prop::sample::select(WKEYS).prop_map(String::from)
+    }
+    /// Binding values, with a fraction of adversarial shapes (non-canonical
+    /// spacing, empty, current-value) so the no-op-dirty and reparse paths are
+    /// reachable (critic finding N3).
+    fn arb_wval() -> impl Strategy<Value = String> {
+        prop_oneof![
+            8 => arb_wkey(),
+            2 => Just("noop".to_string()),
+            2 => arb_wlayer().prop_map(|l| format!("layer({l})")),
+            2 => arb_wlayer().prop_map(|l| format!("toggle({l})")),
+            1 => Just("  b  ".to_string()),
+            1 => Just(String::new()),
+            1 => Just("b".to_string()), // often == current value -> no-op edit
+        ]
+    }
+
+    #[derive(Debug, Clone)]
+    enum Op {
+        SetBinding(String, String, String),
+        ClearBinding(String, String),
+        SetLabel(String, String, String),
+        ClearLabel(String, String),
+        SetLayerAction(String, String, String, LayerKind),
+        SetTapHold(String, String, String, Option<String>),
+        SetMacro(String, String, String),
+        SetChord(String, Vec<String>, String),
+        SetGlobal(String, String),
+        AddLayer(String),
+        RemoveLayer(String),
+        RenameLayer(String, String),
+    }
+
+    fn apply_op(s: &mut EditSession, op: &Op) -> Result<(), String> {
+        match op {
+            Op::SetBinding(l, k, v) => s.set_binding(l, k, v),
+            Op::ClearBinding(l, k) => s.clear_binding(l, k),
+            Op::SetLabel(l, k, t) => s.set_label(l, k, t),
+            Op::ClearLabel(l, k) => s.clear_label(l, k),
+            Op::SetLayerAction(l, k, t, kind) => s.set_layer_action(l, k, t, *kind),
+            Op::SetTapHold(l, k, t, tap) => s.set_tap_hold(l, k, t, tap.clone(), None),
+            Op::SetMacro(l, k, m) => match Macro::parse(m) {
+                Some(mac) => s.set_macro(l, k, &mac),
+                None => Ok(()), // unparseable macro string is not a mutation
+            },
+            Op::SetChord(l, ks, a) => s.set_chord(l, ks, a),
+            Op::SetGlobal(n, v) => s.set_global(n, v),
+            Op::AddLayer(n) => s.add_layer(n).map(|_| ()),
+            Op::RemoveLayer(b) => s.remove_layer(b),
+            Op::RenameLayer(o, n) => s.rename_layer(o, n).map(|_| ()),
+        }
+    }
+
+    fn arb_op() -> impl Strategy<Value = Op> {
+        let kind = prop_oneof![
+            Just(LayerKind::Momentary),
+            Just(LayerKind::Toggle),
+            Just(LayerKind::OneShot)
+        ];
+        let tap = prop_oneof![Just(None), arb_wkey().prop_map(Some)];
+        let label = prop_oneof![Just("Nav".to_string()), Just("X".to_string()), Just(String::new())];
+        let mac = prop::collection::vec(arb_wkey(), 1..4).prop_map(|ks| format!("macro({})", ks.join(" ")));
+        let gname = prop::sample::select(&["overload_tap_timeout", "oneshot_timeout", "zzz_junk"][..])
+            .prop_map(String::from);
+        let gval = prop_oneof![Just("200".to_string()), Just("nav".to_string())];
+        let newlayer = prop::sample::select(&["nav", "num", "extra", "foo"][..]).prop_map(String::from);
+        prop_oneof![
+            (arb_wlayer(), arb_wkey(), arb_wval()).prop_map(|(l, k, v)| Op::SetBinding(l, k, v)),
+            (arb_wlayer(), arb_wkey()).prop_map(|(l, k)| Op::ClearBinding(l, k)),
+            (arb_wlayer(), arb_wkey(), label).prop_map(|(l, k, t)| Op::SetLabel(l, k, t)),
+            (arb_wlayer(), arb_wkey()).prop_map(|(l, k)| Op::ClearLabel(l, k)),
+            (arb_wlayer(), arb_wkey(), arb_wlayer(), kind).prop_map(|(l, k, t, kd)| Op::SetLayerAction(l, k, t, kd)),
+            (arb_wlayer(), arb_wkey(), arb_wlayer(), tap).prop_map(|(l, k, t, tp)| Op::SetTapHold(l, k, t, tp)),
+            (arb_wlayer(), arb_wkey(), mac).prop_map(|(l, k, m)| Op::SetMacro(l, k, m)),
+            (arb_wlayer(), prop::collection::vec(arb_wkey(), 2..3), arb_wval()).prop_map(|(l, ks, a)| Op::SetChord(l, ks, a)),
+            (gname, gval).prop_map(|(n, v)| Op::SetGlobal(n, v)),
+            newlayer.clone().prop_map(Op::AddLayer),
+            arb_wlayer().prop_map(Op::RemoveLayer),
+            (arb_wlayer(), newlayer).prop_map(|(o, n)| Op::RenameLayer(o, n)),
+        ]
+    }
+
+    // No explicit `cases:` — default honors PROPTEST_CASES (256 local, 64 in CI).
+    proptest! {
+        /// After EVERY mutation in a random sequence, the session invariants hold:
+        ///  - no panic (implicit),
+        ///  - Err is inert (no partial state) [P3-err-is-inert],
+        ///  - the serialized output always re-parses [P3-output-reparses],
+        ///  - derive never panics on it [P3-derive-total],
+        ///  - content changed ⟹ dirty (the safe direction) [P3-dirty].
+        #[test]
+        fn editsession_walk_preserves_invariants(ops in prop::collection::vec(arb_op(), 1..12)) {
+            let td = TempDir::new("walk");
+            let mut s = session_from(&td, START);
+            for op in &ops {
+                let before = s.serialized();
+                let before_dirty = s.dirty();
+                let res = apply_op(&mut s, op);
+                let after = s.serialized();
+
+                if res.is_err() {
+                    prop_assert_eq!(&after, &before, "Err mutated output: {:?}", op);
+                    prop_assert_eq!(s.dirty(), before_dirty, "Err flipped dirty: {:?}", op);
+                }
+                prop_assert!(
+                    keydviz_core::round_trips(&after),
+                    "editor emitted non-round-trip text after {:?}:\n{:?}", op, after
+                );
+                // derive must not panic on the editor's own output.
+                let _ = keydviz_core::parser::derive(&keydviz_core::EditConfig::parse(&after));
+                if after != START {
+                    prop_assert!(s.dirty(), "content changed but not dirty after {:?}", op);
+                }
+            }
+        }
+    }
+}
+
+// =======================================================================
+// Component 1 — keyd as a differential oracle (docs/testing-harness-design.md).
+// keyd is the real validity gate; these assert the editor never FALSE-ALARMS on
+// a config keyd accepts (precision-over-recall). Reuses keyd_check_bytes — the
+// exact path the GUI uses — so the oracle can't drift from production behavior.
+// Gated twice: needs KEYDVIZ_KEYD_ORACLE=1 AND keyd installed (else auto-skip).
+// =======================================================================
+#[cfg(test)]
+mod keyd_oracle {
+    use super::{keyd_check_bytes, EditSession, ViewOnly};
+    use keydviz_core::{layout_for, parse_text, round_trips, Sheet};
+    use std::path::{Path, PathBuf};
+
+    fn enabled() -> bool {
+        std::env::var("KEYDVIZ_KEYD_ORACLE").is_ok()
+    }
+
+    fn examples() -> Vec<PathBuf> {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
+        let mut v = vec![];
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().is_some_and(|x| x == "conf") {
+                    v.push(p);
+                }
+            }
+        }
+        v
+    }
+
+    /// P1-total (pure, always runs): every example round-trips and parses/builds
+    /// without panic — no keyd required.
+    #[test]
+    fn examples_are_total() {
+        let mut n = 0;
+        for p in examples() {
+            let text = std::fs::read_to_string(&p).unwrap();
+            assert!(round_trips(&text), "round-trip failed: {}", p.display());
+            let cfg = parse_text(&text);
+            let (geom, profile) = layout_for(p.to_str().unwrap());
+            let _ = Sheet::build(&cfg, "x", &geom, profile);
+            n += 1;
+        }
+        assert!(n >= 1, "expected the example corpus");
+    }
+
+    /// P1-precision: on the curated examples, anything keyd accepts we must open
+    /// without a view-only rejection and with NO orphan warnings. A false orphan
+    /// warning on a keyd-valid config is a real bug we'd ship to users.
+    #[test]
+    fn we_never_false_alarm_on_keyd_valid_examples() {
+        if !enabled() {
+            eprintln!("keyd oracle skipped (set KEYDVIZ_KEYD_ORACLE=1; needs keyd)");
+            return;
+        }
+        let mut checked = 0;
+        for p in examples() {
+            let text = std::fs::read_to_string(&p).unwrap();
+            let verdict = match keyd_check_bytes(&text) {
+                Some(v) => v,
+                None => {
+                    eprintln!("keyd unavailable — skipping oracle");
+                    return;
+                }
+            };
+            if verdict.is_err() {
+                continue; // keyd rejects: recall is not our contract
+            }
+            match EditSession::open(&p) {
+                Ok(s) => assert!(
+                    s.orphan_warnings().is_empty(),
+                    "false orphan warning on keyd-valid {}: {:?}",
+                    p.display(),
+                    s.orphan_warnings()
+                ),
+                Err(ViewOnly::KeydRejects(m)) => {
+                    panic!("we view-only-reject a keyd-valid {}: {m}", p.display())
+                }
+                Err(ViewOnly::RoundTripGate) => {
+                    panic!("round-trip gate on a keyd-valid {}", p.display())
+                }
+                Err(ViewOnly::Unreadable(m)) => panic!("unreadable {}: {m}", p.display()),
+            }
+            checked += 1;
+        }
+        eprintln!("keyd oracle: {checked} valid example(s) cleared");
+        assert!(checked >= 1, "expected at least one keyd-valid example");
+    }
+
+    /// Mutation-path validity (the property the tautological "round-trip vs keyd"
+    /// should have been): a plainly valid edit of a keyd-valid config keeps it
+    /// keyd-valid.
+    #[test]
+    fn valid_edit_keeps_config_keyd_valid() {
+        if !enabled() {
+            return;
+        }
+        let p = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/hhkb.conf"));
+        let ok = std::fs::read_to_string(p)
+            .ok()
+            .and_then(|t| keyd_check_bytes(&t))
+            .map(|r| r.is_ok());
+        if ok != Some(true) {
+            eprintln!("keyd unavailable or example invalid — skipping");
+            return;
+        }
+        let mut s = EditSession::open(p).expect("open hhkb");
+        // Edits through the classifier-driven paths (not just a plain remap): a
+        // fresh remap, plus a layer action onto an existing layer.
+        s.set_binding("main", "a", "b").unwrap();
+        s.set_layer_action("main", "a", "nav", super::LayerKind::Toggle).unwrap();
+        match keyd_check_bytes(&s.serialized()) {
+            Some(Ok(())) => {}
+            Some(Err(m)) => panic!("a valid edit made the config keyd-invalid: {m}"),
+            None => eprintln!("keyd vanished mid-test — skipping"),
+        }
+    }
+
+    /// Discovery report (informational, never fails): run the precision check over
+    /// the dev's real /etc/keyd history and PRINT disagreements, so known-limitation
+    /// gaps (include resolution, short-form modifier refs) surface without red CI.
+    #[test]
+    fn report_etc_keyd_disagreements() {
+        if !enabled() {
+            return;
+        }
+        let dir = Path::new("/etc/keyd");
+        if !dir.exists() {
+            return;
+        }
+        let mut flagged = 0;
+        let mut valid = 0;
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.extension().is_none_or(|x| x != "conf") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&p) else { continue };
+            if keyd_check_bytes(&text).map(|r| r.is_ok()) != Some(true) {
+                continue;
+            }
+            valid += 1;
+            match EditSession::open(&p) {
+                Ok(s) if !s.orphan_warnings().is_empty() => {
+                    eprintln!("DISAGREE {}: keyd-valid, we warn {:?}", p.display(), s.orphan_warnings());
+                    flagged += 1;
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    eprintln!("DISAGREE {}: keyd-valid, we view-only-reject", p.display());
+                    flagged += 1;
+                }
+            }
+        }
+        eprintln!("/etc/keyd report: {valid} keyd-valid file(s), {flagged} disagreement(s)");
+    }
 }

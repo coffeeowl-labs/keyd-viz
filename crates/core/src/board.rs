@@ -817,6 +817,34 @@ mod tests {
         assert_eq!(cap_named(&board, "tab").state, KeyState::Hold);
         assert!(board.how.contains(&base_legend("capslock")));
         assert!(board.how.contains(&base_legend("tab")));
+        // Each constituent must pair with ITS OWN hold key/accent (build_composite
+        // matches `target == part`, not `!=`): capslock engages nav, tab engages
+        // sym — never swapped.
+        assert_eq!(cap_named(&board, "capslock").accent, accent_for("nav"));
+        assert_eq!(cap_named(&board, "tab").accent, accent_for("sym"));
+    }
+
+    #[test]
+    fn modifier_prefixes_expand_to_their_keyd_keysym() {
+        // C-/S- are exercised elsewhere; M-/A-/G- (super/alt/altgr) were not, so
+        // deleting those mod_keysym arms went unnoticed.
+        assert_eq!(output_chord("M-a"), Some("leftmeta+a".to_string()), "M- = super");
+        assert_eq!(output_chord("A-b"), Some("leftalt+b".to_string()), "A- = alt");
+        assert_eq!(output_chord("G-c"), Some("rightalt+c".to_string()), "G- = AltGr");
+    }
+
+    #[test]
+    fn non_combo_key_carries_no_combo_badge() {
+        // in_combo must be false for a key in no combo — the prior tests only
+        // asserted members ARE badged, never that a non-member is NOT.
+        let geom = Geometry::from_rows(&[&[("j", 1.0), ("k", 1.0), ("x", 1.0)]]);
+        let cfg = Config {
+            combos: vec![("j+k".into(), "esc".into())],
+            ..Config::default()
+        };
+        let board = build_base(&cfg, &geom);
+        assert!(cap_named(&board, "j").badge_right.is_some(), "combo member is badged");
+        assert!(cap_named(&board, "x").badge_right.is_none(), "non-member has no combo badge");
     }
 
     #[test]
