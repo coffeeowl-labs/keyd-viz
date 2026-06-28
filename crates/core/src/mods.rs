@@ -55,3 +55,25 @@ impl Mod {
 pub fn is_prefix_letter(c: char) -> bool {
     MODS.iter().any(|m| m.letter == c)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{is_prefix_letter, Mod};
+
+    #[test]
+    fn from_target_folds_left_right_twins() {
+        assert_eq!(Mod::from_target("shift").unwrap().letter, 'S');
+        assert_eq!(Mod::from_target("leftalt").unwrap().letter, 'A');
+        assert_eq!(Mod::from_target("meta").unwrap().letter, 'M');
+        assert_eq!(Mod::from_target("rightalt").unwrap().letter, 'G');
+        assert!(Mod::from_target("nonsense").is_none());
+    }
+
+    #[test]
+    fn is_prefix_letter_only_for_mod_letters() {
+        assert!(is_prefix_letter('C'));
+        assert!(is_prefix_letter('G'));
+        assert!(!is_prefix_letter('Z'));
+        assert!(!is_prefix_letter('a'));
+    }
+}

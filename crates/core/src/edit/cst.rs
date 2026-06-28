@@ -142,3 +142,13 @@ pub(crate) fn classify(section: SectionKind, val: Option<&str>) -> Typed {
         _ => Typed::Raw,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_label_comment_rejects_empty_label() {
+        assert!(parse_label_comment("# keyd-viz: tab = ").is_none());
+    }
+}

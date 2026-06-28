@@ -348,4 +348,39 @@ mod tests {
     fn lists_layout_names_sorted() {
         assert_eq!(layout_names(INFO).unwrap(), vec!["LAYOUT_ansi", "LAYOUT_iso"]);
     }
+
+    // -------------------------------------------------- mutation-gap regressions
+    #[test]
+    fn missing_width_height_default_to_one_unit() {
+        let info = r#"{"layouts":{"L":{"layout":[{"x":0,"y":0}]}}}"#;
+        let imp = import(info, None, None).unwrap();
+        assert_eq!(imp.geometry.slots[0].w, 1.0);
+        assert_eq!(imp.geometry.slots[0].h, 1.0);
+    }
+
+    #[test]
+    fn unknown_preferred_variant_errors() {
+        let err = import(INFO, None, Some("LAYOUT_nope")).unwrap_err();
+        assert!(err.contains("LAYOUT_nope"), "got: {err}");
+    }
+
+    #[test]
+    fn normalizes_rotation_origin_with_geometry() {
+        let info = r#"{"layouts":{"L":{"layout":[
+          {"x":2,"y":3,"rx":2,"ry":3}, {"x":4,"y":5,"rx":4,"ry":5}
+        ]}}}"#;
+        let imp = import(info, None, None).unwrap();
+        let s0 = &imp.geometry.slots[0];
+        assert_eq!((s0.x, s0.y), (0.0, 0.0));
+        assert_eq!((s0.rx, s0.ry), (0.0, 0.0));
+        let s1 = &imp.geometry.slots[1];
+        assert_eq!((s1.rx, s1.ry), (2.0, 2.0));
+    }
+
+    #[test]
+    fn multiword_label_maps_to_exact_keyd_name() {
+        let info = r#"{"layouts":{"L":{"layout":[{"x":0,"y":0,"label":"Tab"}]}}}"#;
+        let imp = import(info, None, None).unwrap();
+        assert_eq!(imp.geometry.slots[0].key.as_deref(), Some("tab"));
+    }
 }

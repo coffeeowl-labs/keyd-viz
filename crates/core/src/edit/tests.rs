@@ -753,3 +753,93 @@
             "[ids]\n04fe:0021\nk:1234:5678\n\n[main]\n"
         );
     }
+
+    // -------------------------------------------------- mutation-gap regressions
+    #[test]
+    fn set_label_rewrites_the_in_board_label_not_a_later_foreign_one() {
+        let mut cfg = EditConfig::parse(
+            "[main]\n# keyd-viz: a = Old\na = b\n[nav]\n# keyd-viz: a = NavLabel\nh = left\n",
+        );
+        assert!(cfg.set_label("main", "a", "New"));
+        assert_eq!(
+            cfg.serialize(),
+            "[main]\n# keyd-viz: a = New\na = b\n[nav]\n# keyd-viz: a = NavLabel\nh = left\n",
+        );
+    }
+
+    #[test]
+    fn set_layer_chord_appends_and_reports_success() {
+        let mut cfg = EditConfig::parse("[main]\na = b\n");
+        assert!(cfg.set_layer_chord("main", "j+k", "k+j", "down"));
+        assert_eq!(cfg.serialize(), "[main]\na = b\nk+j = down\n");
+        assert!(!cfg.set_layer_chord("ghost", "j+k", "k+j", "down"));
+    }
+
+    #[test]
+    fn set_layer_chord_does_not_rewrite_a_differently_keyed_chord() {
+        let mut cfg = EditConfig::parse("[main]\na+b = x\n");
+        assert!(cfg.set_layer_chord("main", "j+k", "j+k", "down"));
+        assert_eq!(cfg.serialize(), "[main]\na+b = x\nj+k = down\n");
+    }
+
+    #[test]
+    fn set_layer_chord_rewrites_existing_chord_by_canonical_set() {
+        let mut cfg = EditConfig::parse("[main]\nj+k = old\n");
+        assert!(cfg.set_layer_chord("main", "j+k", "k+j", "down"));
+        assert_eq!(cfg.serialize(), "[main]\nj+k = down\n");
+    }
+
+    #[test]
+    fn set_global_option_writes_the_option() {
+        let mut cfg = EditConfig::parse("[main]\na = b\n");
+        cfg.set_global_option("macro_timeout", "600");
+        let s = cfg.serialize();
+        assert!(s.contains("[global]"), "{s}");
+        assert!(s.contains("macro_timeout = 600"), "{s}");
+    }
+
+    #[test]
+    fn add_layer_accepts_underscores_and_hyphens() {
+        let mut cfg = EditConfig::parse("[main]\na = b\n");
+        assert!(cfg.add_layer("nav_2").is_ok());
+        assert!(cfg.add_layer("home-row").is_ok());
+    }
+
+    #[test]
+    fn global_section_mut_creates_global_when_absent() {
+        let mut cfg = EditConfig::parse("[main]\na = b\n");
+        cfg.set_global_option("macro_timeout", "600");
+        assert_eq!(cfg.serialize(), "[main]\na = b\n\n[global]\nmacro_timeout = 600\n");
+    }
+
+    #[test]
+    fn rename_layer_accepts_underscores_and_hyphens() {
+        let mut cfg = EditConfig::parse("[main]\na = layer(nav)\n[nav]\nh = left\n");
+        assert!(cfg.rename_layer("nav", "nav_2").is_ok());
+    }
+
+    #[test]
+    fn rename_layer_rewrites_a_pure_repeat_composite() {
+        let mut cfg = EditConfig::parse("[main]\na = b\n[nav]\nh = left\n[nav+nav]\nx = y\n");
+        cfg.rename_layer("nav", "sym").unwrap();
+        assert_eq!(cfg.serialize(), "[main]\na = b\n[sym]\nh = left\n[sym+sym]\nx = y\n");
+    }
+
+    #[test]
+    fn diagnostics_flags_missing_ids() {
+        let cfg = EditConfig::parse("[main]\na = b\n");
+        assert!(cfg.diagnostics().iter().any(|w| w.contains("no [ids]")));
+    }
+
+    #[test]
+    fn diagnostics_clean_for_an_ids_only_config() {
+        let cfg = EditConfig::parse("[ids]\n0123:4567\n");
+        assert!(cfg.diagnostics().is_empty(), "{:?}", cfg.diagnostics());
+    }
+
+    #[test]
+    fn rename_layer_handles_a_tab_padded_layer_ref() {
+        let mut cfg = EditConfig::parse("[main]\na = layer(\tnav)\n[nav]\nh = left\n");
+        assert_eq!(cfg.rename_layer("nav", "sym").unwrap(), 1);
+        assert_eq!(cfg.serialize(), "[main]\na = layer(\tsym)\n[sym]\nh = left\n");
+    }

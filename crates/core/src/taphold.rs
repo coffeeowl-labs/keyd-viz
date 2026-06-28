@@ -372,4 +372,11 @@ mod tests {
         let edited = TapHold::compose(Some(&existing), "nav".into(), None, Some(Behavior::TypingSafe));
         assert_eq!(edited.serialize(), "layer(nav)");
     }
+
+    // -------------------------------------------------- mutation-gap regressions
+    #[test]
+    fn from_func_maps_lettermod_to_typing_safe() {
+        assert_eq!(Behavior::from_func("lettermod"), Some(Behavior::TypingSafe));
+        assert_eq!(Behavior::from_func("overloadt2"), Some(Behavior::Responsive));
+    }
 }

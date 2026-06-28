@@ -441,4 +441,21 @@ mod tests {
         assert_eq!(i.match_device("dead:beef", kbd()), MatchKind::None);
         assert_eq!(i.match_device("aaaa:bbbb", kbd()), MatchKind::Wildcard);
     }
+
+    #[test]
+    fn union_is_bitwise_or_not_xor() {
+        assert_eq!(DeviceFlags::KEYBOARD.union(DeviceFlags::KEYBOARD), DeviceFlags::KEYBOARD);
+        assert!(DeviceFlags::keyboard().union(DeviceFlags::KEY).contains(DeviceFlags::KEY));
+    }
+
+    #[test]
+    fn is_empty_reflects_bits() {
+        assert!(DeviceFlags::default().is_empty());
+        assert!(!DeviceFlags::KEYBOARD.is_empty());
+    }
+
+    #[test]
+    fn empty_pattern_keyboard_entries_are_not_probed() {
+        assert!(conflicts(&[&["k:"], &["k:"]]).is_empty());
+    }
 }

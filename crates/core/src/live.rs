@@ -434,4 +434,32 @@ mod tests {
         assert_eq!(LiveEvent::from_line("not json"), None);
         assert_eq!(LiveEvent::from_line("{\"t\":\"bogus\"}"), None);
     }
+
+    // -------------------------------------------------- mutation-gap regressions
+    #[test]
+    fn key_line_needs_both_device_and_id() {
+        assert_eq!(parse_monitor_line("\t04fe:0021:hash\ta down"), None);
+        assert_eq!(parse_monitor_line("PFU HHKB\t\ta down"), None);
+    }
+
+    #[test]
+    fn as_layer_covers_off_and_layout() {
+        let off = LiveEvent::Layer { action: LayerAction::Off, name: "nav".into() };
+        assert_eq!(off.as_layer(), Some(LayerEvent::Off("nav".into())));
+        let layout = LiveEvent::Layer { action: LayerAction::Layout, name: "main".into() };
+        assert_eq!(layout.as_layer(), Some(LayerEvent::Layout("main".into())));
+    }
+
+    #[test]
+    fn as_monitor_covers_device_added() {
+        let ev = LiveEvent::Device {
+            action: DeviceAction::Added,
+            devid: "04fe:0021".into(),
+            device: "PFU HHKB".into(),
+        };
+        assert_eq!(
+            ev.as_monitor(),
+            Some(MonitorEvent::DeviceAdded { devid: "04fe:0021".into(), device: "PFU HHKB".into() })
+        );
+    }
 }

@@ -212,4 +212,15 @@ mod tests {
     fn no_subject_when_key_empty() {
         assert_eq!(humanize("", "toggle(game)"), "toggle game layer on/off");
     }
+
+    // -------------------------------------------------- mutation-gap regressions
+    #[test]
+    fn call_phrase_covers_layer_and_state_actions() {
+        assert_eq!(call_phrase("swap", &["game"]), Some("swap to game layer".to_string()));
+        assert_eq!(call_phrase("layer", &["nav"]), Some("nav layer while held".to_string()));
+        assert_eq!(call_phrase("setlayout", &["dvorak"]), Some("set layout to dvorak".to_string()));
+        assert_eq!(call_phrase("clear", &[]), Some("clear active layers".to_string()));
+        assert_eq!(call_phrase("clearm", &["nav"]), Some("clear, then nav layer while held".to_string()));
+        assert_eq!(call_phrase("bogus", &["x"]), None);
+    }
 }

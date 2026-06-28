@@ -499,4 +499,38 @@ mod tests {
             assert_eq!(m.serialize(), Macro::parse(&m.serialize()).unwrap().serialize(), "idempotent: {c}");
         }
     }
+
+    // -------------------------------------------------- mutation-gap regressions
+    #[test]
+    fn backslash_in_macro_text_is_preserved() {
+        let m = Macro::parse(r"macro(a\b)").unwrap();
+        assert_eq!(m.tokens, vec![MacroToken::Text(r"a\b".to_string())]);
+    }
+
+    #[test]
+    fn token_with_single_unbalanced_paren_is_rejected() {
+        assert!(Macro::parse("macro(a( b))").is_none());
+    }
+
+    #[test]
+    fn delay_at_1024_is_not_a_delay() {
+        assert_eq!(
+            Macro::parse("macro(1024ms)").unwrap().tokens,
+            vec![MacroToken::Text("1024ms".to_string())]
+        );
+        assert_eq!(Macro::parse("macro(1023ms)").unwrap().tokens, vec![MacroToken::Delay(1023)]);
+    }
+
+    #[test]
+    fn mod_letter_without_dash_is_not_a_prefix() {
+        assert_eq!(Macro::parse("macro(Cab)").unwrap().tokens, vec![MacroToken::Text("Cab".to_string())]);
+    }
+
+    #[test]
+    fn plus_token_with_a_non_key_part_is_text_not_chord() {
+        assert_eq!(
+            Macro::parse("macro(a+zzzz)").unwrap().tokens,
+            vec![MacroToken::Text("a+zzzz".to_string())]
+        );
+    }
 }

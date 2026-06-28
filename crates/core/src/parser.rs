@@ -498,4 +498,87 @@ mod tests {
         // `=` and `equal` are different LHS tokens to keyd — keep them distinct.
         assert_ne!(canonical_chord("equal+a"), canonical_chord("=+a"));
     }
+
+    #[test]
+    fn parse_file_reads_and_parses_the_file() {
+        let mut path = std::env::temp_dir();
+        path.push(format!("keydviz_parse_file_{}.conf", std::process::id()));
+        std::fs::write(&path, "[ids]\n*\n[main]\ncapslock = esc\n").unwrap();
+        let cfg = parse_file(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(cfg.remaps, vec![("capslock".to_string(), "esc".to_string())]);
+        assert_eq!(cfg.ids, vec!["*".to_string()]);
+    }
+
+    #[test]
+    fn layout_qualifier_does_not_set_mods() {
+        let cfg = parse_text("[main]\ncapslock = layer(nav)\n[nav:layout]\nj = down\n");
+        assert_eq!(cfg.layer("nav").unwrap().mods, None);
+        assert_eq!(cfg.holds[0].kind, HoldKind::Layer);
+    }
+
+    #[test]
+    fn chord_toggle_with_wrong_arity_is_combo_not_chord() {
+        let cfg = parse_text("[main]\nj+k = toggle(a, b)\n");
+        assert_eq!(cfg.combos, vec![("j+k".to_string(), "toggle(a, b)".to_string())]);
+        assert!(cfg.chords.is_empty());
+    }
+
+    #[test]
+    fn overloadi_with_one_arg_is_remap_not_taphold() {
+        let cfg = parse_text("[main]\nx = overloadi(a)\n");
+        assert_eq!(cfg.remaps, vec![("x".to_string(), "overloadi(a)".to_string())]);
+        assert!(cfg.holds.is_empty());
+    }
+
+    #[test]
+    fn overloadi_layer_descriptor_wrong_arity_falls_back_to_remap() {
+        let cfg = parse_text("[main]\nx = overloadi(t, layer(a, b), 200)\n");
+        assert!(cfg.holds.is_empty());
+        assert_eq!(cfg.remaps, vec![("x".to_string(), "overloadi(t, layer(a, b), 200)".to_string())]);
+    }
+
+    #[test]
+    fn overloadi_empty_overload_descriptor_is_remap() {
+        let cfg = parse_text("[main]\nx = overloadi(t, overload(), 200)\n");
+        assert!(cfg.holds.is_empty());
+        assert_eq!(cfg.remaps[0].1, "overloadi(t, overload(), 200)");
+    }
+
+    #[test]
+    fn overloadi_bare_modifier_hold_target() {
+        let cfg = parse_text("[main]\nx = overloadi(t, control, 200)\n");
+        assert_eq!(cfg.holds.len(), 1);
+        assert_eq!(cfg.holds[0].target, "control");
+        assert_eq!(cfg.holds[0].kind, HoldKind::Mod);
+    }
+
+    #[test]
+    fn single_key_toggle_is_chord() {
+        let cfg = parse_text("[main]\nx = toggle(game)\n");
+        assert_eq!(cfg.chords, vec![("x".to_string(), "game".to_string())]);
+        assert!(cfg.remaps.is_empty());
+    }
+
+    #[test]
+    fn multi_arg_toggle_is_remap() {
+        let cfg = parse_text("[main]\nx = toggle(a, b)\n");
+        assert_eq!(cfg.remaps, vec![("x".to_string(), "toggle(a, b)".to_string())]);
+        assert!(cfg.chords.is_empty());
+    }
+
+    #[test]
+    fn multi_arg_layer_is_remap_not_hold() {
+        let cfg = parse_text("[main]\nx = layer(a, b)\n");
+        assert_eq!(cfg.remaps, vec![("x".to_string(), "layer(a, b)".to_string())]);
+        assert!(cfg.holds.is_empty());
+    }
+
+    #[test]
+    fn leading_fn_returns_call_name_or_none() {
+        assert_eq!(leading_fn("layer(nav)"), Some("layer"));
+        assert_eq!(leading_fn("overloadi(a, b, 1)"), Some("overloadi"));
+        assert_eq!(leading_fn("  macro(a)  "), Some("macro"));
+        assert_eq!(leading_fn("plainkey"), None);
+    }
 }

@@ -125,7 +125,7 @@ pub fn prettify(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::prettify;
+    use super::{base_legend, prettify};
 
     #[test]
     fn macro_shows_glyph_and_first_step() {
@@ -153,5 +153,40 @@ mod tests {
         assert_eq!(prettify("C-t"), "\u{2303}T");
         // A binding to the literal `macro` key (no paren) is not a macro action.
         assert_eq!(prettify("macro"), "macro");
+    }
+
+    // -------------------------------------------------- mutation-gap regressions
+    #[test]
+    fn shift_only_renders_shifted_symbol() {
+        assert_eq!(prettify("S-1"), "!");
+        assert_eq!(prettify("S-8"), "*");
+        assert_eq!(prettify("S-equal"), "+");
+        assert_eq!(prettify("S-comma"), "<");
+        assert_eq!(prettify("S-slash"), "?");
+        assert_eq!(prettify("S-grave"), "~");
+    }
+
+    #[test]
+    fn base_legend_named_keys_and_letters() {
+        assert_eq!(base_legend("leftctrl"), "Ctrl");
+        assert_eq!(base_legend("a"), "A");
+        assert_eq!(base_legend("f3"), "f3");
+    }
+
+    #[test]
+    fn macro_text_truncated_only_past_12_chars() {
+        assert_eq!(prettify("macro(abcdefghijkl)"), "\u{2328} abcdefghijkl");
+        assert_eq!(prettify("macro(abcdefghijklm)"), "\u{2328} abcdefghijk\u{2026}");
+    }
+
+    #[test]
+    fn modifier_prefix_loop_handles_a_bare_mod_letter() {
+        assert_eq!(prettify("C"), "C");
+    }
+
+    #[test]
+    fn modifier_combo_vs_shift_symbol_and_dangling_mod() {
+        assert_eq!(prettify("C-9"), "\u{2303}9");
+        assert_eq!(prettify("C-"), "C-");
     }
 }

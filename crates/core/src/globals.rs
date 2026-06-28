@@ -98,3 +98,22 @@ pub const GLOBAL_OPTIONS: &[GlobalOption] = &[
 pub fn is_known_global(name: &str) -> bool {
     GLOBAL_OPTIONS.iter().any(|o| o.name == name)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_vs_unknown_globals() {
+        assert!(is_known_global("layer_indicator"));
+        assert!(is_known_global("macro_sequence_timeout"));
+        assert!(!is_known_global("not_a_real_option"));
+    }
+
+    #[test]
+    fn every_listed_option_is_known() {
+        for o in GLOBAL_OPTIONS {
+            assert!(is_known_global(o.name), "{} should be known", o.name);
+        }
+    }
+}
