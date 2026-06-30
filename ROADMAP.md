@@ -1451,3 +1451,30 @@ P4 is the ambitious frontier. P6 is the category-defining leap (the first keyd G
     picker label to say it fills the action; added the behavior description line). Pure-Slint macro change +
     chord picker logic in main.rs/edit_ui.rs. (Note: macro `combo:` label alignment left for the separate
     chord→combo WIP commit.)
+
+- *(2026-06-26 … 06-30 — Testing milestone: automated-QA expansion — **DONE**)* Built an advanced test
+  harness to cut solo manual QA, then drove `core` coverage down to the mutation-tested floor. Goal (Ryan):
+  "less QA needed… find the edge-case bugs… if we find a bug, write a test that catches it." Design +
+  outcomes in `docs/testing-harness-design.md`; layers + the **bug→regression-test rule** in `CONTRIBUTING.md`.
+  All dev-deps only (proptest, insta) — never shipped in binaries/AUR. See [[testing-harness-built]].
+  - **Harness** (commit c4db60d): proptest grammar-aware config generator + round-trip / derive /
+    `Sheet::build` totality (`crates/core/tests/properties.rs`); a stateful `EditSession` random-walk +
+    set-then-read-back + semantic-inverse invariants (inline in `app/src/editing.rs`); a **keyd differential
+    oracle** — the editor must never false-alarm on a keyd-valid config (env-gated `KEYDVIZ_KEYD_ORACLE=1`,
+    keyd built from source in CI so it *gates*); insta board snapshots (`crates/core/tests/snapshot.rs`).
+  - **Full `cargo-mutants` pass on `keydviz-core`** (1158 mutants: 742 caught / 355 missed / 55 unviable /
+    6 timeout). Run safely on the laptop via a **4 GiB per-test-binary `ulimit` runner** (a runaway-allocation
+    mutant hits the cap, aborts cleanly = counted caught, instead of OOMing the box) + `taskset` core cap —
+    no thermal/OOM after three earlier failed attempts (see [[laptop-no-allcore-background-jobs]]). ~50
+    actionable gaps closed with **teeth-verified** regression tests (commit b469657); equivalent mutants
+    documented; 245 keycodes lookup-table arms + 6 timeout loop-index mutants excluded by scope.
+  - **Last app pure-logic gap closed** (commit 98fa920): `ui_data.rs` converters (hex / brush / to_keycap /
+    id_matches), the device-id matcher included. App crate now has tests in **11 of 17** files; the 6 untested
+    are genuinely-untestable GUI/IO/app-state glue (`main`, `tray`, `edit_ui`, `apply_ctx`, `prefs`, `layer`).
+  - **CI hardened + GREEN**: oracle gates (keyd from source), `PROPTEST_CASES=64` bounds gating runs,
+    dispatch-only `cargo-llvm-cov` coverage job. Cleared a **clippy-1.96 `unnecessary_sort_by` drift** that had
+    reddened CI (commits f558aac, 688251b) and bumped the local toolchain 1.94→1.96.1 so local clippy matches CI.
+  - **Correctly out of scope** (not gaps): driving the live Slint GUI (Wayland), PNG pixel-diffing (flaky across
+    freetype versions), recall-complete linting (keyd is the gate by design), and a full app-crate mutation pass
+    (Slint rebuild per mutant — too heavy for the return). **Standing rule going forward:** every new bug earns a
+    regression test. **Milestone complete — all four CI jobs green.**
