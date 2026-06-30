@@ -120,3 +120,140 @@ pub(crate) fn to_sheet_data(sheet: &Sheet, device: &str, layout_id: &str, matche
 fn id_matches(config_id: &str, devid: &str) -> bool {
     config_id == devid || config_id.ends_with(devid)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use keydviz_core::Badge;
+
+    fn crgb(c: Color) -> (u8, u8, u8) {
+        (c.red(), c.green(), c.blue())
+    }
+    fn brgb(b: &Brush) -> (u8, u8, u8) {
+        crgb(b.color())
+    }
+
+    /// A baseline cap (KeyCap has no Default — f32 geometry fields); tests tweak one field.
+    fn cap() -> KeyCap {
+        KeyCap {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+            r: 0.0,
+            rx: 0.0,
+            ry: 0.0,
+            key: String::new(),
+            phys: String::new(),
+            label: String::new(),
+            emphasized: false,
+            ghost: String::new(),
+            accent: String::new(),
+            state: KeyState::Normal,
+            badge_left: None,
+            badge_right: None,
+        }
+    }
+
+    #[test]
+    fn hex_parses_rrggbb_with_or_without_hash() {
+        assert_eq!(crgb(hex("#ff8800")), (255, 136, 0));
+        assert_eq!(crgb(hex("00ff00")), (0, 255, 0)); // leading '#' is optional
+    }
+
+    #[test]
+    fn hex_is_black_on_malformed_input() {
+        assert_eq!(crgb(hex("#fff")), (0, 0, 0)); // wrong length
+        assert_eq!(crgb(hex("#gggggg")), (0, 0, 0)); // non-hex digits
+        assert_eq!(crgb(hex("")), (0, 0, 0)); // empty
+    }
+
+    #[test]
+    fn brush_is_a_solid_color_of_the_hex() {
+        assert_eq!(brgb(&brush("#0000ff")), (0, 0, 255));
+    }
+
+    #[test]
+    fn to_keycap_maps_state_enum_to_int() {
+        for (st, want) in [(KeyState::Normal, 0), (KeyState::Dim, 1), (KeyState::Hold, 2)] {
+            let mut k = cap();
+            k.state = st;
+            assert_eq!(to_keycap(&k).state, want);
+        }
+    }
+
+    #[test]
+    fn to_keycap_accent_present_vs_absent() {
+        let mut k = cap();
+        k.accent = "#abcdef".into();
+        let kc = to_keycap(&k);
+        assert!(kc.has_accent);
+        assert_eq!(brgb(&kc.accent), (0xab, 0xcd, 0xef));
+
+        let blank = to_keycap(&cap()); // empty accent => not flagged, brush falls back to black
+        assert!(!blank.has_accent);
+        assert_eq!(brgb(&blank.accent), (0, 0, 0));
+    }
+
+    #[test]
+    fn to_keycap_badge_text_color_and_presence() {
+        let mut k = cap();
+        k.badge_left = Some(Badge { text: "HOLD".into(), color: "#112233".into() });
+        let kc = to_keycap(&k);
+        assert!(kc.has_badge_left);
+        assert_eq!(kc.badge_left.as_str(), "HOLD");
+        assert_eq!(brgb(&kc.badge_left_color), (0x11, 0x22, 0x33));
+        // The absent right badge: no flag, empty text, black fallback color.
+        assert!(!kc.has_badge_right);
+        assert_eq!(kc.badge_right.as_str(), "");
+        assert_eq!(brgb(&kc.badge_right_color), (0, 0, 0));
+    }
+
+    #[test]
+    fn to_keycap_badge_empty_color_falls_back_to_black() {
+        let mut k = cap();
+        k.badge_right = Some(Badge { text: "+".into(), color: String::new() });
+        let kc = to_keycap(&k);
+        assert!(kc.has_badge_right);
+        assert_eq!(kc.badge_right.as_str(), "+");
+        assert_eq!(brgb(&kc.badge_right_color), (0, 0, 0));
+    }
+
+    #[test]
+    fn to_keycap_passes_geometry_and_string_fields_through() {
+        let mut k = cap();
+        k.x = 1.5;
+        k.y = 2.0;
+        k.width = 1.25;
+        k.emphasized = true;
+        k.key = "a".into();
+        k.phys = "q".into();
+        k.label = "Esc".into();
+        k.ghost = "g".into();
+        let kc = to_keycap(&k);
+        assert_eq!(kc.x, 1.5);
+        assert_eq!(kc.y, 2.0);
+        assert_eq!(kc.width, 1.25);
+        assert!(kc.emphasized);
+        assert_eq!(kc.key.as_str(), "a");
+        assert_eq!(kc.phys.as_str(), "q");
+        assert_eq!(kc.label.as_str(), "Esc");
+        assert_eq!(kc.ghost.as_str(), "g");
+        // These are always seeded false (set later by live state / picker, not this projector).
+        assert!(!kc.pressed);
+        assert!(!kc.chord_pick);
+    }
+
+    #[test]
+    fn id_matches_exact_and_keyd_type_prefixes() {
+        assert!(id_matches("04fe:0021", "04fe:0021")); // bare vendor:product
+        assert!(id_matches("k:04fe:0021", "04fe:0021")); // keyd keyboard prefix
+        assert!(id_matches("m:1234:5678", "1234:5678")); // keyd mouse prefix
+    }
+
+    #[test]
+    fn id_matches_wildcard_and_mismatch_never_highlight() {
+        assert!(!id_matches("*", "04fe:0021")); // wildcard stays un-highlighted
+        assert!(!id_matches("dead:beef", "04fe:0021")); // different device
+    }
+}
