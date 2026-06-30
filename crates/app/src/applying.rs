@@ -88,7 +88,7 @@ pub fn list_backups(dir: &Path, name: &str) -> Vec<Backup> {
         let size = ent.metadata().map(|m| m.len()).unwrap_or(0);
         out.push(Backup { stamp, path: ent.path(), size });
     }
-    out.sort_by(|a, b| b.stamp.cmp(&a.stamp)); // newest first
+    out.sort_by_key(|b| std::cmp::Reverse(b.stamp)); // newest first
     out
 }
 
