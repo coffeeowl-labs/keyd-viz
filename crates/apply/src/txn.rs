@@ -202,7 +202,7 @@ pub fn prune_backups(dir: &Dir, name: &str, keep: usize) {
             Some((f.clone(), stamp.parse::<u64>().ok()?))
         })
         .collect();
-    baks.sort_by(|a, b| b.1.cmp(&a.1)); // newest first
+    baks.sort_by_key(|b| std::cmp::Reverse(b.1)); // newest first
     for (fname, _) in baks.into_iter().skip(keep) {
         let _ = dir.unlink(&fname);
     }
